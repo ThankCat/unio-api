@@ -40,15 +40,15 @@ func NewRouter(deps Deps) (http.Handler, error) {
 	r.Use(consolemiddleware.Recoverer(deps.Logger))
 	errorWriter := transport.NewErrorWriter(deps.Logger)
 
-	r.NotFound(func(w http.ResponseWriter, _ *http.Request) {
-		errorWriter.Write(w, &consoleservice.Error{
+	r.NotFound(func(w http.ResponseWriter, req *http.Request) {
+		errorWriter.Write(w, req, &consoleservice.Error{
 			Code:    "not_found",
 			Message: "The requested route was not found.",
 			Status:  http.StatusNotFound,
 		})
 	})
-	r.MethodNotAllowed(func(w http.ResponseWriter, _ *http.Request) {
-		errorWriter.Write(w, &consoleservice.Error{
+	r.MethodNotAllowed(func(w http.ResponseWriter, req *http.Request) {
+		errorWriter.Write(w, req, &consoleservice.Error{
 			Code:    "method_not_allowed",
 			Message: "The HTTP method is not allowed for this route.",
 			Status:  http.StatusMethodNotAllowed,

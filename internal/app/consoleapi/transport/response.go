@@ -34,10 +34,16 @@ func NewErrorWriter(logger *zap.Logger) ErrorWriter {
 }
 
 // Write 序列化 Console 错误，并记录内部故障但不向客户端暴露原因。
-func (e ErrorWriter) Write(w http.ResponseWriter, err *consoleservice.Error) {
+// 所有 Console 接口共用：客户端取消（含 React abort）一律改成 499，不打 ERROR。
+func (e ErrorWriter) Write(w http.ResponseWriter, r *http.Request, err *consoleservice.Error) {
 	if err == nil {
 		return
 	}
+	var requestErr error
+	if r != nil {
+		requestErr = r.Context().Err()
+	}
+	err = consoleservice.AsClientCanceled(err, requestErr)
 	if err.RetryAfter > 0 {
 		w.Header().Set("Retry-After", strconv.Itoa(err.RetryAfter))
 	}

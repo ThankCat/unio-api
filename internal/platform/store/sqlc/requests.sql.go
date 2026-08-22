@@ -447,6 +447,163 @@ func (q *Queries) ListConsoleBilledRequestStreamTypes(ctx context.Context, userI
 	return items, nil
 }
 
+const listConsoleBilledRequestTopModels = `-- name: ListConsoleBilledRequestTopModels :many
+WITH windowed AS MATERIALIZED (
+    SELECT
+        r.id,
+        r.created_at,
+        r.stream,
+        r.requested_model_id,
+        r.ingress_protocol,
+        r.route_id,
+        r.api_key_id,
+        r.endpoint,
+        r.request_id,
+        r.client_ip
+    FROM request_records r
+    WHERE r.user_id = $1
+      AND ($2::timestamptz IS NULL OR r.created_at >= $2::timestamptz)
+      AND ($3::timestamptz IS NULL OR r.created_at < $3::timestamptz)
+),
+charges AS MATERIALIZED (
+    SELECT
+        le.request_record_id,
+        SUM(
+            CASE
+                WHEN le.entry_type IN ('debit', 'adjustment_debit') THEN le.amount
+                WHEN le.entry_type IN ('credit', 'refund', 'adjustment_credit') THEN -le.amount
+                ELSE 0
+            END
+        ) AS charge_usd
+    FROM ledger_entries le
+    JOIN windowed w ON w.id = le.request_record_id
+    WHERE le.currency = 'USD'
+    GROUP BY le.request_record_id
+),
+billed AS (
+    SELECT w.id, w.requested_model_id, w.ingress_protocol, w.created_at
+    FROM windowed w
+    JOIN charges c ON c.request_record_id = w.id AND c.charge_usd > 0
+    JOIN usage_records ur ON ur.request_record_id = w.id
+    LEFT JOIN api_keys ak ON ak.id = w.api_key_id
+    LEFT JOIN models m ON m.model_id = w.requested_model_id
+    WHERE (
+          COALESCE(cardinality($4::bigint[]), 0) = 0
+          OR COALESCE(w.route_id, ak.route_id) = ANY($4::bigint[])
+      )
+      AND (
+          COALESCE(cardinality($5::bigint[]), 0) = 0
+          OR w.api_key_id = ANY($5::bigint[])
+      )
+      AND (
+          COALESCE(cardinality($6::text[]), 0) = 0
+          OR w.endpoint = ANY($6::text[])
+      )
+      AND (
+          COALESCE(cardinality($7::text[]), 0) = 0
+          OR (w.stream AND 'stream' = ANY($7::text[]))
+          OR ((NOT w.stream) AND 'sync' = ANY($7::text[]))
+      )
+      AND (
+          $8::text IS NULL
+          OR btrim($8::text) = ''
+          OR w.requested_model_id ILIKE '%' || btrim($8::text) || '%'
+          OR COALESCE(m.display_name, '') ILIKE '%' || btrim($8::text) || '%'
+          OR w.request_id ILIKE '%' || btrim($8::text) || '%'
+          OR COALESCE(w.client_ip, '') ILIKE '%' || btrim($8::text) || '%'
+      )
+),
+top AS (
+    SELECT requested_model_id, COUNT(*)::bigint AS request_count
+    FROM billed
+    GROUP BY requested_model_id
+    ORDER BY request_count DESC, requested_model_id ASC
+    LIMIT 3
+),
+latest AS (
+    SELECT DISTINCT ON (b.requested_model_id)
+        b.requested_model_id,
+        b.ingress_protocol,
+        ps.uncached_input_price,
+        ps.output_price
+    FROM billed b
+    LEFT JOIN price_snapshots ps ON ps.request_record_id = b.id
+    WHERE b.requested_model_id IN (SELECT requested_model_id FROM top)
+    ORDER BY b.requested_model_id, b.created_at DESC, b.id DESC
+)
+SELECT
+    t.requested_model_id,
+    COALESCE(NULLIF(m.display_name, ''), t.requested_model_id) AS model_display_name,
+    t.request_count,
+    COALESCE(l.ingress_protocol, '') AS ingress_protocol,
+    l.uncached_input_price AS input_price_per_1m,
+    l.output_price AS output_price_per_1m
+FROM top t
+LEFT JOIN models m ON m.model_id = t.requested_model_id
+LEFT JOIN latest l ON l.requested_model_id = t.requested_model_id
+ORDER BY t.request_count DESC, t.requested_model_id ASC
+`
+
+type ListConsoleBilledRequestTopModelsParams struct {
+	UserID      int64
+	FromTime    pgtype.Timestamptz
+	ToTime      pgtype.Timestamptz
+	RouteIds    []int64
+	ApiKeyIds   []int64
+	Endpoints   []string
+	StreamTypes []string
+	Q           pgtype.Text
+}
+
+type ListConsoleBilledRequestTopModelsRow struct {
+	RequestedModelID string
+	ModelDisplayName string
+	RequestCount     int64
+	IngressProtocol  string
+	InputPricePer1m  pgtype.Numeric
+	OutputPricePer1m pgtype.Numeric
+}
+
+// 当前时间窗内实际扣费次数最多的三个模型；占比由调用方按这三行之和归一到 100%。
+// 协议和价格取该模型最近一条扣费请求，供卡片悬停复用列表模型详情。
+// 收口方式与 SummarizeConsoleBilledRequests 相同：先时间窗，再一次账本 JOIN。
+// CTE 同样必须 MATERIALIZED，原因见 SummarizeConsoleBilledRequests。
+func (q *Queries) ListConsoleBilledRequestTopModels(ctx context.Context, arg ListConsoleBilledRequestTopModelsParams) ([]ListConsoleBilledRequestTopModelsRow, error) {
+	rows, err := q.db.Query(ctx, listConsoleBilledRequestTopModels,
+		arg.UserID,
+		arg.FromTime,
+		arg.ToTime,
+		arg.RouteIds,
+		arg.ApiKeyIds,
+		arg.Endpoints,
+		arg.StreamTypes,
+		arg.Q,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListConsoleBilledRequestTopModelsRow
+	for rows.Next() {
+		var i ListConsoleBilledRequestTopModelsRow
+		if err := rows.Scan(
+			&i.RequestedModelID,
+			&i.ModelDisplayName,
+			&i.RequestCount,
+			&i.IngressProtocol,
+			&i.InputPricePer1m,
+			&i.OutputPricePer1m,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listConsoleBilledRequests = `-- name: ListConsoleBilledRequests :many
 
 WITH filtered_page AS (
@@ -1327,6 +1484,41 @@ func (q *Queries) ListRequestRecordsPage(ctx context.Context, arg ListRequestRec
 }
 
 const summarizeConsoleBilledRequests = `-- name: SummarizeConsoleBilledRequests :one
+WITH windowed AS MATERIALIZED (
+    SELECT
+        r.id,
+        r.created_at,
+        r.stream,
+        r.started_at,
+        r.completed_at,
+        r.gateway_first_token_at,
+        r.requested_model_id,
+        r.ingress_protocol,
+        r.route_id,
+        r.api_key_id,
+        r.endpoint,
+        r.request_id,
+        r.client_ip
+    FROM request_records r
+    WHERE r.user_id = $6
+      AND ($7::timestamptz IS NULL OR r.created_at >= $7::timestamptz)
+      AND ($8::timestamptz IS NULL OR r.created_at < $8::timestamptz)
+),
+charges AS MATERIALIZED (
+    SELECT
+        le.request_record_id,
+        SUM(
+            CASE
+                WHEN le.entry_type IN ('debit', 'adjustment_debit') THEN le.amount
+                WHEN le.entry_type IN ('credit', 'refund', 'adjustment_credit') THEN -le.amount
+                ELSE 0
+            END
+        ) AS charge_usd
+    FROM ledger_entries le
+    JOIN windowed w ON w.id = le.request_record_id
+    WHERE le.currency = 'USD'
+    GROUP BY le.request_record_id
+)
 SELECT
     COUNT(*)::bigint AS request_count,
     COALESCE(SUM(
@@ -1345,66 +1537,199 @@ SELECT
         + COALESCE(ur.cache_write_30m_input_tokens, 0)
     ), 0)::bigint AS input_token_count,
     COALESCE(SUM(COALESCE(ur.output_tokens_total, 0)), 0)::bigint AS output_token_count,
-    COALESCE(SUM((
-        SELECT COALESCE(SUM(
-            CASE
-                WHEN le.entry_type IN ('debit', 'adjustment_debit') THEN le.amount
-                WHEN le.entry_type IN ('credit', 'refund', 'adjustment_credit') THEN -le.amount
-                ELSE 0
-            END
-        ), 0)
-        FROM ledger_entries le
-        WHERE le.request_record_id = r.id AND le.currency = 'USD'
-    )), 0)::numeric AS charge_usd,
+    COALESCE(SUM(COALESCE(ur.uncached_input_tokens, 0)), 0)::bigint AS uncached_input_token_count,
+    COALESCE(SUM(COALESCE(ur.cache_read_input_tokens, 0)), 0)::bigint AS cache_read_token_count,
+    COALESCE(SUM(
+        COALESCE(ur.cache_write_5m_input_tokens, 0)
+        + COALESCE(ur.cache_write_1h_input_tokens, 0)
+        + COALESCE(ur.cache_write_30m_input_tokens, 0)
+    ), 0)::bigint AS cache_write_token_count,
+    COALESCE(SUM(c.charge_usd), 0)::numeric AS charge_usd,
+    COALESCE(SUM(
+        COALESCE(ur.uncached_input_tokens, 0)::numeric
+        * COALESCE(ps.uncached_input_price, 0)
+        / 1000000
+    ), 0)::numeric AS uncached_input_charge_usd,
+    COALESCE(SUM(
+        GREATEST(
+            COALESCE(ur.output_tokens_total, 0) - COALESCE(ur.reasoning_output_tokens, 0),
+            0
+        )::numeric * COALESCE(ps.output_price, 0) / 1000000
+        + COALESCE(ur.reasoning_output_tokens, 0)::numeric
+            * COALESCE(ps.reasoning_output_price, ps.output_price, 0)
+            / 1000000
+    ), 0)::numeric AS output_charge_usd,
+    COALESCE(SUM(
+        COALESCE(ur.cache_read_input_tokens, 0)::numeric
+        * COALESCE(ps.cache_read_input_price, ps.uncached_input_price, 0)
+        / 1000000
+    ), 0)::numeric AS cache_read_charge_usd,
+    COALESCE(SUM(
+        COALESCE(ur.cache_write_5m_input_tokens, 0)::numeric
+            * COALESCE(ps.cache_write_5m_input_price, ps.uncached_input_price, 0)
+            / 1000000
+        + COALESCE(ur.cache_write_1h_input_tokens, 0)::numeric
+            * COALESCE(ps.cache_write_1h_input_price, ps.uncached_input_price, 0)
+            / 1000000
+        + COALESCE(ur.cache_write_30m_input_tokens, 0)::numeric
+            * COALESCE(ps.cache_write_30m_input_price, ps.uncached_input_price, 0)
+            / 1000000
+    ), 0)::numeric AS cache_write_charge_usd,
+    COALESCE(SUM(
+        (
+            COALESCE(ur.uncached_input_tokens, 0)::numeric
+                * COALESCE(ps.uncached_input_price, 0)
+            + GREATEST(
+                COALESCE(ur.output_tokens_total, 0) - COALESCE(ur.reasoning_output_tokens, 0),
+                0
+            )::numeric * COALESCE(ps.output_price, 0)
+            + COALESCE(ur.reasoning_output_tokens, 0)::numeric
+                * COALESCE(ps.reasoning_output_price, ps.output_price, 0)
+            + COALESCE(ur.cache_read_input_tokens, 0)::numeric
+                * COALESCE(ps.cache_read_input_price, ps.uncached_input_price, 0)
+            + COALESCE(ur.cache_write_5m_input_tokens, 0)::numeric
+                * COALESCE(ps.cache_write_5m_input_price, ps.uncached_input_price, 0)
+            + COALESCE(ur.cache_write_1h_input_tokens, 0)::numeric
+                * COALESCE(ps.cache_write_1h_input_price, ps.uncached_input_price, 0)
+            + COALESCE(ur.cache_write_30m_input_tokens, 0)::numeric
+                * COALESCE(ps.cache_write_30m_input_price, ps.uncached_input_price, 0)
+        ) / 1000000
+        / COALESCE(NULLIF(ps.price_ratio, 0), 1)
+    ), 0)::numeric AS list_charge_usd,
     COALESCE(
-        AVG(EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)
-            FILTER (WHERE r.completed_at IS NOT NULL AND r.started_at IS NOT NULL),
+        AVG(EXTRACT(EPOCH FROM (w.completed_at - w.started_at)) * 1000)
+            FILTER (WHERE w.completed_at IS NOT NULL AND w.started_at IS NOT NULL),
         0
-    )::float8 AS average_latency_ms
-FROM request_records r
-JOIN usage_records ur ON ur.request_record_id = r.id
-WHERE r.user_id = $1
+    )::float8 AS average_latency_ms,
+    COALESCE(
+        AVG(EXTRACT(EPOCH FROM (w.gateway_first_token_at - w.started_at)) * 1000)
+            FILTER (
+                WHERE w.stream
+                  AND w.gateway_first_token_at IS NOT NULL
+                  AND w.started_at IS NOT NULL
+            ),
+        0
+    )::float8 AS average_first_token_ms,
+    COALESCE(
+        percentile_cont(0.5) WITHIN GROUP (
+            ORDER BY EXTRACT(EPOCH FROM (w.completed_at - w.started_at)) * 1000
+        ) FILTER (WHERE w.completed_at IS NOT NULL AND w.started_at IS NOT NULL),
+        0
+    )::float8 AS median_latency_ms,
+    COALESCE(
+        AVG(
+            COALESCE(ur.output_tokens_total, 0)::float8
+            / EXTRACT(EPOCH FROM (w.completed_at - w.gateway_first_token_at))
+        ) FILTER (
+            WHERE w.stream
+              AND w.gateway_first_token_at IS NOT NULL
+              AND w.completed_at IS NOT NULL
+              AND w.completed_at > w.gateway_first_token_at
+              AND COALESCE(ur.output_tokens_total, 0) > 0
+        ),
+        0
+    )::float8 AS average_tps,
+    COUNT(*) FILTER (WHERE w.stream)::bigint AS stream_count
+FROM windowed w
+JOIN charges c ON c.request_record_id = w.id AND c.charge_usd > 0
+JOIN usage_records ur ON ur.request_record_id = w.id
+LEFT JOIN price_snapshots ps ON ps.request_record_id = w.id
+LEFT JOIN api_keys ak ON ak.id = w.api_key_id
+LEFT JOIN models m ON m.model_id = w.requested_model_id
+WHERE (
+      COALESCE(cardinality($1::bigint[]), 0) = 0
+      OR COALESCE(w.route_id, ak.route_id) = ANY($1::bigint[])
+  )
   AND (
-      SELECT COALESCE(SUM(
-          CASE
-              WHEN le.entry_type IN ('debit', 'adjustment_debit') THEN le.amount
-              WHEN le.entry_type IN ('credit', 'refund', 'adjustment_credit') THEN -le.amount
-              ELSE 0
-          END
-      ), 0)
-      FROM ledger_entries le
-      WHERE le.request_record_id = r.id AND le.currency = 'USD'
-  ) > 0
-  AND ($2::timestamptz IS NULL OR r.created_at >= $2::timestamptz)
-  AND ($3::timestamptz IS NULL OR r.created_at < $3::timestamptz)
+      COALESCE(cardinality($2::bigint[]), 0) = 0
+      OR w.api_key_id = ANY($2::bigint[])
+  )
+  AND (
+      COALESCE(cardinality($3::text[]), 0) = 0
+      OR w.endpoint = ANY($3::text[])
+  )
+  AND (
+      COALESCE(cardinality($4::text[]), 0) = 0
+      OR (w.stream AND 'stream' = ANY($4::text[]))
+      OR ((NOT w.stream) AND 'sync' = ANY($4::text[]))
+  )
+  AND (
+      $5::text IS NULL
+      OR btrim($5::text) = ''
+      OR w.requested_model_id ILIKE '%' || btrim($5::text) || '%'
+      OR COALESCE(m.display_name, '') ILIKE '%' || btrim($5::text) || '%'
+      OR w.request_id ILIKE '%' || btrim($5::text) || '%'
+      OR COALESCE(w.client_ip, '') ILIKE '%' || btrim($5::text) || '%'
+  )
 `
 
 type SummarizeConsoleBilledRequestsParams struct {
-	UserID   int64
-	FromTime pgtype.Timestamptz
-	ToTime   pgtype.Timestamptz
+	RouteIds    []int64
+	ApiKeyIds   []int64
+	Endpoints   []string
+	StreamTypes []string
+	Q           pgtype.Text
+	UserID      int64
+	FromTime    pgtype.Timestamptz
+	ToTime      pgtype.Timestamptz
 }
 
 type SummarizeConsoleBilledRequestsRow struct {
-	RequestCount     int64
-	TokenCount       int64
-	InputTokenCount  int64
-	OutputTokenCount int64
-	ChargeUsd        pgtype.Numeric
-	AverageLatencyMs float64
+	RequestCount            int64
+	TokenCount              int64
+	InputTokenCount         int64
+	OutputTokenCount        int64
+	UncachedInputTokenCount int64
+	CacheReadTokenCount     int64
+	CacheWriteTokenCount    int64
+	ChargeUsd               pgtype.Numeric
+	UncachedInputChargeUsd  pgtype.Numeric
+	OutputChargeUsd         pgtype.Numeric
+	CacheReadChargeUsd      pgtype.Numeric
+	CacheWriteChargeUsd     pgtype.Numeric
+	ListChargeUsd           pgtype.Numeric
+	AverageLatencyMs        float64
+	AverageFirstTokenMs     float64
+	MedianLatencyMs         float64
+	AverageTps              float64
+	StreamCount             int64
 }
 
-// 账户累计实际扣费请求。from_time/to_time 可空（narg，NULL = 不过滤时间）。
+// 账户累计实际扣费请求。筛选口径与列表相同；from_time/to_time 可空（narg，NULL = 不过滤时间）。
+// 先按 user_id + 时间窗收口，账本只 JOIN 一次，避免对每行做两次 ledger 相关子查询。
+// windowed / charges 必须 MATERIALIZED：pgx 预编译几次后会改用 generic plan，
+// 可选筛选参数未知时优化器把账本聚合估成 1 行并内联进嵌套循环，1 万行会扫几千万次。
 func (q *Queries) SummarizeConsoleBilledRequests(ctx context.Context, arg SummarizeConsoleBilledRequestsParams) (SummarizeConsoleBilledRequestsRow, error) {
-	row := q.db.QueryRow(ctx, summarizeConsoleBilledRequests, arg.UserID, arg.FromTime, arg.ToTime)
+	row := q.db.QueryRow(ctx, summarizeConsoleBilledRequests,
+		arg.RouteIds,
+		arg.ApiKeyIds,
+		arg.Endpoints,
+		arg.StreamTypes,
+		arg.Q,
+		arg.UserID,
+		arg.FromTime,
+		arg.ToTime,
+	)
 	var i SummarizeConsoleBilledRequestsRow
 	err := row.Scan(
 		&i.RequestCount,
 		&i.TokenCount,
 		&i.InputTokenCount,
 		&i.OutputTokenCount,
+		&i.UncachedInputTokenCount,
+		&i.CacheReadTokenCount,
+		&i.CacheWriteTokenCount,
 		&i.ChargeUsd,
+		&i.UncachedInputChargeUsd,
+		&i.OutputChargeUsd,
+		&i.CacheReadChargeUsd,
+		&i.CacheWriteChargeUsd,
+		&i.ListChargeUsd,
 		&i.AverageLatencyMs,
+		&i.AverageFirstTokenMs,
+		&i.MedianLatencyMs,
+		&i.AverageTps,
+		&i.StreamCount,
 	)
 	return i, err
 }

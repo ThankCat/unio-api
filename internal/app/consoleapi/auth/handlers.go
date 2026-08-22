@@ -12,11 +12,11 @@ import (
 func (h *handler) emailCheck(w http.ResponseWriter, r *http.Request) {
 	var request emailCheckRequest
 	if err := transport.DecodeJSON(w, r, &request); err != nil {
-		h.errorWriter.Write(w, err)
+		h.errorWriter.Write(w, r, err)
 		return
 	}
 	if err := h.service.CheckEmail(r.Context(), request.Email); err != nil {
-		h.errorWriter.Write(w, err)
+		h.errorWriter.Write(w, r, err)
 		return
 	}
 	_ = transport.WriteData(w, http.StatusOK, emailCheckData{Checked: true})
@@ -25,11 +25,11 @@ func (h *handler) emailCheck(w http.ResponseWriter, r *http.Request) {
 func (h *handler) registrationEmailCheck(w http.ResponseWriter, r *http.Request) {
 	var request emailCheckRequest
 	if err := transport.DecodeJSON(w, r, &request); err != nil {
-		h.errorWriter.Write(w, err)
+		h.errorWriter.Write(w, r, err)
 		return
 	}
 	if err := h.service.CheckRegistrationEmail(r.Context(), request.Email); err != nil {
-		h.errorWriter.Write(w, err)
+		h.errorWriter.Write(w, r, err)
 		return
 	}
 	_ = transport.WriteData(w, http.StatusOK, emailCheckData{Checked: true})
@@ -38,14 +38,14 @@ func (h *handler) registrationEmailCheck(w http.ResponseWriter, r *http.Request)
 func (h *handler) emailChallenge(w http.ResponseWriter, r *http.Request) {
 	var request emailChallengeRequest
 	if err := transport.DecodeJSON(w, r, &request); err != nil {
-		h.errorWriter.Write(w, err)
+		h.errorWriter.Write(w, r, err)
 		return
 	}
 	challenge, err := h.service.SendChallenge(
 		r.Context(), request.Email, request.Purpose, consolemiddleware.ClientIPFromContext(r.Context()),
 	)
 	if err != nil {
-		h.errorWriter.Write(w, err)
+		h.errorWriter.Write(w, r, err)
 		return
 	}
 	_ = transport.WriteData(w, http.StatusAccepted, challenge)
@@ -54,7 +54,7 @@ func (h *handler) emailChallenge(w http.ResponseWriter, r *http.Request) {
 func (h *handler) registration(w http.ResponseWriter, r *http.Request) {
 	var request registrationRequest
 	if err := transport.DecodeJSON(w, r, &request); err != nil {
-		h.errorWriter.Write(w, err)
+		h.errorWriter.Write(w, r, err)
 		return
 	}
 	user, pair, err := h.service.Register(
@@ -62,7 +62,7 @@ func (h *handler) registration(w http.ResponseWriter, r *http.Request) {
 		consolemiddleware.ClientIPFromContext(r.Context()),
 	)
 	if err != nil {
-		h.errorWriter.Write(w, err)
+		h.errorWriter.Write(w, r, err)
 		return
 	}
 	h.writeTokenCookies(w, pair)
@@ -72,7 +72,7 @@ func (h *handler) registration(w http.ResponseWriter, r *http.Request) {
 func (h *handler) passwordSession(w http.ResponseWriter, r *http.Request) {
 	var request passwordSessionRequest
 	if err := transport.DecodeJSON(w, r, &request); err != nil {
-		h.errorWriter.Write(w, err)
+		h.errorWriter.Write(w, r, err)
 		return
 	}
 	user, pair, err := h.service.PasswordLogin(
@@ -80,7 +80,7 @@ func (h *handler) passwordSession(w http.ResponseWriter, r *http.Request) {
 		consolemiddleware.ClientIPFromContext(r.Context()),
 	)
 	if err != nil {
-		h.errorWriter.Write(w, err)
+		h.errorWriter.Write(w, r, err)
 		return
 	}
 	h.writeTokenCookies(w, pair)
@@ -90,7 +90,7 @@ func (h *handler) passwordSession(w http.ResponseWriter, r *http.Request) {
 func (h *handler) currentUser(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie(accessCookieName)
 	if err != nil || cookie.Value == "" {
-		h.errorWriter.Write(w, &consoleservice.Error{
+		h.errorWriter.Write(w, r, &consoleservice.Error{
 			Code:    serviceauth.CodeSessionInvalid,
 			Message: "The current session is invalid.",
 			Status:  http.StatusUnauthorized,
@@ -99,7 +99,7 @@ func (h *handler) currentUser(w http.ResponseWriter, r *http.Request) {
 	}
 	user, currentErr := h.service.CurrentUser(r.Context(), cookie.Value)
 	if currentErr != nil {
-		h.errorWriter.Write(w, currentErr)
+		h.errorWriter.Write(w, r, currentErr)
 		return
 	}
 	_ = transport.WriteData(w, http.StatusOK, userData{User: user})
@@ -108,7 +108,7 @@ func (h *handler) currentUser(w http.ResponseWriter, r *http.Request) {
 func (h *handler) emailCodeSession(w http.ResponseWriter, r *http.Request) {
 	var request emailCodeSessionRequest
 	if err := transport.DecodeJSON(w, r, &request); err != nil {
-		h.errorWriter.Write(w, err)
+		h.errorWriter.Write(w, r, err)
 		return
 	}
 	user, pair, err := h.service.EmailCodeLogin(
@@ -116,7 +116,7 @@ func (h *handler) emailCodeSession(w http.ResponseWriter, r *http.Request) {
 		consolemiddleware.ClientIPFromContext(r.Context()),
 	)
 	if err != nil {
-		h.errorWriter.Write(w, err)
+		h.errorWriter.Write(w, r, err)
 		return
 	}
 	h.writeTokenCookies(w, pair)
@@ -126,7 +126,7 @@ func (h *handler) emailCodeSession(w http.ResponseWriter, r *http.Request) {
 func (h *handler) passwordResetVerification(w http.ResponseWriter, r *http.Request) {
 	var request passwordResetVerificationRequest
 	if err := transport.DecodeJSON(w, r, &request); err != nil {
-		h.errorWriter.Write(w, err)
+		h.errorWriter.Write(w, r, err)
 		return
 	}
 	grant, err := h.service.VerifyPasswordResetCode(
@@ -134,7 +134,7 @@ func (h *handler) passwordResetVerification(w http.ResponseWriter, r *http.Reque
 		consolemiddleware.ClientIPFromContext(r.Context()),
 	)
 	if err != nil {
-		h.errorWriter.Write(w, err)
+		h.errorWriter.Write(w, r, err)
 		return
 	}
 	_ = transport.WriteData(w, http.StatusOK, grant)
@@ -143,11 +143,11 @@ func (h *handler) passwordResetVerification(w http.ResponseWriter, r *http.Reque
 func (h *handler) passwordReset(w http.ResponseWriter, r *http.Request) {
 	var request passwordResetRequest
 	if err := transport.DecodeJSON(w, r, &request); err != nil {
-		h.errorWriter.Write(w, err)
+		h.errorWriter.Write(w, r, err)
 		return
 	}
 	if err := h.service.ResetPassword(r.Context(), request.ResetToken, request.NewPassword); err != nil {
-		h.errorWriter.Write(w, err)
+		h.errorWriter.Write(w, r, err)
 		return
 	}
 	h.clearTokenCookies(w)
@@ -157,7 +157,7 @@ func (h *handler) passwordReset(w http.ResponseWriter, r *http.Request) {
 func (h *handler) refresh(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie(refreshCookieName)
 	if err != nil || cookie.Value == "" {
-		h.errorWriter.Write(w, &consoleservice.Error{
+		h.errorWriter.Write(w, r, &consoleservice.Error{
 			Code:    serviceauth.CodeRefreshTokenInvalid,
 			Message: "The refresh token is invalid, expired, or revoked.",
 			Status:  http.StatusUnauthorized,
@@ -167,7 +167,7 @@ func (h *handler) refresh(w http.ResponseWriter, r *http.Request) {
 	pair, refreshErr := h.service.Refresh(r.Context(), cookie.Value)
 	if refreshErr != nil {
 		h.clearTokenCookies(w)
-		h.errorWriter.Write(w, refreshErr)
+		h.errorWriter.Write(w, r, refreshErr)
 		return
 	}
 	h.writeTokenCookies(w, pair)
@@ -180,7 +180,7 @@ func (h *handler) logout(w http.ResponseWriter, r *http.Request) {
 		value = cookie.Value
 	}
 	if err := h.service.Logout(r.Context(), value); err != nil {
-		h.errorWriter.Write(w, err)
+		h.errorWriter.Write(w, r, err)
 		return
 	}
 	h.clearTokenCookies(w)
@@ -190,7 +190,7 @@ func (h *handler) logout(w http.ResponseWriter, r *http.Request) {
 func (h *handler) logoutAll(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie(accessCookieName)
 	if err != nil || cookie.Value == "" {
-		h.errorWriter.Write(w, &consoleservice.Error{
+		h.errorWriter.Write(w, r, &consoleservice.Error{
 			Code:    serviceauth.CodeSessionInvalid,
 			Message: "The current session is invalid.",
 			Status:  http.StatusUnauthorized,
@@ -198,7 +198,7 @@ func (h *handler) logoutAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if logoutErr := h.service.LogoutAll(r.Context(), cookie.Value); logoutErr != nil {
-		h.errorWriter.Write(w, logoutErr)
+		h.errorWriter.Write(w, r, logoutErr)
 		return
 	}
 	h.clearTokenCookies(w)

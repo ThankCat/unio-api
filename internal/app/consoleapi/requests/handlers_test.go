@@ -109,12 +109,28 @@ func (s *fakeRequestService) List(_ context.Context, params consolerequests.List
 func (s *fakeRequestService) Summary(_ context.Context, params consolerequests.SummaryParams) (consolerequests.Summary, *consoleservice.Error) {
 	s.summaryParams = params
 	return consolerequests.Summary{
-		RequestCount:     4,
-		TokenCount:       180,
-		InputTokenCount:  120,
-		OutputTokenCount: 60,
-		ChargeUSD:        "1.25",
-		AverageLatencyMs: 750,
+		RequestCount:            4,
+		StreamCount:             3,
+		TokenCount:              180,
+		InputTokenCount:         120,
+		OutputTokenCount:        60,
+		UncachedInputTokenCount: 90,
+		CacheReadTokenCount:     20,
+		CacheWriteTokenCount:    10,
+		ChargeUSD:               "1.25",
+		UncachedInputChargeUSD:  "0.9",
+		OutputChargeUSD:         "0.24",
+		CacheReadChargeUSD:      "0.04",
+		CacheWriteChargeUSD:     "0.07",
+		ListChargeUSD:           "2.5",
+		AverageLatencyMs:        750,
+		AverageFirstTokenMs:     400,
+		MedianLatencyMs:         620,
+		AverageTPS:              18.1818,
+		TopModels: []consolerequests.SummaryModel{
+			{ModelID: "gpt-5.2", DisplayName: "GPT-5.2", RequestCount: 3},
+			{ModelID: "gpt-4.1", DisplayName: "GPT-4.1", RequestCount: 1},
+		},
 	}, nil
 }
 
@@ -174,19 +190,49 @@ func TestRequestSummaryUsesAuthenticatedUserID(t *testing.T) {
 	}
 	var payload struct {
 		Data struct {
-			RequestCount     int64   `json:"request_count"`
-			TokenCount       int64   `json:"token_count"`
-			InputTokenCount  int64   `json:"input_token_count"`
-			OutputTokenCount int64   `json:"output_token_count"`
-			ChargeUSD        string  `json:"charge_usd"`
-			AverageLatencyMs float64 `json:"average_latency_ms"`
+			RequestCount            int64   `json:"request_count"`
+			StreamCount             int64   `json:"stream_count"`
+			TokenCount              int64   `json:"token_count"`
+			InputTokenCount         int64   `json:"input_token_count"`
+			OutputTokenCount        int64   `json:"output_token_count"`
+			UncachedInputTokenCount int64   `json:"uncached_input_token_count"`
+			CacheReadTokenCount     int64   `json:"cache_read_token_count"`
+			CacheWriteTokenCount    int64   `json:"cache_write_token_count"`
+			ChargeUSD               string  `json:"charge_usd"`
+			ListChargeUSD           string  `json:"list_charge_usd"`
+			AverageLatencyMs        float64 `json:"average_latency_ms"`
+			TopModels               []struct {
+				ModelID      string `json:"model_id"`
+				DisplayName  string `json:"display_name"`
+				RequestCount int64  `json:"request_count"`
+			} `json:"top_models"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.Data.RequestCount != 4 || payload.Data.ChargeUSD != "1.25" || payload.Data.InputTokenCount != 120 || payload.Data.OutputTokenCount != 60 {
+	if payload.Data.RequestCount != 4 || payload.Data.StreamCount != 3 || payload.Data.ChargeUSD != "1.25" || payload.Data.ListChargeUSD != "2.5" || payload.Data.InputTokenCount != 120 || payload.Data.OutputTokenCount != 60 || payload.Data.UncachedInputTokenCount != 90 || payload.Data.CacheReadTokenCount != 20 || payload.Data.CacheWriteTokenCount != 10 {
 		t.Fatalf("payload = %+v", payload.Data)
+	}
+	if len(payload.Data.TopModels) != 2 || payload.Data.TopModels[0].ModelID != "gpt-5.2" || payload.Data.TopModels[0].RequestCount != 3 {
+		t.Fatalf("top models = %+v", payload.Data.TopModels)
+	}
+}
+
+func TestRequestSummaryForwardsSearchQuery(t *testing.T) {
+	service := &fakeRequestService{}
+	handler := newRequestHandler(t, &fakeAuthService{}, service)
+	req := httptest.NewRequest(http.MethodGet, "/v1/requests/summary?q=gpt-5.6-terra", nil)
+	req.AddCookie(&http.Cookie{Name: "unio_access_token", Value: "access-token"})
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if service.summaryParams.Q != "gpt-5.6-terra" {
+		t.Fatalf("search not forwarded: %+v", service.summaryParams)
 	}
 }
 

@@ -49,27 +49,7 @@ func parseListQuery(r *http.Request) (parsedListQuery, *consoleservice.Error) {
 	if pageSize > maxPageSize {
 		pageSize = maxPageSize
 	}
-	from, err := parseTimeQuery(r, "from")
-	if err != nil {
-		return parsedListQuery{}, err
-	}
-	to, err := parseTimeQuery(r, "to")
-	if err != nil {
-		return parsedListQuery{}, err
-	}
-	routeIDs, err := parseInt64Values(r, "route_id")
-	if err != nil {
-		return parsedListQuery{}, err
-	}
-	apiKeyIDs, err := parseInt64Values(r, "api_key_id")
-	if err != nil {
-		return parsedListQuery{}, err
-	}
-	endpoints, err := parseEnumValues(r, "endpoint", consolerequests.KnownPublicEndpoint)
-	if err != nil {
-		return parsedListQuery{}, err
-	}
-	streamTypes, err := parseAllowedValues(r, "stream", allowedStreamTypes)
+	filters, err := parseSummaryQuery(r)
 	if err != nil {
 		return parsedListQuery{}, err
 	}
@@ -79,13 +59,13 @@ func parseListQuery(r *http.Request) (parsedListQuery, *consoleservice.Error) {
 	}
 	return parsedListQuery{
 		params: consolerequests.ListParams{
-			RouteIDs:    routeIDs,
-			APIKeyIDs:   apiKeyIDs,
-			Endpoints:   endpoints,
-			StreamTypes: streamTypes,
-			Q:           strings.TrimSpace(r.URL.Query().Get("q")),
-			From:        from,
-			To:          to,
+			RouteIDs:    filters.RouteIDs,
+			APIKeyIDs:   filters.APIKeyIDs,
+			Endpoints:   filters.Endpoints,
+			StreamTypes: filters.StreamTypes,
+			Q:           filters.Q,
+			From:        filters.From,
+			To:          filters.To,
 			SortField:   sort.Field,
 			SortDesc:    sort.Desc,
 			Limit:       int32(pageSize),
@@ -93,6 +73,42 @@ func parseListQuery(r *http.Request) (parsedListQuery, *consoleservice.Error) {
 		},
 		page:     page,
 		pageSize: pageSize,
+	}, nil
+}
+
+func parseSummaryQuery(r *http.Request) (consolerequests.SummaryParams, *consoleservice.Error) {
+	from, err := parseTimeQuery(r, "from")
+	if err != nil {
+		return consolerequests.SummaryParams{}, err
+	}
+	to, err := parseTimeQuery(r, "to")
+	if err != nil {
+		return consolerequests.SummaryParams{}, err
+	}
+	routeIDs, err := parseInt64Values(r, "route_id")
+	if err != nil {
+		return consolerequests.SummaryParams{}, err
+	}
+	apiKeyIDs, err := parseInt64Values(r, "api_key_id")
+	if err != nil {
+		return consolerequests.SummaryParams{}, err
+	}
+	endpoints, err := parseEnumValues(r, "endpoint", consolerequests.KnownPublicEndpoint)
+	if err != nil {
+		return consolerequests.SummaryParams{}, err
+	}
+	streamTypes, err := parseAllowedValues(r, "stream", allowedStreamTypes)
+	if err != nil {
+		return consolerequests.SummaryParams{}, err
+	}
+	return consolerequests.SummaryParams{
+		RouteIDs:    routeIDs,
+		APIKeyIDs:   apiKeyIDs,
+		Endpoints:   endpoints,
+		StreamTypes: streamTypes,
+		Q:           strings.TrimSpace(r.URL.Query().Get("q")),
+		From:        from,
+		To:          to,
 	}, nil
 }
 

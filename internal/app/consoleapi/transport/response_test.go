@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -15,13 +16,17 @@ import (
 	consoleservice "github.com/ThankCat/unio-gateway/internal/service/console"
 )
 
+func testRequest() *http.Request {
+	return httptest.NewRequest(http.MethodGet, "/v1/auth/me", nil)
+}
+
 func TestErrorWriterSeparatesPublicMessageFromInternalCause(t *testing.T) {
 	core, logs := observer.New(zap.ErrorLevel)
 	writer := NewErrorWriter(zap.New(core))
 	recorder := httptest.NewRecorder()
 	cause := errors.New("postgres connection refused")
 
-	writer.Write(recorder, &consoleservice.Error{
+	writer.Write(recorder, testRequest(), &consoleservice.Error{
 		Code:    consoleservice.CodeRequestUnavailable,
 		Message: "The request could not be completed. Please try again later.",
 		Status:  http.StatusServiceUnavailable,
@@ -44,12 +49,68 @@ func TestErrorWriterSeparatesPublicMessageFromInternalCause(t *testing.T) {
 	}
 }
 
+func TestErrorWriterDoesNotLogClientCancelAsServerFailure(t *testing.T) {
+	core, logs := observer.New(zap.ErrorLevel)
+	writer := NewErrorWriter(zap.New(core))
+	recorder := httptest.NewRecorder()
+
+	writer.Write(recorder, testRequest(), consoleservice.RequestUnavailable("read user usd wallet", context.Canceled))
+
+	if recorder.Code != consoleservice.StatusClientClosedRequest {
+		t.Fatalf("status %d, want %d", recorder.Code, consoleservice.StatusClientClosedRequest)
+	}
+	if logs.Len() != 0 {
+		t.Fatalf("client cancel must not log ERROR, got %+v", logs.All())
+	}
+}
+
+func TestErrorWriterRemapsCanceledRequestContextForAnyUnavailableError(t *testing.T) {
+	core, logs := observer.New(zap.ErrorLevel)
+	writer := NewErrorWriter(zap.New(core))
+	recorder := httptest.NewRecorder()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequest(http.MethodGet, "/v1/requests/summary", nil).WithContext(ctx)
+
+	writer.Write(recorder, req, &consoleservice.Error{
+		Code:    consoleservice.CodeRequestUnavailable,
+		Message: "The request could not be completed. Please try again later.",
+		Status:  http.StatusServiceUnavailable,
+		Cause:   errors.New("postgres connection refused"),
+	})
+
+	if recorder.Code != consoleservice.StatusClientClosedRequest {
+		t.Fatalf("status %d, want %d", recorder.Code, consoleservice.StatusClientClosedRequest)
+	}
+	if logs.Len() != 0 {
+		t.Fatalf("client cancel must not log ERROR, got %+v", logs.All())
+	}
+}
+
+func TestErrorWriterKeepsClientErrorsWhenRequestIsCanceled(t *testing.T) {
+	writer := NewErrorWriter(zap.NewNop())
+	recorder := httptest.NewRecorder()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequest(http.MethodGet, "/v1/auth/me", nil).WithContext(ctx)
+
+	writer.Write(recorder, req, &consoleservice.Error{
+		Code:    "auth_session_invalid",
+		Message: "The current session is invalid.",
+		Status:  http.StatusUnauthorized,
+	})
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status %d, want %d", recorder.Code, http.StatusUnauthorized)
+	}
+}
+
 func TestErrorWriterIncludesRemainingVerificationAttempts(t *testing.T) {
 	writer := NewErrorWriter(zap.NewNop())
 	recorder := httptest.NewRecorder()
 	remaining := 4
 
-	writer.Write(recorder, &consoleservice.Error{
+	writer.Write(recorder, testRequest(), &consoleservice.Error{
 		Code:              "auth_verification_code_invalid",
 		Message:           "The verification code is incorrect.",
 		Param:             "code",

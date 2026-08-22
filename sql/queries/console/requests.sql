@@ -261,7 +261,45 @@ WHERE r.user_id = sqlc.arg(user_id)
   AND (sqlc.narg(to_time)::timestamptz IS NULL OR r.created_at < sqlc.narg(to_time)::timestamptz);
 
 -- name: SummarizeConsoleBilledRequests :one
--- 账户累计实际扣费请求。from_time/to_time 可空（narg，NULL = 不过滤时间）。
+-- 账户累计实际扣费请求。筛选口径与列表相同；from_time/to_time 可空（narg，NULL = 不过滤时间）。
+-- 先按 user_id + 时间窗收口，账本只 JOIN 一次，避免对每行做两次 ledger 相关子查询。
+-- windowed / charges 必须 MATERIALIZED：pgx 预编译几次后会改用 generic plan，
+-- 可选筛选参数未知时优化器把账本聚合估成 1 行并内联进嵌套循环，1 万行会扫几千万次。
+WITH windowed AS MATERIALIZED (
+    SELECT
+        r.id,
+        r.created_at,
+        r.stream,
+        r.started_at,
+        r.completed_at,
+        r.gateway_first_token_at,
+        r.requested_model_id,
+        r.ingress_protocol,
+        r.route_id,
+        r.api_key_id,
+        r.endpoint,
+        r.request_id,
+        r.client_ip
+    FROM request_records r
+    WHERE r.user_id = sqlc.arg(user_id)
+      AND (sqlc.narg(from_time)::timestamptz IS NULL OR r.created_at >= sqlc.narg(from_time)::timestamptz)
+      AND (sqlc.narg(to_time)::timestamptz IS NULL OR r.created_at < sqlc.narg(to_time)::timestamptz)
+),
+charges AS MATERIALIZED (
+    SELECT
+        le.request_record_id,
+        SUM(
+            CASE
+                WHEN le.entry_type IN ('debit', 'adjustment_debit') THEN le.amount
+                WHEN le.entry_type IN ('credit', 'refund', 'adjustment_credit') THEN -le.amount
+                ELSE 0
+            END
+        ) AS charge_usd
+    FROM ledger_entries le
+    JOIN windowed w ON w.id = le.request_record_id
+    WHERE le.currency = 'USD'
+    GROUP BY le.request_record_id
+)
 SELECT
     COUNT(*)::bigint AS request_count,
     COALESCE(SUM(
@@ -280,38 +318,230 @@ SELECT
         + COALESCE(ur.cache_write_30m_input_tokens, 0)
     ), 0)::bigint AS input_token_count,
     COALESCE(SUM(COALESCE(ur.output_tokens_total, 0)), 0)::bigint AS output_token_count,
-    COALESCE(SUM((
-        SELECT COALESCE(SUM(
+    COALESCE(SUM(COALESCE(ur.uncached_input_tokens, 0)), 0)::bigint AS uncached_input_token_count,
+    COALESCE(SUM(COALESCE(ur.cache_read_input_tokens, 0)), 0)::bigint AS cache_read_token_count,
+    COALESCE(SUM(
+        COALESCE(ur.cache_write_5m_input_tokens, 0)
+        + COALESCE(ur.cache_write_1h_input_tokens, 0)
+        + COALESCE(ur.cache_write_30m_input_tokens, 0)
+    ), 0)::bigint AS cache_write_token_count,
+    COALESCE(SUM(c.charge_usd), 0)::numeric AS charge_usd,
+    COALESCE(SUM(
+        COALESCE(ur.uncached_input_tokens, 0)::numeric
+        * COALESCE(ps.uncached_input_price, 0)
+        / 1000000
+    ), 0)::numeric AS uncached_input_charge_usd,
+    COALESCE(SUM(
+        GREATEST(
+            COALESCE(ur.output_tokens_total, 0) - COALESCE(ur.reasoning_output_tokens, 0),
+            0
+        )::numeric * COALESCE(ps.output_price, 0) / 1000000
+        + COALESCE(ur.reasoning_output_tokens, 0)::numeric
+            * COALESCE(ps.reasoning_output_price, ps.output_price, 0)
+            / 1000000
+    ), 0)::numeric AS output_charge_usd,
+    COALESCE(SUM(
+        COALESCE(ur.cache_read_input_tokens, 0)::numeric
+        * COALESCE(ps.cache_read_input_price, ps.uncached_input_price, 0)
+        / 1000000
+    ), 0)::numeric AS cache_read_charge_usd,
+    COALESCE(SUM(
+        COALESCE(ur.cache_write_5m_input_tokens, 0)::numeric
+            * COALESCE(ps.cache_write_5m_input_price, ps.uncached_input_price, 0)
+            / 1000000
+        + COALESCE(ur.cache_write_1h_input_tokens, 0)::numeric
+            * COALESCE(ps.cache_write_1h_input_price, ps.uncached_input_price, 0)
+            / 1000000
+        + COALESCE(ur.cache_write_30m_input_tokens, 0)::numeric
+            * COALESCE(ps.cache_write_30m_input_price, ps.uncached_input_price, 0)
+            / 1000000
+    ), 0)::numeric AS cache_write_charge_usd,
+    COALESCE(SUM(
+        (
+            COALESCE(ur.uncached_input_tokens, 0)::numeric
+                * COALESCE(ps.uncached_input_price, 0)
+            + GREATEST(
+                COALESCE(ur.output_tokens_total, 0) - COALESCE(ur.reasoning_output_tokens, 0),
+                0
+            )::numeric * COALESCE(ps.output_price, 0)
+            + COALESCE(ur.reasoning_output_tokens, 0)::numeric
+                * COALESCE(ps.reasoning_output_price, ps.output_price, 0)
+            + COALESCE(ur.cache_read_input_tokens, 0)::numeric
+                * COALESCE(ps.cache_read_input_price, ps.uncached_input_price, 0)
+            + COALESCE(ur.cache_write_5m_input_tokens, 0)::numeric
+                * COALESCE(ps.cache_write_5m_input_price, ps.uncached_input_price, 0)
+            + COALESCE(ur.cache_write_1h_input_tokens, 0)::numeric
+                * COALESCE(ps.cache_write_1h_input_price, ps.uncached_input_price, 0)
+            + COALESCE(ur.cache_write_30m_input_tokens, 0)::numeric
+                * COALESCE(ps.cache_write_30m_input_price, ps.uncached_input_price, 0)
+        ) / 1000000
+        / COALESCE(NULLIF(ps.price_ratio, 0), 1)
+    ), 0)::numeric AS list_charge_usd,
+    COALESCE(
+        AVG(EXTRACT(EPOCH FROM (w.completed_at - w.started_at)) * 1000)
+            FILTER (WHERE w.completed_at IS NOT NULL AND w.started_at IS NOT NULL),
+        0
+    )::float8 AS average_latency_ms,
+    COALESCE(
+        AVG(EXTRACT(EPOCH FROM (w.gateway_first_token_at - w.started_at)) * 1000)
+            FILTER (
+                WHERE w.stream
+                  AND w.gateway_first_token_at IS NOT NULL
+                  AND w.started_at IS NOT NULL
+            ),
+        0
+    )::float8 AS average_first_token_ms,
+    COALESCE(
+        percentile_cont(0.5) WITHIN GROUP (
+            ORDER BY EXTRACT(EPOCH FROM (w.completed_at - w.started_at)) * 1000
+        ) FILTER (WHERE w.completed_at IS NOT NULL AND w.started_at IS NOT NULL),
+        0
+    )::float8 AS median_latency_ms,
+    COALESCE(
+        AVG(
+            COALESCE(ur.output_tokens_total, 0)::float8
+            / EXTRACT(EPOCH FROM (w.completed_at - w.gateway_first_token_at))
+        ) FILTER (
+            WHERE w.stream
+              AND w.gateway_first_token_at IS NOT NULL
+              AND w.completed_at IS NOT NULL
+              AND w.completed_at > w.gateway_first_token_at
+              AND COALESCE(ur.output_tokens_total, 0) > 0
+        ),
+        0
+    )::float8 AS average_tps,
+    COUNT(*) FILTER (WHERE w.stream)::bigint AS stream_count
+FROM windowed w
+JOIN charges c ON c.request_record_id = w.id AND c.charge_usd > 0
+JOIN usage_records ur ON ur.request_record_id = w.id
+LEFT JOIN price_snapshots ps ON ps.request_record_id = w.id
+LEFT JOIN api_keys ak ON ak.id = w.api_key_id
+LEFT JOIN models m ON m.model_id = w.requested_model_id
+WHERE (
+      COALESCE(cardinality(sqlc.narg(route_ids)::bigint[]), 0) = 0
+      OR COALESCE(w.route_id, ak.route_id) = ANY(sqlc.narg(route_ids)::bigint[])
+  )
+  AND (
+      COALESCE(cardinality(sqlc.narg(api_key_ids)::bigint[]), 0) = 0
+      OR w.api_key_id = ANY(sqlc.narg(api_key_ids)::bigint[])
+  )
+  AND (
+      COALESCE(cardinality(sqlc.narg(endpoints)::text[]), 0) = 0
+      OR w.endpoint = ANY(sqlc.narg(endpoints)::text[])
+  )
+  AND (
+      COALESCE(cardinality(sqlc.narg(stream_types)::text[]), 0) = 0
+      OR (w.stream AND 'stream' = ANY(sqlc.narg(stream_types)::text[]))
+      OR ((NOT w.stream) AND 'sync' = ANY(sqlc.narg(stream_types)::text[]))
+  )
+  AND (
+      sqlc.narg(q)::text IS NULL
+      OR btrim(sqlc.narg(q)::text) = ''
+      OR w.requested_model_id ILIKE '%' || btrim(sqlc.narg(q)::text) || '%'
+      OR COALESCE(m.display_name, '') ILIKE '%' || btrim(sqlc.narg(q)::text) || '%'
+      OR w.request_id ILIKE '%' || btrim(sqlc.narg(q)::text) || '%'
+      OR COALESCE(w.client_ip, '') ILIKE '%' || btrim(sqlc.narg(q)::text) || '%'
+  );
+
+-- name: ListConsoleBilledRequestTopModels :many
+-- 当前时间窗内实际扣费次数最多的三个模型；占比由调用方按这三行之和归一到 100%。
+-- 协议和价格取该模型最近一条扣费请求，供卡片悬停复用列表模型详情。
+-- 收口方式与 SummarizeConsoleBilledRequests 相同：先时间窗，再一次账本 JOIN。
+-- CTE 同样必须 MATERIALIZED，原因见 SummarizeConsoleBilledRequests。
+WITH windowed AS MATERIALIZED (
+    SELECT
+        r.id,
+        r.created_at,
+        r.stream,
+        r.requested_model_id,
+        r.ingress_protocol,
+        r.route_id,
+        r.api_key_id,
+        r.endpoint,
+        r.request_id,
+        r.client_ip
+    FROM request_records r
+    WHERE r.user_id = sqlc.arg(user_id)
+      AND (sqlc.narg(from_time)::timestamptz IS NULL OR r.created_at >= sqlc.narg(from_time)::timestamptz)
+      AND (sqlc.narg(to_time)::timestamptz IS NULL OR r.created_at < sqlc.narg(to_time)::timestamptz)
+),
+charges AS MATERIALIZED (
+    SELECT
+        le.request_record_id,
+        SUM(
             CASE
                 WHEN le.entry_type IN ('debit', 'adjustment_debit') THEN le.amount
                 WHEN le.entry_type IN ('credit', 'refund', 'adjustment_credit') THEN -le.amount
                 ELSE 0
             END
-        ), 0)
-        FROM ledger_entries le
-        WHERE le.request_record_id = r.id AND le.currency = 'USD'
-    )), 0)::numeric AS charge_usd,
-    COALESCE(
-        AVG(EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)
-            FILTER (WHERE r.completed_at IS NOT NULL AND r.started_at IS NOT NULL),
-        0
-    )::float8 AS average_latency_ms
-FROM request_records r
-JOIN usage_records ur ON ur.request_record_id = r.id
-WHERE r.user_id = sqlc.arg(user_id)
-  AND (
-      SELECT COALESCE(SUM(
-          CASE
-              WHEN le.entry_type IN ('debit', 'adjustment_debit') THEN le.amount
-              WHEN le.entry_type IN ('credit', 'refund', 'adjustment_credit') THEN -le.amount
-              ELSE 0
-          END
-      ), 0)
-      FROM ledger_entries le
-      WHERE le.request_record_id = r.id AND le.currency = 'USD'
-  ) > 0
-  AND (sqlc.narg(from_time)::timestamptz IS NULL OR r.created_at >= sqlc.narg(from_time)::timestamptz)
-  AND (sqlc.narg(to_time)::timestamptz IS NULL OR r.created_at < sqlc.narg(to_time)::timestamptz);
+        ) AS charge_usd
+    FROM ledger_entries le
+    JOIN windowed w ON w.id = le.request_record_id
+    WHERE le.currency = 'USD'
+    GROUP BY le.request_record_id
+),
+billed AS (
+    SELECT w.id, w.requested_model_id, w.ingress_protocol, w.created_at
+    FROM windowed w
+    JOIN charges c ON c.request_record_id = w.id AND c.charge_usd > 0
+    JOIN usage_records ur ON ur.request_record_id = w.id
+    LEFT JOIN api_keys ak ON ak.id = w.api_key_id
+    LEFT JOIN models m ON m.model_id = w.requested_model_id
+    WHERE (
+          COALESCE(cardinality(sqlc.narg(route_ids)::bigint[]), 0) = 0
+          OR COALESCE(w.route_id, ak.route_id) = ANY(sqlc.narg(route_ids)::bigint[])
+      )
+      AND (
+          COALESCE(cardinality(sqlc.narg(api_key_ids)::bigint[]), 0) = 0
+          OR w.api_key_id = ANY(sqlc.narg(api_key_ids)::bigint[])
+      )
+      AND (
+          COALESCE(cardinality(sqlc.narg(endpoints)::text[]), 0) = 0
+          OR w.endpoint = ANY(sqlc.narg(endpoints)::text[])
+      )
+      AND (
+          COALESCE(cardinality(sqlc.narg(stream_types)::text[]), 0) = 0
+          OR (w.stream AND 'stream' = ANY(sqlc.narg(stream_types)::text[]))
+          OR ((NOT w.stream) AND 'sync' = ANY(sqlc.narg(stream_types)::text[]))
+      )
+      AND (
+          sqlc.narg(q)::text IS NULL
+          OR btrim(sqlc.narg(q)::text) = ''
+          OR w.requested_model_id ILIKE '%' || btrim(sqlc.narg(q)::text) || '%'
+          OR COALESCE(m.display_name, '') ILIKE '%' || btrim(sqlc.narg(q)::text) || '%'
+          OR w.request_id ILIKE '%' || btrim(sqlc.narg(q)::text) || '%'
+          OR COALESCE(w.client_ip, '') ILIKE '%' || btrim(sqlc.narg(q)::text) || '%'
+      )
+),
+top AS (
+    SELECT requested_model_id, COUNT(*)::bigint AS request_count
+    FROM billed
+    GROUP BY requested_model_id
+    ORDER BY request_count DESC, requested_model_id ASC
+    LIMIT 3
+),
+latest AS (
+    SELECT DISTINCT ON (b.requested_model_id)
+        b.requested_model_id,
+        b.ingress_protocol,
+        ps.uncached_input_price,
+        ps.output_price
+    FROM billed b
+    LEFT JOIN price_snapshots ps ON ps.request_record_id = b.id
+    WHERE b.requested_model_id IN (SELECT requested_model_id FROM top)
+    ORDER BY b.requested_model_id, b.created_at DESC, b.id DESC
+)
+SELECT
+    t.requested_model_id,
+    COALESCE(NULLIF(m.display_name, ''), t.requested_model_id) AS model_display_name,
+    t.request_count,
+    COALESCE(l.ingress_protocol, '') AS ingress_protocol,
+    l.uncached_input_price AS input_price_per_1m,
+    l.output_price AS output_price_per_1m
+FROM top t
+LEFT JOIN models m ON m.model_id = t.requested_model_id
+LEFT JOIN latest l ON l.requested_model_id = t.requested_model_id
+ORDER BY t.request_count DESC, t.requested_model_id ASC;
 
 -- name: ListConsoleFilterRoutes :many
 -- 线路筛选项来自线路目录全量，不按用户历史请求聚合。

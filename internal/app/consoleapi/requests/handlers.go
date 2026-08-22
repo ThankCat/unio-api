@@ -17,13 +17,13 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request) {
 	}
 	query, err := parseListQuery(r)
 	if err != nil {
-		h.errorWriter.Write(w, err)
+		h.errorWriter.Write(w, r, err)
 		return
 	}
 	query.params.UserID = principal.UserID
 	items, total, listErr := h.service.List(r.Context(), query.params)
 	if listErr != nil {
-		h.errorWriter.Write(w, listErr)
+		h.errorWriter.Write(w, r, listErr)
 		return
 	}
 	_ = transport.WriteData(w, http.StatusOK, listData{
@@ -39,33 +39,38 @@ func (h *handler) summary(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// from/to 可空；缺省时统计账户全部实际扣费历史。
-	from, fromErr := parseTimeQuery(r, "from")
-	if fromErr != nil {
-		h.errorWriter.Write(w, fromErr)
+	// 筛选口径与列表相同；from/to 可空，缺省时统计账户全部实际扣费历史。
+	params, parseErr := parseSummaryQuery(r)
+	if parseErr != nil {
+		h.errorWriter.Write(w, r, parseErr)
 		return
 	}
-	to, toErr := parseTimeQuery(r, "to")
-	if toErr != nil {
-		h.errorWriter.Write(w, toErr)
-		return
-	}
-	summary, err := h.service.Summary(r.Context(), consolerequests.SummaryParams{
-		UserID: principal.UserID,
-		From:   from,
-		To:     to,
-	})
+	params.UserID = principal.UserID
+	summary, err := h.service.Summary(r.Context(), params)
 	if err != nil {
-		h.errorWriter.Write(w, err)
+		h.errorWriter.Write(w, r, err)
 		return
 	}
 	_ = transport.WriteData(w, http.StatusOK, summaryData{
-		RequestCount:     summary.RequestCount,
-		TokenCount:       summary.TokenCount,
-		InputTokenCount:  summary.InputTokenCount,
-		OutputTokenCount: summary.OutputTokenCount,
-		ChargeUSD:        summary.ChargeUSD,
-		AverageLatencyMs: summary.AverageLatencyMs,
+		RequestCount:            summary.RequestCount,
+		StreamCount:             summary.StreamCount,
+		TokenCount:              summary.TokenCount,
+		InputTokenCount:         summary.InputTokenCount,
+		OutputTokenCount:        summary.OutputTokenCount,
+		UncachedInputTokenCount: summary.UncachedInputTokenCount,
+		CacheReadTokenCount:     summary.CacheReadTokenCount,
+		CacheWriteTokenCount:    summary.CacheWriteTokenCount,
+		ChargeUSD:               summary.ChargeUSD,
+		UncachedInputChargeUSD:  summary.UncachedInputChargeUSD,
+		OutputChargeUSD:         summary.OutputChargeUSD,
+		CacheReadChargeUSD:      summary.CacheReadChargeUSD,
+		CacheWriteChargeUSD:     summary.CacheWriteChargeUSD,
+		ListChargeUSD:           summary.ListChargeUSD,
+		AverageLatencyMs:        summary.AverageLatencyMs,
+		AverageFirstTokenMs:     summary.AverageFirstTokenMs,
+		MedianLatencyMs:         summary.MedianLatencyMs,
+		AverageTPS:              summary.AverageTPS,
+		TopModels:               toSummaryModelDTOs(summary.TopModels),
 	})
 }
 
@@ -76,7 +81,7 @@ func (h *handler) filters(w http.ResponseWriter, r *http.Request) {
 	}
 	filters, err := h.service.Filters(r.Context(), principal.UserID)
 	if err != nil {
-		h.errorWriter.Write(w, err)
+		h.errorWriter.Write(w, r, err)
 		return
 	}
 	_ = transport.WriteData(w, http.StatusOK, filtersData{
@@ -92,7 +97,7 @@ func requirePrincipal(w http.ResponseWriter, errorWriter transport.ErrorWriter, 
 	if ok {
 		return principal, true
 	}
-	errorWriter.Write(w, &consoleservice.Error{
+	errorWriter.Write(w, r, &consoleservice.Error{
 		Code:    serviceauth.CodeSessionInvalid,
 		Message: "The current session is invalid.",
 		Status:  http.StatusUnauthorized,

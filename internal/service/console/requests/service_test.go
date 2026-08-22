@@ -19,6 +19,8 @@ type fakeStore struct {
 	countCalled   bool
 	summary       sqlc.SummarizeConsoleBilledRequestsRow
 	summaryParams sqlc.SummarizeConsoleBilledRequestsParams
+	topModels     []sqlc.ListConsoleBilledRequestTopModelsRow
+	topParams     sqlc.ListConsoleBilledRequestTopModelsParams
 	routes        []sqlc.ListConsoleFilterRoutesRow
 	keys          []sqlc.ListConsoleFilterAPIKeysRow
 	keysUserID    int64
@@ -39,6 +41,11 @@ func (f *fakeStore) CountConsoleBilledRequests(context.Context, sqlc.CountConsol
 func (f *fakeStore) SummarizeConsoleBilledRequests(_ context.Context, arg sqlc.SummarizeConsoleBilledRequestsParams) (sqlc.SummarizeConsoleBilledRequestsRow, error) {
 	f.summaryParams = arg
 	return f.summary, nil
+}
+
+func (f *fakeStore) ListConsoleBilledRequestTopModels(_ context.Context, arg sqlc.ListConsoleBilledRequestTopModelsParams) ([]sqlc.ListConsoleBilledRequestTopModelsRow, error) {
+	f.topParams = arg
+	return f.topModels, nil
 }
 
 func (f *fakeStore) ListConsoleFilterRoutes(context.Context) ([]sqlc.ListConsoleFilterRoutesRow, error) {
@@ -188,12 +195,35 @@ func TestListFallsBackToModelIDWhenDisplayNameMissing(t *testing.T) {
 func TestSummaryUsesAllTimeWhenBoundsOmitted(t *testing.T) {
 	store := &fakeStore{
 		summary: sqlc.SummarizeConsoleBilledRequestsRow{
-			RequestCount:     4,
-			TokenCount:       180,
-			InputTokenCount:  120,
-			OutputTokenCount: 60,
-			ChargeUsd:        mustNumeric(t, "1.25"),
-			AverageLatencyMs: 750,
+			RequestCount:            4,
+			TokenCount:              180,
+			InputTokenCount:         120,
+			OutputTokenCount:        60,
+			UncachedInputTokenCount: 90,
+			CacheReadTokenCount:     20,
+			CacheWriteTokenCount:    10,
+			ChargeUsd:               mustNumeric(t, "1.25"),
+			UncachedInputChargeUsd:  mustNumeric(t, "0.90"),
+			OutputChargeUsd:         mustNumeric(t, "0.24"),
+			CacheReadChargeUsd:      mustNumeric(t, "0.04"),
+			CacheWriteChargeUsd:     mustNumeric(t, "0.07"),
+			ListChargeUsd:           mustNumeric(t, "2.50"),
+			AverageLatencyMs:        750,
+			AverageFirstTokenMs:     400,
+			MedianLatencyMs:         620,
+			AverageTps:              18.1818,
+			StreamCount:             3,
+		},
+		topModels: []sqlc.ListConsoleBilledRequestTopModelsRow{
+			{
+				RequestedModelID: "gpt-5.2",
+				ModelDisplayName: "GPT-5.2",
+				RequestCount:     3,
+				IngressProtocol:  "openai",
+				InputPricePer1m:  mustNumeric(t, "1"),
+				OutputPricePer1m: mustNumeric(t, "6"),
+			},
+			{RequestedModelID: "gpt-4.1", ModelDisplayName: "GPT-4.1", RequestCount: 1},
 		},
 	}
 
@@ -206,8 +236,39 @@ func TestSummaryUsesAllTimeWhenBoundsOmitted(t *testing.T) {
 	if store.summaryParams.UserID != 7 || store.summaryParams.FromTime.Valid || store.summaryParams.ToTime.Valid {
 		t.Fatalf("summary params = %+v", store.summaryParams)
 	}
-	if summary.RequestCount != 4 || summary.TokenCount != 180 || summary.InputTokenCount != 120 || summary.OutputTokenCount != 60 || summary.ChargeUSD != "1.25" || summary.AverageLatencyMs != 750 {
+	if store.topParams.UserID != 7 || store.topParams.FromTime.Valid || store.topParams.ToTime.Valid {
+		t.Fatalf("top model params = %+v", store.topParams)
+	}
+	if summary.RequestCount != 4 || summary.StreamCount != 3 || summary.TokenCount != 180 || summary.InputTokenCount != 120 || summary.OutputTokenCount != 60 || summary.UncachedInputTokenCount != 90 || summary.CacheReadTokenCount != 20 || summary.CacheWriteTokenCount != 10 || summary.ChargeUSD != "1.25" || summary.UncachedInputChargeUSD != "0.9" || summary.OutputChargeUSD != "0.24" || summary.CacheReadChargeUSD != "0.04" || summary.CacheWriteChargeUSD != "0.07" || summary.ListChargeUSD != "2.5" || summary.AverageLatencyMs != 750 || summary.AverageFirstTokenMs != 400 || summary.MedianLatencyMs != 620 || summary.AverageTPS != 18.1818 {
 		t.Fatalf("summary = %+v", summary)
+	}
+	if len(summary.TopModels) != 2 || summary.TopModels[0].ModelID != "gpt-5.2" || summary.TopModels[0].DisplayName != "GPT-5.2" || summary.TopModels[0].RequestCount != 3 || summary.TopModels[0].IngressProtocol != "openai" || summary.TopModels[0].InputPricePer1M == nil || *summary.TopModels[0].InputPricePer1M != "1" || summary.TopModels[0].OutputPricePer1M == nil || *summary.TopModels[0].OutputPricePer1M != "6" {
+		t.Fatalf("top models = %+v", summary.TopModels)
+	}
+}
+
+func TestSummaryForwardsSearchQuery(t *testing.T) {
+	store := &fakeStore{
+		summary: sqlc.SummarizeConsoleBilledRequestsRow{
+			RequestCount:     1,
+			TokenCount:       10,
+			ChargeUsd:        mustNumeric(t, "0.01"),
+			AverageLatencyMs: 100,
+		},
+	}
+
+	_, err := requests.NewService(store).Summary(context.Background(), requests.SummaryParams{
+		UserID: 7,
+		Q:      "gpt-5.6-terra",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.summaryParams.Q.String != "gpt-5.6-terra" || !store.summaryParams.Q.Valid {
+		t.Fatalf("search not forwarded: %+v", store.summaryParams.Q)
+	}
+	if store.topParams.Q.String != "gpt-5.6-terra" || !store.topParams.Q.Valid {
+		t.Fatalf("top model search not forwarded: %+v", store.topParams.Q)
 	}
 }
 
@@ -238,6 +299,9 @@ func TestSummaryForwardsOptionalTimeBounds(t *testing.T) {
 	}
 	if !store.summaryParams.FromTime.Time.Equal(from) || !store.summaryParams.ToTime.Time.Equal(to) {
 		t.Fatalf("time bounds = from=%v to=%v", store.summaryParams.FromTime.Time, store.summaryParams.ToTime.Time)
+	}
+	if !store.topParams.FromTime.Time.Equal(from) || !store.topParams.ToTime.Time.Equal(to) {
+		t.Fatalf("top model time bounds = from=%v to=%v", store.topParams.FromTime.Time, store.topParams.ToTime.Time)
 	}
 }
 

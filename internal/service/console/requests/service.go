@@ -16,6 +16,7 @@ type Store interface {
 	ListConsoleBilledRequests(context.Context, sqlc.ListConsoleBilledRequestsParams) ([]sqlc.ListConsoleBilledRequestsRow, error)
 	CountConsoleBilledRequests(context.Context, sqlc.CountConsoleBilledRequestsParams) (int64, error)
 	SummarizeConsoleBilledRequests(context.Context, sqlc.SummarizeConsoleBilledRequestsParams) (sqlc.SummarizeConsoleBilledRequestsRow, error)
+	ListConsoleBilledRequestTopModels(context.Context, sqlc.ListConsoleBilledRequestTopModelsParams) ([]sqlc.ListConsoleBilledRequestTopModelsRow, error)
 	ListConsoleFilterRoutes(context.Context) ([]sqlc.ListConsoleFilterRoutesRow, error)
 	ListConsoleFilterAPIKeys(context.Context, int64) ([]sqlc.ListConsoleFilterAPIKeysRow, error)
 	ListConsoleBilledRequestEndpoints(context.Context, int64) ([]string, error)
@@ -40,59 +41,87 @@ type ListParams struct {
 
 // Item 是客户可见的实际扣费请求列表项。
 type Item struct {
-	ID                       int64
-	RequestID                string
-	CreatedAt                time.Time
-	ClientIP                 string
-	RouteID                  *int64
-	RouteName                string
-	APIKeyID                 int64
-	APIKeyName               string
-	APIKeyPrefix             string
-	APIKeyPlaintext          *string
-	Endpoint                 string
-	Stream                   bool
-	RequestedModelID         string
-	ModelDisplayName         string
-	IngressProtocol          string
-	InputPricePer1M              *string
-	OutputPricePer1M             *string
-	CacheReadPricePer1M          *string
-	CacheWrite5mPricePer1M       *string
-	CacheWrite1hPricePer1M       *string
-	CacheWrite30mPricePer1M      *string
-	ReasoningOutputPricePer1M    *string
-	PriceServiceTier             *string
-	ReasoningEffort          *string
-	UncachedInputTokens      int64
-	CacheReadInputTokens     int64
-	CacheWrite5mInputTokens  int64
-	CacheWrite1hInputTokens  int64
-	CacheWrite30mInputTokens int64
-	InputTokens              int64
-	OutputTokens             int64
-	ReasoningOutputTokens    int64
-	LatencyMs                *int64
-	FirstTokenMs             *int64
-	TPS                      *float64
-	UserChargeUSD            string
+	ID                        int64
+	RequestID                 string
+	CreatedAt                 time.Time
+	ClientIP                  string
+	RouteID                   *int64
+	RouteName                 string
+	APIKeyID                  int64
+	APIKeyName                string
+	APIKeyPrefix              string
+	APIKeyPlaintext           *string
+	Endpoint                  string
+	Stream                    bool
+	RequestedModelID          string
+	ModelDisplayName          string
+	IngressProtocol           string
+	InputPricePer1M           *string
+	OutputPricePer1M          *string
+	CacheReadPricePer1M       *string
+	CacheWrite5mPricePer1M    *string
+	CacheWrite1hPricePer1M    *string
+	CacheWrite30mPricePer1M   *string
+	ReasoningOutputPricePer1M *string
+	PriceServiceTier          *string
+	ReasoningEffort           *string
+	UncachedInputTokens       int64
+	CacheReadInputTokens      int64
+	CacheWrite5mInputTokens   int64
+	CacheWrite1hInputTokens   int64
+	CacheWrite30mInputTokens  int64
+	InputTokens               int64
+	OutputTokens              int64
+	ReasoningOutputTokens     int64
+	LatencyMs                 *int64
+	FirstTokenMs              *int64
+	TPS                       *float64
+	UserChargeUSD             string
 }
 
-// SummaryParams 是账户累计汇总条件。From/To 可空；均为空时统计全部实际扣费历史。
+// SummaryParams 是账户累计汇总条件。筛选口径与列表相同；From/To 可空。
 type SummaryParams struct {
-	UserID int64
-	From   *time.Time
-	To     *time.Time
+	UserID      int64
+	RouteIDs    []int64
+	APIKeyIDs   []int64
+	Endpoints   []string
+	StreamTypes []string
+	Q           string
+	From        *time.Time
+	To          *time.Time
+}
+
+// SummaryModel 是时间窗内实际扣费次数最多的模型之一。
+type SummaryModel struct {
+	ModelID          string
+	DisplayName      string
+	RequestCount     int64
+	IngressProtocol  string
+	InputPricePer1M  *string
+	OutputPricePer1M *string
 }
 
 // Summary 是当前用户实际扣费请求的累计指标。
 type Summary struct {
-	RequestCount     int64
-	TokenCount       int64
-	InputTokenCount  int64
-	OutputTokenCount int64
-	ChargeUSD        string
-	AverageLatencyMs float64
+	RequestCount            int64
+	StreamCount             int64
+	TokenCount              int64
+	InputTokenCount         int64
+	OutputTokenCount        int64
+	UncachedInputTokenCount int64
+	CacheReadTokenCount     int64
+	CacheWriteTokenCount    int64
+	ChargeUSD               string
+	UncachedInputChargeUSD  string
+	OutputChargeUSD         string
+	CacheReadChargeUSD      string
+	CacheWriteChargeUSD     string
+	ListChargeUSD           string
+	AverageLatencyMs        float64
+	AverageFirstTokenMs     float64
+	MedianLatencyMs         float64
+	AverageTPS              float64
+	TopModels               []SummaryModel
 }
 
 // FilterOption 是下拉筛选项。
@@ -144,23 +173,57 @@ func (s *Service) List(ctx context.Context, params ListParams) ([]Item, int64, *
 	return items, total, nil
 }
 
-// Summary 返回当前用户实际扣费请求的累计指标；From/To 为空时不过滤时间。
+// Summary 返回当前用户实际扣费请求的累计指标；筛选口径与列表相同。
 func (s *Service) Summary(ctx context.Context, params SummaryParams) (Summary, *consoleservice.Error) {
-	row, err := s.store.SummarizeConsoleBilledRequests(ctx, sqlc.SummarizeConsoleBilledRequestsParams{
-		UserID:   params.UserID,
-		FromTime: tsNarg(params.From),
-		ToTime:   tsNarg(params.To),
-	})
+	bounds := toSummarySQL(params)
+	row, err := s.store.SummarizeConsoleBilledRequests(ctx, bounds)
 	if err != nil {
 		return Summary{}, consoleservice.RequestUnavailable("summarize charged requests", err)
 	}
+	models, err := s.store.ListConsoleBilledRequestTopModels(ctx, sqlc.ListConsoleBilledRequestTopModelsParams{
+		UserID:      params.UserID,
+		RouteIds:    bounds.RouteIds,
+		ApiKeyIds:   bounds.ApiKeyIds,
+		Endpoints:   bounds.Endpoints,
+		StreamTypes: bounds.StreamTypes,
+		Q:           bounds.Q,
+		FromTime:    bounds.FromTime,
+		ToTime:      bounds.ToTime,
+	})
+	if err != nil {
+		return Summary{}, consoleservice.RequestUnavailable("list top billed models", err)
+	}
+	topModels := make([]SummaryModel, 0, len(models))
+	for _, model := range models {
+		topModels = append(topModels, SummaryModel{
+			ModelID:          model.RequestedModelID,
+			DisplayName:      model.ModelDisplayName,
+			RequestCount:     model.RequestCount,
+			IngressProtocol:  model.IngressProtocol,
+			InputPricePer1M:  opsutil.NumericStringPtr(model.InputPricePer1m),
+			OutputPricePer1M: opsutil.NumericStringPtr(model.OutputPricePer1m),
+		})
+	}
 	return Summary{
-		RequestCount:     row.RequestCount,
-		TokenCount:       row.TokenCount,
-		InputTokenCount:  row.InputTokenCount,
-		OutputTokenCount: row.OutputTokenCount,
-		ChargeUSD:        opsutil.NumericString(row.ChargeUsd),
-		AverageLatencyMs: row.AverageLatencyMs,
+		RequestCount:            row.RequestCount,
+		StreamCount:             row.StreamCount,
+		TokenCount:              row.TokenCount,
+		InputTokenCount:         row.InputTokenCount,
+		OutputTokenCount:        row.OutputTokenCount,
+		UncachedInputTokenCount: row.UncachedInputTokenCount,
+		CacheReadTokenCount:     row.CacheReadTokenCount,
+		CacheWriteTokenCount:    row.CacheWriteTokenCount,
+		ChargeUSD:               opsutil.NumericString(row.ChargeUsd),
+		UncachedInputChargeUSD:  opsutil.NumericString(row.UncachedInputChargeUsd),
+		OutputChargeUSD:         opsutil.NumericString(row.OutputChargeUsd),
+		CacheReadChargeUSD:      opsutil.NumericString(row.CacheReadChargeUsd),
+		CacheWriteChargeUSD:     opsutil.NumericString(row.CacheWriteChargeUsd),
+		ListChargeUSD:           opsutil.NumericString(row.ListChargeUsd),
+		AverageLatencyMs:        row.AverageLatencyMs,
+		AverageFirstTokenMs:     row.AverageFirstTokenMs,
+		MedianLatencyMs:         row.MedianLatencyMs,
+		AverageTPS:              row.AverageTps,
+		TopModels:               topModels,
 	}, nil
 }
 
@@ -212,21 +275,21 @@ func publicStreamType(stream bool) string {
 
 func toItem(row sqlc.ListConsoleBilledRequestsRow) Item {
 	item := Item{
-		ID:                       row.ID,
-		RequestID:                row.RequestID,
-		CreatedAt:                row.CreatedAt.Time,
-		ClientIP:                 textValue(row.ClientIp),
-		RouteID:                  int8Ptr(row.RouteID),
-		RouteName:                textValue(row.RouteName),
-		APIKeyID:                 row.ApiKeyID,
-		APIKeyName:               textValue(row.ApiKeyName),
-		APIKeyPrefix:             textValue(row.ApiKeyPrefix),
-		APIKeyPlaintext:          textPtr(row.ApiKeyPlaintext),
-		Endpoint:                 PublicEndpoint(row.Endpoint),
-		Stream:                   row.Stream,
-		RequestedModelID:         row.RequestedModelID,
-		ModelDisplayName:         modelDisplayName(row.ModelDisplayName, row.RequestedModelID),
-		IngressProtocol:          row.IngressProtocol,
+		ID:                        row.ID,
+		RequestID:                 row.RequestID,
+		CreatedAt:                 row.CreatedAt.Time,
+		ClientIP:                  textValue(row.ClientIp),
+		RouteID:                   int8Ptr(row.RouteID),
+		RouteName:                 textValue(row.RouteName),
+		APIKeyID:                  row.ApiKeyID,
+		APIKeyName:                textValue(row.ApiKeyName),
+		APIKeyPrefix:              textValue(row.ApiKeyPrefix),
+		APIKeyPlaintext:           textPtr(row.ApiKeyPlaintext),
+		Endpoint:                  PublicEndpoint(row.Endpoint),
+		Stream:                    row.Stream,
+		RequestedModelID:          row.RequestedModelID,
+		ModelDisplayName:          modelDisplayName(row.ModelDisplayName, row.RequestedModelID),
+		IngressProtocol:           row.IngressProtocol,
 		InputPricePer1M:           opsutil.NumericStringPtr(row.InputPricePer1m),
 		OutputPricePer1M:          opsutil.NumericStringPtr(row.OutputPricePer1m),
 		CacheReadPricePer1M:       opsutil.NumericStringPtr(row.CacheReadPricePer1m),
@@ -235,16 +298,16 @@ func toItem(row sqlc.ListConsoleBilledRequestsRow) Item {
 		CacheWrite30mPricePer1M:   opsutil.NumericStringPtr(row.CacheWrite30mPricePer1m),
 		ReasoningOutputPricePer1M: opsutil.NumericStringPtr(row.ReasoningOutputPricePer1m),
 		PriceServiceTier:          textPtr(row.PriceServiceTier),
-		ReasoningEffort:          textPtr(row.ReasoningEffort),
-		UncachedInputTokens:      row.UncachedInputTokens,
-		CacheReadInputTokens:     row.CacheReadInputTokens,
-		CacheWrite5mInputTokens:  row.CacheWrite5mInputTokens,
-		CacheWrite1hInputTokens:  row.CacheWrite1hInputTokens,
-		CacheWrite30mInputTokens: row.CacheWrite30mInputTokens,
-		InputTokens:              row.InputTokens,
-		OutputTokens:             row.OutputTokens,
-		ReasoningOutputTokens:    row.ReasoningOutputTokens,
-		UserChargeUSD:            opsutil.NumericString(row.UserChargeUsd),
+		ReasoningEffort:           textPtr(row.ReasoningEffort),
+		UncachedInputTokens:       row.UncachedInputTokens,
+		CacheReadInputTokens:      row.CacheReadInputTokens,
+		CacheWrite5mInputTokens:   row.CacheWrite5mInputTokens,
+		CacheWrite1hInputTokens:   row.CacheWrite1hInputTokens,
+		CacheWrite30mInputTokens:  row.CacheWrite30mInputTokens,
+		InputTokens:               row.InputTokens,
+		OutputTokens:              row.OutputTokens,
+		ReasoningOutputTokens:     row.ReasoningOutputTokens,
+		UserChargeUSD:             opsutil.NumericString(row.UserChargeUsd),
 	}
 	item.LatencyMs, item.FirstTokenMs, item.TPS = deriveTiming(
 		row.Stream,
@@ -274,6 +337,19 @@ func toListSQL(params ListParams) sqlc.ListConsoleBilledRequestsParams {
 		SortDesc:    pgtype.Bool{Bool: params.SortDesc, Valid: true},
 		PageLimit:   limit,
 		PageOffset:  params.Offset,
+	}
+}
+
+func toSummarySQL(params SummaryParams) sqlc.SummarizeConsoleBilledRequestsParams {
+	return sqlc.SummarizeConsoleBilledRequestsParams{
+		UserID:      params.UserID,
+		RouteIds:    emptyInts(params.RouteIDs),
+		ApiKeyIds:   emptyInts(params.APIKeyIDs),
+		Endpoints:   emptyStrings(InternalEndpoints(params.Endpoints)),
+		StreamTypes: emptyStrings(params.StreamTypes),
+		Q:           textNarg(params.Q),
+		FromTime:    tsNarg(params.From),
+		ToTime:      tsNarg(params.To),
 	}
 }
 

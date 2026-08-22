@@ -28,7 +28,7 @@ func RequireAuth(service Service, errorWriter transport.ErrorWriter) func(http.H
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			cookie, err := r.Cookie(accessCookieName)
 			if err != nil || cookie.Value == "" {
-				errorWriter.Write(w, &consoleservice.Error{
+				errorWriter.Write(w, r, &consoleservice.Error{
 					Code:    serviceauth.CodeSessionInvalid,
 					Message: "The current session is invalid.",
 					Status:  http.StatusUnauthorized,
@@ -37,7 +37,7 @@ func RequireAuth(service Service, errorWriter transport.ErrorWriter) func(http.H
 			}
 			principal, authErr := service.AuthenticatePrincipal(r.Context(), cookie.Value)
 			if authErr != nil {
-				errorWriter.Write(w, authErr)
+				errorWriter.Write(w, r, authErr)
 				return
 			}
 			next.ServeHTTP(w, r.WithContext(ContextWithPrincipal(r.Context(), principal)))
