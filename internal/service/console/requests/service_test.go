@@ -19,6 +19,9 @@ type fakeStore struct {
 	countCalled   bool
 	summary       sqlc.SummarizeConsoleBilledRequestsRow
 	summaryParams sqlc.SummarizeConsoleBilledRequestsParams
+	summaryCalls  []sqlc.SummarizeConsoleBilledRequestsParams
+	series        []sqlc.ListConsoleUsageTimeseriesRow
+	seriesParams  sqlc.ListConsoleUsageTimeseriesParams
 	topModels     []sqlc.ListConsoleBilledRequestTopModelsRow
 	topParams     sqlc.ListConsoleBilledRequestTopModelsParams
 	routes        []sqlc.ListConsoleFilterRoutesRow
@@ -40,12 +43,18 @@ func (f *fakeStore) CountConsoleBilledRequests(context.Context, sqlc.CountConsol
 
 func (f *fakeStore) SummarizeConsoleBilledRequests(_ context.Context, arg sqlc.SummarizeConsoleBilledRequestsParams) (sqlc.SummarizeConsoleBilledRequestsRow, error) {
 	f.summaryParams = arg
+	f.summaryCalls = append(f.summaryCalls, arg)
 	return f.summary, nil
 }
 
 func (f *fakeStore) ListConsoleBilledRequestTopModels(_ context.Context, arg sqlc.ListConsoleBilledRequestTopModelsParams) ([]sqlc.ListConsoleBilledRequestTopModelsRow, error) {
 	f.topParams = arg
 	return f.topModels, nil
+}
+
+func (f *fakeStore) ListConsoleUsageTimeseries(_ context.Context, arg sqlc.ListConsoleUsageTimeseriesParams) ([]sqlc.ListConsoleUsageTimeseriesRow, error) {
+	f.seriesParams = arg
+	return f.series, nil
 }
 
 func (f *fakeStore) ListConsoleFilterRoutes(context.Context) ([]sqlc.ListConsoleFilterRoutesRow, error) {
@@ -294,14 +303,67 @@ func TestSummaryForwardsOptionalTimeBounds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if store.summaryParams.UserID != 7 || !store.summaryParams.FromTime.Valid || !store.summaryParams.ToTime.Valid {
-		t.Fatalf("summary params = %+v", store.summaryParams)
+	// 第一枪是当前周期，第二枪才是上一周期，不能只看最后一次调用。
+	current := store.summaryCalls[0]
+	if current.UserID != 7 || !current.FromTime.Valid || !current.ToTime.Valid {
+		t.Fatalf("summary params = %+v", current)
 	}
-	if !store.summaryParams.FromTime.Time.Equal(from) || !store.summaryParams.ToTime.Time.Equal(to) {
-		t.Fatalf("time bounds = from=%v to=%v", store.summaryParams.FromTime.Time, store.summaryParams.ToTime.Time)
+	if !current.FromTime.Time.Equal(from) || !current.ToTime.Time.Equal(to) {
+		t.Fatalf("time bounds = from=%v to=%v", current.FromTime.Time, current.ToTime.Time)
 	}
 	if !store.topParams.FromTime.Time.Equal(from) || !store.topParams.ToTime.Time.Equal(to) {
 		t.Fatalf("top model time bounds = from=%v to=%v", store.topParams.FromTime.Time, store.topParams.ToTime.Time)
+	}
+}
+
+func TestSummaryQueriesPreviousWindowOfEqualLength(t *testing.T) {
+	store := &fakeStore{}
+	from := time.Date(2026, 8, 19, 16, 0, 0, 0, time.UTC)
+	to := from.Add(24 * time.Hour)
+
+	summary, err := requests.NewService(store).Summary(context.Background(), requests.SummaryParams{
+		UserID: 7,
+		From:   &from,
+		To:     &to,
+		Bucket: "day",
+		TZ:     "Asia/Shanghai",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(store.summaryCalls) != 2 {
+		t.Fatalf("expected current + previous window queries, got %d", len(store.summaryCalls))
+	}
+	previous := store.summaryCalls[1]
+	wantFrom := from.Add(-to.Sub(from))
+	if !previous.FromTime.Time.Equal(wantFrom) || !previous.ToTime.Time.Equal(from) {
+		t.Fatalf("previous window = %v..%v, want %v..%v",
+			previous.FromTime.Time, previous.ToTime.Time, wantFrom, from)
+	}
+	if summary.Previous == nil {
+		t.Fatal("expected previous window in summary")
+	}
+	// 热力条只覆盖当前周期，起点不能回到上一周期。
+	if !store.seriesParams.FromTime.Time.Equal(from) || !store.seriesParams.ToTime.Time.Equal(to) {
+		t.Fatalf("series window = %v..%v", store.seriesParams.FromTime.Time, store.seriesParams.ToTime.Time)
+	}
+	if store.seriesParams.Bucket != "day" || store.seriesParams.Tz != "Asia/Shanghai" {
+		t.Fatalf("series bucket/tz = %q/%q", store.seriesParams.Bucket, store.seriesParams.Tz)
+	}
+}
+
+// 不给时间窗时是全量统计，没有"上一周期"可言，也就不该多打两枪。
+func TestSummarySkipsCompareWithoutTimeWindow(t *testing.T) {
+	store := &fakeStore{}
+	summary, err := requests.NewService(store).Summary(context.Background(), requests.SummaryParams{UserID: 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(store.summaryCalls) != 1 {
+		t.Fatalf("expected a single window query, got %d", len(store.summaryCalls))
+	}
+	if summary.Previous != nil || summary.Series != nil {
+		t.Fatalf("expected no compare data, got previous=%+v series=%+v", summary.Previous, summary.Series)
 	}
 }
 

@@ -26,7 +26,10 @@ INSERT INTO request_records (
     reasoning_effort,
     reasoning_budget_tokens,
     client_ip,
-    requested_service_tier
+    requested_service_tier,
+    client_thread_id,
+    client_turn_id,
+    client_request_kind
 )
 VALUES (
            sqlc.arg(request_id),
@@ -54,7 +57,10 @@ VALUES (
            sqlc.narg(reasoning_effort),
            sqlc.narg(reasoning_budget_tokens),
            sqlc.narg(client_ip),
-           sqlc.narg(requested_service_tier)
+           sqlc.narg(requested_service_tier),
+           sqlc.narg(client_thread_id),
+           sqlc.narg(client_turn_id),
+           sqlc.narg(client_request_kind)
        )
 RETURNING
     id,
@@ -88,7 +94,10 @@ RETURNING
     requested_service_tier,
     actual_service_tier,
     settled_service_tier,
-    service_tier_resolution;
+    service_tier_resolution,
+    client_thread_id,
+    client_turn_id,
+    client_request_kind;
 
 -- name: GetRequestRecordForUpdate :one
 -- GetRequestRecordForUpdate 锁定请求记录，串行化同一个 request 的并发结算。
@@ -125,7 +134,10 @@ SELECT
     requested_service_tier,
     actual_service_tier,
     settled_service_tier,
-    service_tier_resolution
+    service_tier_resolution,
+    client_thread_id,
+    client_turn_id,
+    client_request_kind
 FROM request_records
 WHERE id = sqlc.arg(request_record_id)
     FOR UPDATE;

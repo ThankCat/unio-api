@@ -17,6 +17,8 @@ type Store interface {
 	CountConsoleBilledRequests(context.Context, sqlc.CountConsoleBilledRequestsParams) (int64, error)
 	SummarizeConsoleBilledRequests(context.Context, sqlc.SummarizeConsoleBilledRequestsParams) (sqlc.SummarizeConsoleBilledRequestsRow, error)
 	ListConsoleBilledRequestTopModels(context.Context, sqlc.ListConsoleBilledRequestTopModelsParams) ([]sqlc.ListConsoleBilledRequestTopModelsRow, error)
+	// 卡片热力条复用用量统计的分桶查询，口径与这里的汇总一致。
+	ListConsoleUsageTimeseries(context.Context, sqlc.ListConsoleUsageTimeseriesParams) ([]sqlc.ListConsoleUsageTimeseriesRow, error)
 	ListConsoleFilterRoutes(context.Context) ([]sqlc.ListConsoleFilterRoutesRow, error)
 	ListConsoleFilterAPIKeys(context.Context, int64) ([]sqlc.ListConsoleFilterAPIKeysRow, error)
 	ListConsoleBilledRequestEndpoints(context.Context, int64) ([]string, error)
@@ -89,6 +91,9 @@ type SummaryParams struct {
 	Q           string
 	From        *time.Time
 	To          *time.Time
+	// Bucket/TZ 供卡片热力条分桶；留空时按天、按 UTC。
+	Bucket string
+	TZ     string
 }
 
 // SummaryModel 是时间窗内实际扣费次数最多的模型之一。
@@ -122,6 +127,27 @@ type Summary struct {
 	MedianLatencyMs         float64
 	AverageTPS              float64
 	TopModels               []SummaryModel
+	// Previous 是等长的上一周期汇总，只在给了完整时间窗时有值，用于卡片环比。
+	Previous *Window
+	// Series 是当前周期的分桶序列，供卡片热力条使用。
+	Series []Point
+}
+
+// Window 是上一周期的对照值，只保留卡片会用到的四个指标。
+type Window struct {
+	RequestCount     int64
+	TokenCount       int64
+	ChargeUSD        string
+	AverageLatencyMs float64
+}
+
+// Point 是一个时间桶，热力条按它着色。
+type Point struct {
+	BucketStart      time.Time
+	RequestCount     int64
+	TokenCount       int64
+	ChargeUSD        string
+	AverageLatencyMs float64
 }
 
 // FilterOption 是下拉筛选项。
@@ -204,7 +230,7 @@ func (s *Service) Summary(ctx context.Context, params SummaryParams) (Summary, *
 			OutputPricePer1M: opsutil.NumericStringPtr(model.OutputPricePer1m),
 		})
 	}
-	return Summary{
+	summary := Summary{
 		RequestCount:            row.RequestCount,
 		StreamCount:             row.StreamCount,
 		TokenCount:              row.TokenCount,
@@ -224,7 +250,79 @@ func (s *Service) Summary(ctx context.Context, params SummaryParams) (Summary, *
 		MedianLatencyMs:         row.MedianLatencyMs,
 		AverageTPS:              row.AverageTps,
 		TopModels:               topModels,
-	}, nil
+	}
+
+	// 环比和热力条都要求有完整时间窗；不给窗口时（全量统计）没有"上一周期"可言。
+	if params.From == nil || params.To == nil || !params.To.After(*params.From) {
+		return summary, nil
+	}
+	previous, series, compareErr := s.compare(ctx, params, bounds)
+	if compareErr != nil {
+		return Summary{}, compareErr
+	}
+	summary.Previous = previous
+	summary.Series = series
+	return summary, nil
+}
+
+// compare 取等长的上一周期汇总，以及当前周期的分桶序列。
+// 分桶复用用量统计那条 timeseries：两边口径本就一致，没必要再写一份聚合。
+func (s *Service) compare(
+	ctx context.Context,
+	params SummaryParams,
+	bounds sqlc.SummarizeConsoleBilledRequestsParams,
+) (*Window, []Point, *consoleservice.Error) {
+	bucket, tz := params.Bucket, params.TZ
+	if bucket == "" {
+		bucket = "day"
+	}
+	if tz == "" {
+		tz = "UTC"
+	}
+	span := params.To.Sub(*params.From)
+	previousFrom := params.From.Add(-span)
+
+	prevBounds := bounds
+	prevBounds.FromTime = pgtype.Timestamptz{Time: previousFrom, Valid: true}
+	prevBounds.ToTime = pgtype.Timestamptz{Time: *params.From, Valid: true}
+	prevRow, err := s.store.SummarizeConsoleBilledRequests(ctx, prevBounds)
+	if err != nil {
+		return nil, nil, consoleservice.RequestUnavailable("summarize previous charged requests", err)
+	}
+
+	rows, err := s.store.ListConsoleUsageTimeseries(ctx, sqlc.ListConsoleUsageTimeseriesParams{
+		UserID:      params.UserID,
+		FromTime:    pgtype.Timestamptz{Time: *params.From, Valid: true},
+		ToTime:      pgtype.Timestamptz{Time: *params.To, Valid: true},
+		Bucket:      bucket,
+		Tz:          tz,
+		RouteIds:    bounds.RouteIds,
+		ApiKeyIds:   bounds.ApiKeyIds,
+		ModelIds:    []string{},
+		Endpoints:   bounds.Endpoints,
+		StreamTypes: bounds.StreamTypes,
+		Q:           bounds.Q,
+	})
+	if err != nil {
+		return nil, nil, consoleservice.RequestUnavailable("list request timeseries", err)
+	}
+
+	series := make([]Point, 0, len(rows))
+	for _, row := range rows {
+		series = append(series, Point{
+			AverageLatencyMs: row.AverageLatencyMs,
+			BucketStart:      row.BucketStart.Time,
+			ChargeUSD:        opsutil.NumericString(row.ChargeUsd),
+			RequestCount:     row.RequestCount,
+			TokenCount:       row.TokenCount,
+		})
+	}
+	return &Window{
+		AverageLatencyMs: prevRow.AverageLatencyMs,
+		ChargeUSD:        opsutil.NumericString(prevRow.ChargeUsd),
+		RequestCount:     prevRow.RequestCount,
+		TokenCount:       prevRow.TokenCount,
+	}, series, nil
 }
 
 // Filters 返回线路目录全量、当前用户的 API Key，以及扣费请求上出现过的端点和类型。

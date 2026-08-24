@@ -10,6 +10,7 @@ import (
 
 	"github.com/ThankCat/unio-gateway/internal/app/gatewayapi/ingresslog"
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
+	"github.com/ThankCat/unio-gateway/internal/core/clientmeta"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
 	"github.com/ThankCat/unio-gateway/internal/core/sessionhint"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
@@ -44,6 +45,11 @@ func (h *responsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// session-id 头是会话粘性路由的回退会话键（body prompt_cache_key 优先，大 uncache 缺口 P0）；
 	// 只捕获进 ctx，是否可用由 service 提取器判定。
 	r = r.WithContext(sessionhint.WithClientSessionID(r.Context(), r.Header.Get("session-id")))
+
+	// x-codex-turn-metadata 携带客户端会话线程与轮次标识，只落本地请求审计、不转发上游。
+	r = r.WithContext(clientmeta.WithTurn(
+		r.Context(), clientmeta.ParseCodexTurnMetadata(r.Header.Get("x-codex-turn-metadata")),
+	))
 
 	if err := httpx.DecodeJSON(w, r, &req); err != nil {
 		ingresslog.RecordRequestBodyFailure(r, err)

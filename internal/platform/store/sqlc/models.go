@@ -617,6 +617,9 @@ type RequestRecord struct {
 	ActualServiceTier     pgtype.Text
 	SettledServiceTier    pgtype.Text
 	ServiceTierResolution pgtype.Text
+	ClientThreadID        pgtype.Text
+	ClientTurnID          pgtype.Text
+	ClientRequestKind     pgtype.Text
 }
 
 type Route struct {

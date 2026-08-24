@@ -36,16 +36,21 @@ func (t *requestTranslation) drop(field string) {
 
 // input item 判别类型（与 ingress validation 常量对齐，BRIDGE §2）。
 const (
-	itemTypeMessage            = "message"
-	itemTypeFunctionCall       = "function_call"
-	itemTypeFunctionCallOutput = "function_call_output"
-	itemTypeReasoning          = "reasoning"
-	itemTypeItemReference      = "item_reference"
-	itemTypeCompaction         = "compaction"
+	itemTypeMessage              = "message"
+	itemTypeFunctionCall         = "function_call"
+	itemTypeFunctionCallOutput   = "function_call_output"
+	itemTypeCustomToolCall       = "custom_tool_call"
+	itemTypeCustomToolCallOutput = "custom_tool_call_output"
+	itemTypeReasoning            = "reasoning"
+	itemTypeItemReference        = "item_reference"
+	itemTypeCompaction           = "compaction"
 )
 
 // namespaceToolSeparator 是 Codex MCP namespace 工具拍平后的名称分隔符（BRIDGE §3.3 方案 B）。
 const namespaceToolSeparator = "__"
+
+// roleAssistant 标识模型侧消息；与 user/developer/system 不同，它不代表新一轮输入。
+const roleAssistant = "assistant"
 
 // mapResponsesRequestToChat 把 Responses 请求翻译为内部 chatcompletionsadapter.ChatRequest。
 //
@@ -157,16 +162,24 @@ func buildChatMessages(req gatewayapi.ResponsesRequest) []chatcompletionsadapter
 		switch itemType {
 		case itemTypeMessage:
 			pendingToolCallIdx = -1
-			pendingReasoning = ""
+			// assistant 消息与随后的 tool_call 属同一轮：Codex v0.147 会在 reasoning 与
+			// function_call 之间插入 phase=commentary 的 assistant 消息，若在此清空暂存思维链，
+			// 该轮 tool_call 就会缺 reasoning_content，DeepSeek 直接 400。只有新的
+			// user/developer/system 输入才代表换轮，此时才丢弃。
+			if item.Role != roleAssistant {
+				pendingReasoning = ""
+			}
 			msgs = append(msgs, buildMessageItem(item))
 
-		case itemTypeFunctionCall:
+		case itemTypeFunctionCall, itemTypeCustomToolCall:
+			// 两者在 Chat 侧同为 function tool_call，只有参数承载不同：custom 的 freeform
+			// input 需重新包装成降级 schema 的 {"input": …}。
 			toolCall := chatcompletionsadapter.ChatToolCall{
 				ID:   derefString(item.CallID),
 				Type: "function",
 				Function: chatcompletionsadapter.ChatToolCallFunction{
 					Name:      functionCallName(item),
-					Arguments: functionCallArguments(item.Arguments),
+					Arguments: toolCallArguments(itemType, item),
 				},
 			}
 			if pendingToolCallIdx >= 0 {
@@ -182,7 +195,7 @@ func buildChatMessages(req gatewayapi.ResponsesRequest) []chatcompletionsadapter
 			}
 			pendingReasoning = ""
 
-		case itemTypeFunctionCallOutput:
+		case itemTypeFunctionCallOutput, itemTypeCustomToolCallOutput:
 			pendingToolCallIdx = -1
 			pendingReasoning = ""
 			msgs = append(msgs, chatcompletionsadapter.ChatMessage{
@@ -286,6 +299,14 @@ func functionCallName(item gatewayapi.ResponseInputItem) string {
 	return name
 }
 
+// toolCallArguments 按 item 类型还原 Chat tool_call 的 arguments。
+func toolCallArguments(itemType string, item gatewayapi.ResponseInputItem) string {
+	if itemType == itemTypeCustomToolCall {
+		return encodeCustomToolArguments(customToolInputFromItem(item.Input))
+	}
+	return functionCallArguments(item.Arguments)
+}
+
 // functionCallArguments 还原 function_call item 的 Chat arguments 字符串。
 func functionCallArguments(raw json.RawMessage) string {
 	data := bytes.TrimSpace(raw)
@@ -336,6 +357,11 @@ func mapResponsesToolsToChat(tools []gatewayapi.ResponsesTool, tr *requestTransl
 					inner.Description, inner.Parameters, inner.Strict,
 				))
 			}
+
+		case tool.IsCustom():
+			// Codex 的 apply_patch 走这里：Chat 无 custom 承载，降级为单参数 function。
+			name, description, parameters := mapCustomToolToChat(tool)
+			out = append(out, chatFunctionTool(name, description, parameters, nil))
 
 		default:
 			tr.drop("tools." + tool.Type)

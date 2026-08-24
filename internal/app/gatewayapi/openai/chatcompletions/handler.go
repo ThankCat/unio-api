@@ -10,6 +10,7 @@ import (
 
 	"github.com/ThankCat/unio-gateway/internal/app/gatewayapi/ingresslog"
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
+	"github.com/ThankCat/unio-gateway/internal/core/clientmeta"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
 	"github.com/ThankCat/unio-gateway/internal/core/servicetier"
 	"github.com/ThankCat/unio-gateway/internal/core/sessionhint"
@@ -48,6 +49,11 @@ func (h *chatCompletionsHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 
 	// session-id 头是会话粘性路由的回退会话键（body prompt_cache_key 优先，大 uncache 缺口 P0）。
 	r = r.WithContext(sessionhint.WithClientSessionID(r.Context(), r.Header.Get("session-id")))
+
+	// Codex 配 wire_api=chat 时同样带轮次元数据；只落本地请求审计、不转发上游。
+	r = r.WithContext(clientmeta.WithTurn(
+		r.Context(), clientmeta.ParseCodexTurnMetadata(r.Header.Get("x-codex-turn-metadata")),
+	))
 
 	if err := httpx.DecodeJSON(w, r, &req); err != nil {
 		ingresslog.RecordRequestBodyFailure(r, err)

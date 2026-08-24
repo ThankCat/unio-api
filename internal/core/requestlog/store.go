@@ -52,6 +52,9 @@ func (s *Store) CreateRequest(ctx context.Context, params CreateRequestParams) (
 		ReasoningBudgetTokens: int4OrNull(params.ReasoningBudgetTokens),
 		ClientIp:              textOrNull(params.ClientIP),
 		RequestedServiceTier:  pgtype.Text{String: string(params.RequestedServiceTier), Valid: params.RequestedServiceTier != ""},
+		ClientThreadID:        textOrNull(params.ClientThreadID),
+		ClientTurnID:          textOrNull(params.ClientTurnID),
+		ClientRequestKind:     textOrNull(params.ClientRequestKind),
 	})
 	if err != nil {
 		return RequestRecord{}, requestLogStoreFailure(err, "create request record")

@@ -2,11 +2,13 @@ package responses
 
 import "encoding/json"
 
-// Responses tool 类型常量。真实抓包（Codex v0.130）确认 function / namespace 为主路径，
-// custom / local_shell / 内置工具为兜底或当前不消费。
+// Responses tool 类型常量。抓包 Codex v0.130 时 function / namespace 为主路径；
+// v0.147 起 custom 承载 apply_patch（文件编辑的唯一手段），已升为主路径。
+// local_shell / 内置工具（web_search 等）仍为兜底或当前不消费。
 const (
 	toolTypeFunction  = "function"
 	toolTypeNamespace = "namespace"
+	toolTypeCustom    = "custom"
 )
 
 // ResponsesTool 表示 Responses tools[] 中的单个工具定义（按 type 区分的 union）。
@@ -27,7 +29,9 @@ type ResponsesTool struct {
 	// namespace（Codex MCP 分组）：内层是 function 工具，translation 拍平到 Chat 顶层 tools。
 	Tools []ResponsesTool `json:"tools,omitempty"`
 
-	// custom（grammar/text format）：format 原始 JSON；v0.130 未出现，保留兜底。
+	// custom（grammar/text format）：format 原始 JSON。Codex v0.147 的 apply_patch 形如
+	// {type:"custom", name:"apply_patch", format:{type:"grammar", syntax:"lark", definition:"…"}}，
+	// 其调用参数是不经 JSON 包装的裸文本。
 	Format json.RawMessage `json:"format,omitempty"`
 }
 
@@ -36,3 +40,6 @@ func (t ResponsesTool) IsFunction() bool { return t.Type == toolTypeFunction }
 
 // IsNamespace 判断是否为 Codex MCP namespace 分组工具。
 func (t ResponsesTool) IsNamespace() bool { return t.Type == toolTypeNamespace }
+
+// IsCustom 判断是否为 custom（freeform 文本参数）工具。
+func (t ResponsesTool) IsCustom() bool { return t.Type == toolTypeCustom }

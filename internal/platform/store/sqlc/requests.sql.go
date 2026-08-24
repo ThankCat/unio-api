@@ -181,7 +181,10 @@ SELECT
     requested_service_tier,
     actual_service_tier,
     settled_service_tier,
-    service_tier_resolution
+    service_tier_resolution,
+    client_thread_id,
+    client_turn_id,
+    client_request_kind
 FROM request_records
 WHERE request_id = $1
 `
@@ -224,6 +227,9 @@ func (q *Queries) GetRequestRecordByRequestID(ctx context.Context, requestID str
 		&i.ActualServiceTier,
 		&i.SettledServiceTier,
 		&i.ServiceTierResolution,
+		&i.ClientThreadID,
+		&i.ClientTurnID,
+		&i.ClientRequestKind,
 	)
 	return i, err
 }

@@ -51,6 +51,10 @@ type streamEncoder struct {
 	// 与非流式 requestWantsEncryptedReasoning 同一判定，保证两路对客户形态一致。
 	emitReasoningCarrier bool
 
+	// reasoningAsSummary 决定思维链以 summary 还是 raw content 形态对外呈现；
+	// 与非流式 requestWantsReasoningSummary 同一判定（原因见该函数注释）。
+	reasoningAsSummary bool
+
 	seq     int64
 	started bool
 
@@ -60,6 +64,9 @@ type streamEncoder struct {
 	message   *streamItemState
 	tools     []*streamToolState
 	toolByIdx map[int]*streamToolState
+
+	// customTools 是请求里声明为 custom 的工具名，用于判定上游 tool_call 该还原成哪种 item 形态。
+	customTools map[string]struct{}
 }
 
 // streamItemState 累积 reasoning / message item 的输出索引与文本。
@@ -84,6 +91,9 @@ type streamToolState struct {
 	name        string
 	arguments   string
 	itemAdded   bool
+	// isCustom 标记该调用对应请求里声明的 custom 工具：上游按降级 function 分片吐 JSON
+	// arguments，对外须还原成 custom_tool_call 的裸文本事件。
+	isCustom bool
 }
 
 // streamToolCallDelta 是上游 chat tool_calls 流式分片的形状（OpenAI 增量：按 index 聚合）。
@@ -108,7 +118,9 @@ func newStreamEncoder(req gatewayapi.ResponsesRequest, responseID string, create
 		topP:                 req.TopP,
 		maxOutputTokens:      responsesIntPtr(req.MaxOutputTokens),
 		emitReasoningCarrier: requestWantsEncryptedReasoning(req),
+		reasoningAsSummary:   requestWantsReasoningSummary(req),
 		toolByIdx:            map[int]*streamToolState{},
+		customTools:          customToolNames(req.Tools),
 	}
 }
 
@@ -207,13 +219,35 @@ func (e *streamEncoder) handleReasoningDelta(delta string) error {
 		if err := e.emitItemAdded(e.reasoning.outputIndex, item); err != nil {
 			return err
 		}
-		// 文本增量前先发出 content_part.added，建立 Codex 解析所需的「活跃 content part」。
-		if err := e.emitContentPartAdded(e.reasoning.id, e.reasoning.outputIndex, gatewayapi.ResponseOutputContent{Type: "reasoning_text"}); err != nil {
+		// 文本增量前先建立活跃 part，否则 Codex 报 "*Delta without active item"。
+		// summary 形态用 reasoning_summary_part + summary_index，raw 形态用 content_part + content_index。
+		if e.reasoningAsSummary {
+			part := gatewayapi.ResponseOutputContent{Type: "summary_text"}
+			if err := e.emitEvent(gatewayapi.ResponsesStreamEvent{
+				Type:         gatewayapi.EventReasoningSummaryPartAdded,
+				ItemID:       e.reasoning.id,
+				OutputIndex:  intPtr(e.reasoning.outputIndex),
+				SummaryIndex: intPtr(0),
+				Part:         &part,
+			}); err != nil {
+				return err
+			}
+		} else if err := e.emitContentPartAdded(e.reasoning.id, e.reasoning.outputIndex, gatewayapi.ResponseOutputContent{Type: "reasoning_text"}); err != nil {
 			return err
 		}
 		e.reasoning.partOpen = true
 	}
 	e.reasoning.text += delta
+
+	if e.reasoningAsSummary {
+		return e.emitEvent(gatewayapi.ResponsesStreamEvent{
+			Type:         gatewayapi.EventReasoningSummaryTextDelta,
+			ItemID:       e.reasoning.id,
+			OutputIndex:  intPtr(e.reasoning.outputIndex),
+			SummaryIndex: intPtr(0),
+			Delta:        delta,
+		})
+	}
 	return e.emitEvent(gatewayapi.ResponsesStreamEvent{
 		Type:         gatewayapi.EventReasoningTextDelta,
 		ItemID:       e.reasoning.id,
@@ -317,9 +351,18 @@ func (e *streamEncoder) handleToolCallDeltas(raw json.RawMessage) error {
 		// ID-only 工具控制 chunk 不应提前写出空 output item。等真实名称或参数到达后再创建 item，
 		// 使 output_item.added 可以作为工具名称成功交付的权威事件。
 		if !tool.itemAdded && (tool.name != "" || d.Function.Arguments != "") {
+			itemType := "function_call"
 			_, name := splitNamespaceToolName(tool.name)
+			if _, ok := e.customTools[tool.name]; ok {
+				// custom 工具的 item 类型与 id 前缀都不同；此刻尚未发出任何携带该 id 的事件，改写安全。
+				// custom 不参与 MCP namespace 拍平，名称原样使用。
+				tool.isCustom = true
+				tool.id = newResponsesID("ctc")
+				itemType = itemTypeCustomToolCall
+				name = tool.name
+			}
 			item := gatewayapi.ResponseOutputItem{
-				Type:   "function_call",
+				Type:   itemType,
 				ID:     tool.id,
 				CallID: tool.callID,
 				Name:   name,
@@ -332,6 +375,12 @@ func (e *streamEncoder) handleToolCallDeltas(raw json.RawMessage) error {
 		}
 
 		if d.Function.Arguments != "" {
+			tool.arguments += d.Function.Arguments
+			// custom 工具对外是裸文本 input，须等 arguments 累积完整才能从 JSON 还原，
+			// 无法逐片转换；改由 closeItems 在收尾时一次性发出 delta + done。
+			if tool.isCustom {
+				continue
+			}
 			if err := e.emitEvent(gatewayapi.ResponsesStreamEvent{
 				Type:        gatewayapi.EventFunctionCallArgsDelta,
 				ItemID:      tool.id,
@@ -340,7 +389,6 @@ func (e *streamEncoder) handleToolCallDeltas(raw json.RawMessage) error {
 			}); err != nil {
 				return err
 			}
-			tool.arguments += d.Function.Arguments
 		}
 	}
 	return nil
@@ -420,6 +468,25 @@ func (e *streamEncoder) emitItemContentDone(f streamFinalItem) error {
 		}
 		return nil
 	case e.reasoning != nil && f.item.ID == e.reasoning.id && e.reasoning.partOpen:
+		if e.reasoningAsSummary {
+			if err := e.emitEvent(gatewayapi.ResponsesStreamEvent{
+				Type:         gatewayapi.EventReasoningSummaryTextDone,
+				ItemID:       e.reasoning.id,
+				OutputIndex:  intPtr(f.outputIndex),
+				SummaryIndex: intPtr(0),
+				Text:         e.reasoning.text,
+			}); err != nil {
+				return err
+			}
+			part := gatewayapi.ResponseOutputContent{Type: "summary_text", Text: e.reasoning.text}
+			return e.emitEvent(gatewayapi.ResponsesStreamEvent{
+				Type:         gatewayapi.EventReasoningSummaryPartDone,
+				ItemID:       e.reasoning.id,
+				OutputIndex:  intPtr(f.outputIndex),
+				SummaryIndex: intPtr(0),
+				Part:         &part,
+			})
+		}
 		if err := e.emitEvent(gatewayapi.ResponsesStreamEvent{
 			Type:         gatewayapi.EventReasoningTextDone,
 			ItemID:       e.reasoning.id,
@@ -430,6 +497,25 @@ func (e *streamEncoder) emitItemContentDone(f streamFinalItem) error {
 			return err
 		}
 		return e.emitContentPartDone(e.reasoning.id, f.outputIndex, gatewayapi.ResponseOutputContent{Type: "reasoning_text", Text: e.reasoning.text})
+	case f.item.Type == itemTypeCustomToolCall:
+		// custom 工具的入参在此刻才完成还原：补发一次完整 delta 再收 done，使客户端的
+		// custom_tool_call_input 事件对仍然成对，与上游直传形状一致（仅失去逐字流式粒度）。
+		if f.item.Input != "" {
+			if err := e.emitEvent(gatewayapi.ResponsesStreamEvent{
+				Type:        gatewayapi.EventCustomToolCallInputDelta,
+				ItemID:      f.item.ID,
+				OutputIndex: intPtr(f.outputIndex),
+				Delta:       f.item.Input,
+			}); err != nil {
+				return err
+			}
+		}
+		return e.emitEvent(gatewayapi.ResponsesStreamEvent{
+			Type:        gatewayapi.EventCustomToolCallInputDone,
+			ItemID:      f.item.ID,
+			OutputIndex: intPtr(f.outputIndex),
+			Input:       f.item.Input,
+		})
 	}
 	return nil
 }
@@ -442,7 +528,12 @@ func (e *streamEncoder) collectFinalItems() []streamFinalItem {
 			Type:    "reasoning",
 			ID:      e.reasoning.id,
 			Summary: []gatewayapi.ResponseOutputContent{},
-			Content: []gatewayapi.ResponseOutputContent{{Type: "reasoning_text", Text: e.reasoning.text}},
+		}
+		// 终态 item 的承载形态须与流中发出的事件一致，否则客户端两处对不上。
+		if e.reasoningAsSummary {
+			reasoningItem.Summary = []gatewayapi.ResponseOutputContent{{Type: "summary_text", Text: e.reasoning.text}}
+		} else {
+			reasoningItem.Content = []gatewayapi.ResponseOutputContent{{Type: "reasoning_text", Text: e.reasoning.text}}
 		}
 		if e.emitReasoningCarrier && e.reasoning.text != "" {
 			carrier := encodeReasoningCarrier(e.reasoning.text)
@@ -467,6 +558,10 @@ func (e *streamEncoder) collectFinalItems() []streamFinalItem {
 		}})
 	}
 	for _, tool := range e.tools {
+		if tool.isCustom {
+			finals = append(finals, streamFinalItem{tool.outputIndex, customToolCallStreamItem(tool)})
+			continue
+		}
 		namespace, name := splitNamespaceToolName(tool.name)
 		item := gatewayapi.ResponseOutputItem{
 			Type:      "function_call",

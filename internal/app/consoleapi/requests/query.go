@@ -101,6 +101,10 @@ func parseSummaryQuery(r *http.Request) (consolerequests.SummaryParams, *console
 	if err != nil {
 		return consolerequests.SummaryParams{}, err
 	}
+	bucket, err := parseBucketQuery(r)
+	if err != nil {
+		return consolerequests.SummaryParams{}, err
+	}
 	return consolerequests.SummaryParams{
 		RouteIDs:    routeIDs,
 		APIKeyIDs:   apiKeyIDs,
@@ -109,7 +113,26 @@ func parseSummaryQuery(r *http.Request) (consolerequests.SummaryParams, *console
 		Q:           strings.TrimSpace(r.URL.Query().Get("q")),
 		From:        from,
 		To:          to,
+		Bucket:      bucket,
+		TZ:          strings.TrimSpace(r.URL.Query().Get("tz")),
 	}, nil
+}
+
+var allowedBuckets = map[string]struct{}{
+	"minute": {},
+	"hour":   {},
+	"day":    {},
+}
+
+func parseBucketQuery(r *http.Request) (string, *consoleservice.Error) {
+	raw := strings.TrimSpace(r.URL.Query().Get("bucket"))
+	if raw == "" {
+		return "", nil
+	}
+	if _, ok := allowedBuckets[raw]; !ok {
+		return "", consoleservice.InvalidArgument("bucket", "bucket must be minute, hour, or day.")
+	}
+	return raw, nil
 }
 
 func parsePositiveIntQuery(r *http.Request, key string, fallback int) (int, *consoleservice.Error) {

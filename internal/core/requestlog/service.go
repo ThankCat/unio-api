@@ -83,6 +83,10 @@ type CreateRequestParams struct {
 	ReasoningBudgetTokens *int32
 	ClientIP              *string
 	RequestedServiceTier  servicetier.Tier
+	// 客户端声明的会话轮次标识（Codex x-codex-turn-metadata），仅本地审计、不转发上游。
+	ClientThreadID    *string
+	ClientTurnID      *string
+	ClientRequestKind *string
 }
 
 // RequestRecord 表示一次用户可见请求记录。

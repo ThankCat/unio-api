@@ -37,10 +37,19 @@ func mapChatResponseToResponses(req gatewayapi.ResponsesRequest, chatResp chatco
 			Type:    "reasoning",
 			ID:      newResponsesID("rs"),
 			Summary: []gatewayapi.ResponseOutputContent{},
-			Content: []gatewayapi.ResponseOutputContent{{
+		}
+		// 按客户端索取的形态承载：请求 summary 的客户（Codex）只认 summary_text，
+		// 收到 raw reasoning_text 会丢弃整个 item。
+		if requestWantsReasoningSummary(req) {
+			reasoningItem.Summary = []gatewayapi.ResponseOutputContent{{
+				Type: "summary_text",
+				Text: *chatResp.ReasoningContent,
+			}}
+		} else {
+			reasoningItem.Content = []gatewayapi.ResponseOutputContent{{
 				Type: "reasoning_text",
 				Text: *chatResp.ReasoningContent,
-			}},
+			}}
 		}
 		// 无状态跨轮思维链回放载体（U1）：客户按 reasoning.encrypted_content 原样回传，Unio 解码后
 		// 在工具调用轮回灌 DeepSeek（避免 400）。仅在客户显式请求该 include 或无状态(store=false)时附带，
@@ -77,7 +86,13 @@ func mapChatResponseToResponses(req gatewayapi.ResponsesRequest, chatResp chatco
 	}
 
 	// function_call：每个工具调用一项顶层 item；MCP namespace 工具按 §3.3 拆回 namespace + name。
+	// 请求里声明为 custom 的工具需还原回 custom_tool_call 形态，否则 Codex 认不出 apply_patch。
+	customTools := customToolNames(req.Tools)
 	for _, call := range chatResp.ToolCalls {
+		if _, isCustom := customTools[call.Function.Name]; isCustom {
+			output = append(output, customToolCallOutputItem(call))
+			continue
+		}
 		namespace, name := splitNamespaceToolName(call.Function.Name)
 		item := gatewayapi.ResponseOutputItem{
 			Type:      "function_call",
@@ -112,6 +127,19 @@ func mapChatResponseToResponses(req gatewayapi.ResponsesRequest, chatResp chatco
 	}
 
 	return resp
+}
+
+// requestWantsReasoningSummary 判断客户端是否以 summary 形态索取思维链。
+//
+// OpenAI 协议下 raw reasoning content 需要 include:["reasoning.content"] 才会下发，
+// 而 reasoning.summary 非空表示客户端只准备接收 summary 形态。实测 Codex v0.147 只发
+// reasoning:{"summary":"auto"} 与 include:["reasoning.encrypted_content"]，此时若按 raw
+// content 形态下发（content_part.added(reasoning_text) + reasoning_text.delta），Codex 的
+// 事件状态机没有对应的活跃 item，会报 "ReasoningRawContentDelta without active item" 并
+// 丢弃整个 reasoning item——后续轮次便无法回传 encrypted_content，桥接也就无法回灌
+// reasoning_content，chat-only 上游（DeepSeek）随即以 400 拒绝整轮工具调用。
+func requestWantsReasoningSummary(req gatewayapi.ResponsesRequest) bool {
+	return req.Reasoning != nil && req.Reasoning.Summary != nil && strings.TrimSpace(*req.Reasoning.Summary) != ""
 }
 
 // requestWantsEncryptedReasoning 判断是否应在 reasoning item 附带 encrypted_content 回放载体。

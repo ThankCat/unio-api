@@ -11,6 +11,7 @@ import (
 	consolemiddleware "github.com/ThankCat/unio-gateway/internal/app/consoleapi/middleware"
 	consolerequests "github.com/ThankCat/unio-gateway/internal/app/consoleapi/requests"
 	"github.com/ThankCat/unio-gateway/internal/app/consoleapi/transport"
+	consoleusage "github.com/ThankCat/unio-gateway/internal/app/consoleapi/usage"
 	"github.com/ThankCat/unio-gateway/internal/platform/config"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpmw"
 	consoleservice "github.com/ThankCat/unio-gateway/internal/service/console"
@@ -22,6 +23,7 @@ type Deps struct {
 	Config         config.ConsoleConfig
 	AuthService    consoleauth.Service
 	RequestService consolerequests.Service
+	UsageService   consoleusage.Service
 }
 
 // NewRouter 构建公开的 Console API 路由及其公共中间件。
@@ -64,13 +66,21 @@ func NewRouter(deps Deps) (http.Handler, error) {
 			Service:      deps.AuthService,
 			ErrorWriter:  errorWriter,
 		})
-		if deps.RequestService != nil {
+		if deps.RequestService != nil || deps.UsageService != nil {
 			r.Group(func(r chi.Router) {
 				r.Use(consoleauth.RequireAuth(deps.AuthService, errorWriter))
-				consolerequests.Register(r, consolerequests.Deps{
-					Service:     deps.RequestService,
-					ErrorWriter: errorWriter,
-				})
+				if deps.RequestService != nil {
+					consolerequests.Register(r, consolerequests.Deps{
+						Service:     deps.RequestService,
+						ErrorWriter: errorWriter,
+					})
+				}
+				if deps.UsageService != nil {
+					consoleusage.Register(r, consoleusage.Deps{
+						Service:     deps.UsageService,
+						ErrorWriter: errorWriter,
+					})
+				}
 			})
 		}
 	})

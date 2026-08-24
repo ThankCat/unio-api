@@ -10,6 +10,7 @@ import (
 
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
+	"github.com/ThankCat/unio-gateway/internal/core/clientmeta"
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
 	"github.com/ThankCat/unio-gateway/internal/core/servicetier"
@@ -437,6 +438,9 @@ func (l *RequestLifecycle) PrepareRequest(ctx context.Context, principal *auth.A
 		clientIP = &ip
 	}
 
+	// 客户端会话轮次标识由 ingress 捕获，缺失时保持 NULL（非 Codex 客户端无此语义）。
+	turn := clientmeta.TurnFromContext(ctx)
+
 	return requestlog.CreateRequestParams{
 		RequestID:             requestID,
 		UserID:                principal.UserID,
@@ -451,7 +455,18 @@ func (l *RequestLifecycle) PrepareRequest(ctx context.Context, principal *auth.A
 		ReasoningBudgetTokens: reasoning.BudgetTokens,
 		ClientIP:              clientIP,
 		RequestedServiceTier:  requestedTier,
+		ClientThreadID:        optionalString(turn.ThreadID),
+		ClientTurnID:          optionalString(turn.TurnID),
+		ClientRequestKind:     optionalString(turn.RequestKind),
 	}, nil
+}
+
+// optionalString 把空串折叠为 nil，使空值在库里保持 NULL 而非空字符串。
+func optionalString(v string) *string {
+	if v == "" {
+		return nil
+	}
+	return &v
 }
 
 // CreatePreparedRequest 持久化已准备的 request 参数并推进到 running。

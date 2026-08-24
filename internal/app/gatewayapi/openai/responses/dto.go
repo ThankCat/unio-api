@@ -195,7 +195,13 @@ type ResponseInputItem struct {
 	Namespace *string         `json:"namespace,omitempty"`
 
 	// function_call_output: call_id + output（string | parts[]）。
+	// custom_tool_call_output 复用同一字段，值为裸文本。
 	Output json.RawMessage `json:"output,omitempty"`
+
+	// custom_tool_call: call_id + name + input。input 是不经 JSON 包装的裸文本
+	// （如 apply_patch 的 patch 文档），与 function_call 的 arguments 语义不同。
+	// 保留原始 JSON 而非 string，避免未来 item 使用非字符串 input 时入口过早拒绝。
+	Input json.RawMessage `json:"input,omitempty"`
 
 	// reasoning / item_reference / compaction: id；reasoning 另有 summary[] 与 encrypted_content。
 	ID               *string         `json:"id,omitempty"`
@@ -279,6 +285,9 @@ type ResponseOutputItem struct {
 	Name      string `json:"name,omitempty"`
 	Arguments string `json:"arguments,omitempty"`
 	Namespace string `json:"namespace,omitempty"`
+
+	// custom_tool_call: call_id / name / input（裸文本，非 JSON 参数）。
+	Input string `json:"input,omitempty"`
 }
 
 // MarshalJSON 对 message item 始终输出 content 字段（空时为 []）。

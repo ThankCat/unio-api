@@ -71,6 +71,8 @@ func (h *handler) summary(w http.ResponseWriter, r *http.Request) {
 		MedianLatencyMs:         summary.MedianLatencyMs,
 		AverageTPS:              summary.AverageTPS,
 		TopModels:               toSummaryModelDTOs(summary.TopModels),
+		Previous:                toSummaryWindowDTO(summary.Previous),
+		Series:                  toSummaryPointDTOs(summary.Series),
 	})
 }
 

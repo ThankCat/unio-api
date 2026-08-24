@@ -72,6 +72,28 @@ func TestAnthropicSessionHintReportsSelectedSource(t *testing.T) {
 	}
 }
 
+// TestAnthropicSessionKeyEmbeddedJSONMetadata 验证 Claude Code 2.1.104 起的
+// user_id 内嵌 JSON 形态（抓包实测：account_uuid 为空串）也能回退出会话键。
+func TestAnthropicSessionKeyEmbeddedJSONMetadata(t *testing.T) {
+	meta := json.RawMessage(`{"user_id":"{\"device_id\":\"a7ce301933cdf60596384ad006f6ad6c80fd27a968af1ab0043c7ff20a5151ea\",\"account_uuid\":\"\",\"session_id\":\"1adb4182-525a-4f47-95ec-a02595470274\"}"}`)
+
+	if got := AnthropicSessionKey(context.Background(), meta); got != "1adb4182-525a-4f47-95ec-a02595470274" {
+		t.Fatalf("expected embedded json session_id, got %q", got)
+	}
+
+	// 来源标识描述字段来源而非格式变体，两种形态共用 metadata_user_id。
+	want := Hint{Key: "1adb4182-525a-4f47-95ec-a02595470274", Source: "metadata_user_id"}
+	if got := AnthropicSessionHint(context.Background(), meta); got != want {
+		t.Fatalf("unexpected embedded json hint: %+v", got)
+	}
+
+	// 头仍然优先于 body 回退。
+	ctx := WithClientSessionID(context.Background(), "1adb4182-head")
+	if got := AnthropicSessionKey(ctx, meta); got != "1adb4182-head" {
+		t.Fatalf("expected header to win over embedded json, got %q", got)
+	}
+}
+
 // TestAnthropicSessionKeyStrictParse 验证严格解析：格式不符即不粘、绝不猜（R9）。
 func TestAnthropicSessionKeyStrictParse(t *testing.T) {
 	cases := []struct {
@@ -84,6 +106,10 @@ func TestAnthropicSessionKeyStrictParse(t *testing.T) {
 		{"no session marker", `{"user_id":"user_abc_account_123"}`},
 		{"non-uuid session suffix", `{"user_id":"user_abc_session_!!bad??"}`},
 		{"empty session suffix", `{"user_id":"user_abc_session_"}`},
+		{"embedded json without session_id", `{"user_id":"{\"device_id\":\"abc\",\"account_uuid\":\"\"}"}`},
+		{"embedded json non-uuid session_id", `{"user_id":"{\"session_id\":\"!!bad??\"}"}`},
+		{"embedded json empty session_id", `{"user_id":"{\"session_id\":\"\"}"}`},
+		{"malformed embedded json", `{"user_id":"{\"session_id\":"}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

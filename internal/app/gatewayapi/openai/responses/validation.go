@@ -14,12 +14,14 @@ const (
 
 // input item 判别类型。
 const (
-	itemTypeMessage            = "message"
-	itemTypeFunctionCall       = "function_call"
-	itemTypeFunctionCallOutput = "function_call_output"
-	itemTypeReasoning          = "reasoning"
-	itemTypeItemReference      = "item_reference"
-	itemTypeCompaction         = "compaction"
+	itemTypeMessage              = "message"
+	itemTypeFunctionCall         = "function_call"
+	itemTypeFunctionCallOutput   = "function_call_output"
+	itemTypeCustomToolCall       = "custom_tool_call"
+	itemTypeCustomToolCallOutput = "custom_tool_call_output"
+	itemTypeReasoning            = "reasoning"
+	itemTypeItemReference        = "item_reference"
+	itemTypeCompaction           = "compaction"
 )
 
 // validateResponsesRequest 校验 Responses 请求的 HTTP DTO 协议结构边界。
@@ -136,6 +138,22 @@ func validateInputItem(item ResponseInputItem, index int) *responsesValidationEr
 			return &responsesValidationError{param: param + ".output", message: "function_call_output requires output"}
 		}
 		return nil
+	case itemTypeCustomToolCall:
+		if item.CallID == nil || strings.TrimSpace(*item.CallID) == "" {
+			return &responsesValidationError{param: param + ".call_id", message: "custom_tool_call requires call_id"}
+		}
+		if item.Name == nil || strings.TrimSpace(*item.Name) == "" {
+			return &responsesValidationError{param: param + ".name", message: "custom_tool_call requires name"}
+		}
+		return nil
+	case itemTypeCustomToolCallOutput:
+		if item.CallID == nil || strings.TrimSpace(*item.CallID) == "" {
+			return &responsesValidationError{param: param + ".call_id", message: "custom_tool_call_output requires call_id"}
+		}
+		if len(item.Output) == 0 {
+			return &responsesValidationError{param: param + ".output", message: "custom_tool_call_output requires output"}
+		}
+		return nil
 	case itemTypeItemReference:
 		if item.ID == nil || strings.TrimSpace(*item.ID) == "" {
 			return &responsesValidationError{param: param + ".id", message: "item_reference requires id"}
@@ -206,8 +224,14 @@ func validateResponsesTool(tool ResponsesTool, param string) *responsesValidatio
 			}
 		}
 		return nil
+	case toolTypeCustom:
+		// 名称是桥接侧还原 custom_tool_call 的唯一依据，缺失则无法回译。
+		if strings.TrimSpace(tool.Name) == "" {
+			return &responsesValidationError{param: param + ".name", message: "custom tool requires name"}
+		}
+		return nil
 	default:
-		// custom / local_shell / 内置工具：合法协议结构，ingress 放行，translation 按矩阵处理。
+		// local_shell / 内置工具：合法协议结构，ingress 放行，translation 按矩阵处理。
 		return nil
 	}
 }

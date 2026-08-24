@@ -62,7 +62,7 @@ func OpenAISessionHint(ctx context.Context, promptCacheKey *string) Hint {
 
 // AnthropicSessionKey 按 Anthropic 族提取顺序产出 sticky 会话键（决议 5）：
 // x-claude-code-session-id 头优先（实测 Claude Code 必带、跨轮稳定、换会话变新），
-// 缺失回退 body metadata.user_id 内嵌的 "_session_<id>" 后缀。严格解析：任一环节失败
+// 缺失回退 body metadata.user_id 内嵌的会话段。严格解析：任一环节失败
 // 即返回空串不粘（R9，不猜第三方格式）。
 func AnthropicSessionKey(ctx context.Context, metadata json.RawMessage) string {
 	return AnthropicSessionHint(ctx, metadata).Key
@@ -80,8 +80,11 @@ func AnthropicSessionHint(ctx context.Context, metadata json.RawMessage) Hint {
 }
 
 // sessionKeyFromAnthropicMetadata 从 Anthropic metadata.user_id 提取会话段。
-// Claude Code 的 user_id 形如 "user_<hash>_account_<uuid>_session_<uuid>"；
-// 取最后一个 "_session_" 后缀并要求是 UUID 形状，否则视为无信号。
+// Claude Code 随版本演进出现过两种 user_id 形态，两种都要支持：
+//   - 内嵌 JSON（2.1.104 实测）：{"device_id":…,"account_uuid":…,"session_id":"<uuid>"}
+//   - 下划线拼接（旧版）："user_<hash>_account_<uuid>_session_<uuid>"
+//
+// 两种形态都要求会话段是 UUID 形状，否则视为无信号。
 func sessionKeyFromAnthropicMetadata(metadata json.RawMessage) string {
 	if len(metadata) == 0 {
 		return ""
@@ -92,12 +95,39 @@ func sessionKeyFromAnthropicMetadata(metadata json.RawMessage) string {
 	if err := json.Unmarshal(metadata, &meta); err != nil {
 		return ""
 	}
+	if session := sessionIDFromEmbeddedJSON(meta.UserID); session != "" {
+		return session
+	}
+	return sessionIDFromUnderscoreSuffix(meta.UserID)
+}
+
+// sessionIDFromEmbeddedJSON 解析 user_id 内嵌的 JSON 对象并取 session_id。
+// 先按 "{" 前缀短路，避免对下划线形态做无谓的 JSON 解析（每请求热路径）。
+func sessionIDFromEmbeddedJSON(userID string) string {
+	trimmed := strings.TrimSpace(userID)
+	if !strings.HasPrefix(trimmed, "{") {
+		return ""
+	}
+	var embedded struct {
+		SessionID string `json:"session_id"`
+	}
+	if err := json.Unmarshal([]byte(trimmed), &embedded); err != nil {
+		return ""
+	}
+	if !uuidShapePattern.MatchString(embedded.SessionID) {
+		return ""
+	}
+	return embedded.SessionID
+}
+
+// sessionIDFromUnderscoreSuffix 取最后一个 "_session_" 后缀作为会话段。
+func sessionIDFromUnderscoreSuffix(userID string) string {
 	const marker = "_session_"
-	idx := strings.LastIndex(meta.UserID, marker)
+	idx := strings.LastIndex(userID, marker)
 	if idx < 0 {
 		return ""
 	}
-	session := meta.UserID[idx+len(marker):]
+	session := userID[idx+len(marker):]
 	if !uuidShapePattern.MatchString(session) {
 		return ""
 	}

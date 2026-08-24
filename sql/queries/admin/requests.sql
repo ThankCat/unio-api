@@ -290,7 +290,10 @@ SELECT
     requested_service_tier,
     actual_service_tier,
     settled_service_tier,
-    service_tier_resolution
+    service_tier_resolution,
+    client_thread_id,
+    client_turn_id,
+    client_request_kind
 FROM request_records
 WHERE request_id = sqlc.arg(request_id);
 

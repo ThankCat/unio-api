@@ -61,6 +61,23 @@ type summaryModelDTO struct {
 	OutputPricePer1M *string `json:"output_price_per_1m"`
 }
 
+// summaryWindowDTO 是上一周期的对照值，只带卡片会用到的四个指标。
+type summaryWindowDTO struct {
+	RequestCount     int64   `json:"request_count"`
+	TokenCount       int64   `json:"token_count"`
+	ChargeUSD        string  `json:"charge_usd"`
+	AverageLatencyMs float64 `json:"average_latency_ms"`
+}
+
+// summaryPointDTO 是热力条的一格。
+type summaryPointDTO struct {
+	BucketStart      string  `json:"bucket_start"`
+	RequestCount     int64   `json:"request_count"`
+	TokenCount       int64   `json:"token_count"`
+	ChargeUSD        string  `json:"charge_usd"`
+	AverageLatencyMs float64 `json:"average_latency_ms"`
+}
+
 type summaryData struct {
 	RequestCount            int64             `json:"request_count"`
 	StreamCount             int64             `json:"stream_count"`
@@ -81,6 +98,41 @@ type summaryData struct {
 	MedianLatencyMs         float64           `json:"median_latency_ms"`
 	AverageTPS              float64           `json:"average_tps"`
 	TopModels               []summaryModelDTO `json:"top_models"`
+	Previous                *summaryWindowDTO `json:"previous,omitempty"`
+	Series                  []summaryPointDTO `json:"series,omitempty"`
+}
+
+func toSummaryWindowDTO(window *consolerequests.Window) *summaryWindowDTO {
+	if window == nil {
+		return nil
+	}
+	return &summaryWindowDTO{
+		AverageLatencyMs: window.AverageLatencyMs,
+		ChargeUSD:        window.ChargeUSD,
+		RequestCount:     window.RequestCount,
+		TokenCount:       window.TokenCount,
+	}
+}
+
+func toSummaryPointDTOs(points []consolerequests.Point) []summaryPointDTO {
+	if len(points) == 0 {
+		return nil
+	}
+	out := make([]summaryPointDTO, 0, len(points))
+	for _, point := range points {
+		bucketStart := ""
+		if !point.BucketStart.IsZero() {
+			bucketStart = point.BucketStart.UTC().Format(time.RFC3339Nano)
+		}
+		out = append(out, summaryPointDTO{
+			AverageLatencyMs: point.AverageLatencyMs,
+			BucketStart:      bucketStart,
+			ChargeUSD:        point.ChargeUSD,
+			RequestCount:     point.RequestCount,
+			TokenCount:       point.TokenCount,
+		})
+	}
+	return out
 }
 
 type filtersData struct {

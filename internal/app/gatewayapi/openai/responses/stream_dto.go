@@ -18,10 +18,14 @@ const (
 	EventReasoningTextDone         = "response.reasoning_text.done"
 	EventReasoningSummaryTextDelta = "response.reasoning_summary_text.delta"
 	EventReasoningSummaryTextDone  = "response.reasoning_summary_text.done"
+	EventReasoningSummaryPartAdded = "response.reasoning_summary_part.added"
+	EventReasoningSummaryPartDone  = "response.reasoning_summary_part.done"
 	EventRefusalDelta              = "response.refusal.delta"
 	EventRefusalDone               = "response.refusal.done"
 	EventFunctionCallArgsDelta     = "response.function_call_arguments.delta"
 	EventFunctionCallArgsDone      = "response.function_call_arguments.done"
+	EventCustomToolCallInputDelta  = "response.custom_tool_call_input.delta"
+	EventCustomToolCallInputDone   = "response.custom_tool_call_input.done"
 	EventResponseCompleted         = "response.completed"
 	EventResponseIncomplete        = "response.incomplete"
 	EventResponseFailed            = "response.failed"
@@ -46,6 +50,8 @@ type ResponsesStreamEvent struct {
 	// 内容增量 / 终值：output_text / reasoning_text / function_call_arguments 事件使用。
 	Delta string `json:"delta,omitempty"`
 	Text  string `json:"text,omitempty"`
+	// Input 是 custom_tool_call_input.done 的最终裸文本入参。
+	Input string `json:"input,omitempty"`
 	// Refusal 是 response.refusal.done 的最终拒绝文本。
 	Refusal string `json:"refusal,omitempty"`
 
