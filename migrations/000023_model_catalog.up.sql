@@ -20,6 +20,7 @@ CREATE TABLE public.model_catalog (
     synced_at timestamp with time zone DEFAULT now() NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    family text DEFAULT ''::text NOT NULL,
     CONSTRAINT model_catalog_context_window_tokens_check CHECK (((context_window_tokens IS NULL) OR (context_window_tokens > 0))),
     CONSTRAINT model_catalog_fingerprint_check CHECK ((fingerprint <> ''::text)),
     CONSTRAINT model_catalog_input_price_usd_per_million_tokens_check CHECK (((input_price_usd_per_million_tokens IS NULL) OR (input_price_usd_per_million_tokens >= (0)::numeric))),
@@ -32,3 +33,5 @@ ALTER TABLE ONLY public.model_catalog
 
 CREATE INDEX idx_model_catalog_lab ON public.model_catalog USING btree (lab);
 -- Migration renumbered after merging Provider Origin into Provider.
+
+COMMENT ON COLUMN public.model_catalog.family IS '模型系列（models.dev feed 的 family），采纳时带入 models.family，空串表示上游未归类。';

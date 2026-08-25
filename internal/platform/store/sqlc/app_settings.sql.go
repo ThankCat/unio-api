@@ -105,7 +105,7 @@ type GetGatewayAdmissionControlRevisionsRow struct {
 	ConcurrencyDefaultsRevision      int64
 }
 
-// GetGatewayAdmissionControlRevisions 在同一 PostgreSQL statement snapshot 中读取完整性 epoch、线路入口限流与全局并发 revision；任一必需行缺失时返回 no rows。
+// GetGatewayAdmissionControlRevisions 在同一 PostgreSQL statement snapshot 中读取完整性 epoch、请求入口限流与全局并发 revision；任一必需行缺失时返回 no rows。
 func (q *Queries) GetGatewayAdmissionControlRevisions(ctx context.Context) (GetGatewayAdmissionControlRevisionsRow, error) {
 	row := q.db.QueryRow(ctx, getGatewayAdmissionControlRevisions)
 	var i GetGatewayAdmissionControlRevisionsRow

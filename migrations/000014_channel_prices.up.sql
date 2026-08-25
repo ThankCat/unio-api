@@ -67,7 +67,7 @@ ALTER TABLE ONLY public.channel_prices
 -- 后续迁移补充的设计说明（列/约束演进，原 ALTER 迁移的中文注释归档）：
 -- ---------------------------------------------------------------------------
 -- [000056_drop_channel_prices_sale_columns]
--- DEC-026：客户售价 = 模型基准价（model_prices）× 线路倍率（routes.price_ratio），
+-- 客户售价定在模型上（model_prices 的绝对售价或基准价 × 全局售价倍率），
 -- 渠道侧只承载「成本」。channel_prices 的售价列与录入毛利守卫自此退役（售价快照取 model_prices×ratio）。
 -- 先删依赖售价列的毛利 CHECK，再删 6 个售价列；成本列保留。
 -- [000075_add_cache_write_30m]

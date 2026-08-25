@@ -40,15 +40,28 @@ CREATE TABLE public.request_records (
     completed_at timestamp with time zone,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    route_id bigint,
     reasoning_effort text,
     reasoning_budget_tokens integer,
     client_ip text,
+    requested_service_tier text,
+    actual_service_tier text,
+    settled_service_tier text,
+    service_tier_resolution text,
+    -- client_thread_id: 客户端会话线程标识（Codex thread_id），跨轮稳定。--
+    client_thread_id text,
+    -- client_turn_id: 单轮标识（Codex turn_id），一轮内多次上游尝试共享。--
+    client_turn_id text,
+    -- client_request_kind: 客户端声明的请求种类（Codex request_kind，如 turn/compact）。--
+    client_request_kind text,
+    CONSTRAINT ck_request_records_actual_service_tier CHECK (((actual_service_tier IS NULL) OR (actual_service_tier = ANY (ARRAY['standard'::text, 'fast'::text])))),
     CONSTRAINT ck_request_records_delivery_completed_at CHECK ((((delivery_status = 'completed'::text) AND (response_completed_at IS NOT NULL)) OR ((delivery_status <> 'completed'::text) AND (response_completed_at IS NULL)))),
     CONSTRAINT ck_request_records_protocol_endpoint CHECK ((((ingress_protocol = 'openai'::text) AND (endpoint = ANY (ARRAY['chat_completions'::text, 'responses'::text]))) OR ((ingress_protocol = 'anthropic'::text) AND (endpoint = 'messages'::text)))),
+    CONSTRAINT ck_request_records_requested_service_tier CHECK (((requested_service_tier IS NULL) OR (requested_service_tier = ANY (ARRAY['standard'::text, 'fast'::text])))),
+    CONSTRAINT ck_request_records_service_tier_resolution CHECK (((service_tier_resolution IS NULL) OR (service_tier_resolution = ANY (ARRAY['upstream_response'::text, 'standard_fallback_missing'::text, 'standard_fallback_unknown'::text, 'standard_fallback_fast_price_missing'::text])))),
+    CONSTRAINT ck_request_records_settled_service_tier CHECK (((settled_service_tier IS NULL) OR (settled_service_tier = ANY (ARRAY['standard'::text, 'fast'::text])))),
     CONSTRAINT request_records_delivery_status_check CHECK ((delivery_status = ANY (ARRAY['not_started'::text, 'in_progress'::text, 'completed'::text, 'interrupted'::text]))),
-    CONSTRAINT request_records_ingress_protocol_check CHECK ((ingress_protocol = ANY (ARRAY['openai'::text, 'anthropic'::text]))),
     CONSTRAINT request_records_endpoint_check CHECK ((endpoint = ANY (ARRAY['chat_completions'::text, 'messages'::text, 'responses'::text]))),
+    CONSTRAINT request_records_ingress_protocol_check CHECK ((ingress_protocol = ANY (ARRAY['openai'::text, 'anthropic'::text]))),
     CONSTRAINT request_records_reasoning_budget_tokens_check CHECK (((reasoning_budget_tokens IS NULL) OR (reasoning_budget_tokens >= 0))),
     CONSTRAINT request_records_response_id_check CHECK (((response_id IS NULL) OR (response_id <> ''::text))),
     CONSTRAINT request_records_response_protocol_check CHECK (((response_protocol IS NULL) OR (response_protocol = ANY (ARRAY['openai'::text, 'anthropic'::text])))),
@@ -72,8 +85,6 @@ CREATE INDEX idx_request_records_api_key_created_at ON public.request_records US
 
 CREATE INDEX idx_request_records_created_at_id ON public.request_records USING btree (created_at DESC, id DESC);
 
-CREATE INDEX idx_request_records_route_created_at ON public.request_records USING btree (route_id, created_at DESC);
-
 CREATE INDEX idx_request_records_status_created_at ON public.request_records USING btree (status, created_at DESC);
 
 CREATE INDEX idx_request_records_user_created_at ON public.request_records USING btree (user_id, created_at DESC);
@@ -90,23 +101,19 @@ ALTER TABLE ONLY public.request_records
 ALTER TABLE ONLY public.request_records
     ADD CONSTRAINT request_records_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id);
 
+-- 按线程回溯整段会话是主要查询形态；仅对非空值建索引，
+-- 避免为其它协议的 NULL 行付出代价。
+CREATE INDEX idx_request_records_client_thread_created_at ON public.request_records USING btree (client_thread_id, created_at DESC) WHERE (client_thread_id IS NOT NULL);
+
 -- ---------------------------------------------------------------------------
 -- 后续迁移补充的设计说明（列/约束演进，原 ALTER 迁移的中文注释归档）：
 -- ---------------------------------------------------------------------------
 -- [000046_drop_capability_gate_columns]
 -- DEC-024 移除能力闸门：删除 observe/enforce 审计列。
 -- 能力不再于请求热路径判定，required_capabilities 推断与 capability_check_result 审计随闸门一并删除。
--- [000058_collapse_projects_into_users]
--- 折叠 user → project → api_key 三级为 user → api_key 两级，彻底移除 projects 概念。
--- API Key、模型策略与请求归属全部直接挂在用户上。
--- 同时把线路改为 API Key 必填：彻底移除「用户/项目默认线路」回落，线路只认 api_keys.route_id。
--- 数据无需保留，但仍写正确回填，保证存量库平滑迁移。
---
--- 1. api_keys.project_id → api_keys.user_id（API Key 直接归属用户）。
--- [000064_add_request_records_route_reasoning_ip]
--- 请求记录富化（批二）：线路快照 + 推理强度归一 + 客户端 IP。
--- route_id 为请求创建时 API Key 绑定线路的快照：即使之后 Key 换绑线路，历史请求仍据此显示当时线路
---   （列表按 route_id JOIN routes 取名；历史行 NULL 时回落到 Key 当前绑定）。
+-- [归属层级]
+-- user → api_key 两级，没有中间的项目层：请求归属直接落到用户。
+-- [请求记录富化]
 -- reasoning_effort 为跨协议归一档位（none/minimal/low/medium/high/xhigh）：OpenAI 取 reasoning_effort，
 --   Anthropic 由 thinking.budget_tokens 归一。
 -- reasoning_budget_tokens 保留 Anthropic 原始预算（OpenAI 为 NULL）。client_ip 为客户端来源 IP（无地理）。

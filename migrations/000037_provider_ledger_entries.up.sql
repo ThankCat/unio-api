@@ -25,52 +25,15 @@ CREATE TABLE public.provider_ledger_entries (
     idempotency_key text NOT NULL,
     reason text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT provider_ledger_entries_amount_check CHECK (amount > 0),
-    CONSTRAINT provider_ledger_entries_currency_check CHECK (btrim(currency) <> ''),
-    CONSTRAINT provider_ledger_entries_idempotency_key_check CHECK (btrim(idempotency_key) <> ''),
-    CONSTRAINT provider_ledger_entries_reason_check CHECK (btrim(reason) <> ''),
-    CONSTRAINT provider_ledger_entries_entry_type_check CHECK (
-        entry_type = ANY (ARRAY['usage_debit'::text, 'probe_debit'::text, 'adjustment_credit'::text, 'adjustment_debit'::text])
-    ),
-    CONSTRAINT provider_ledger_entries_balance_math_check CHECK (
-        (entry_type = 'adjustment_credit' AND balance_after = balance_before + amount)
-        OR (entry_type IN ('usage_debit', 'probe_debit', 'adjustment_debit') AND balance_after = balance_before - amount)
-    ),
-    CONSTRAINT provider_ledger_entries_source_check CHECK (
-        (
-            entry_type = 'usage_debit'
-            AND provider_probe_record_id IS NULL
-            AND request_record_id IS NOT NULL
-            AND request_attempt_id IS NOT NULL
-            AND cost_snapshot_id IS NOT NULL
-            AND channel_id IS NOT NULL
-            AND request_id IS NOT NULL AND btrim(request_id) <> ''
-            AND channel_name IS NOT NULL AND btrim(channel_name) <> ''
-            AND upstream_model IS NOT NULL AND btrim(upstream_model) <> ''
-        )
-        OR (
-            entry_type = 'probe_debit'
-            AND provider_probe_record_id IS NOT NULL
-            AND request_record_id IS NULL
-            AND request_attempt_id IS NULL
-            AND cost_snapshot_id IS NULL
-            AND channel_id IS NULL
-            AND request_id IS NULL
-            AND channel_name IS NULL
-            AND upstream_model IS NULL
-        )
-        OR (
-            entry_type IN ('adjustment_credit', 'adjustment_debit')
-            AND provider_probe_record_id IS NULL
-            AND request_record_id IS NULL
-            AND request_attempt_id IS NULL
-            AND cost_snapshot_id IS NULL
-            AND channel_id IS NULL
-            AND request_id IS NULL
-            AND channel_name IS NULL
-            AND upstream_model IS NULL
-        )
-    )
+    usage_source text,
+    CONSTRAINT provider_ledger_entries_amount_check CHECK ((amount > (0)::numeric)),
+    CONSTRAINT provider_ledger_entries_balance_math_check CHECK ((((entry_type = 'adjustment_credit'::text) AND (balance_after = (balance_before + amount))) OR ((entry_type = ANY (ARRAY['usage_debit'::text, 'probe_debit'::text, 'adjustment_debit'::text])) AND (balance_after = (balance_before - amount))))),
+    CONSTRAINT provider_ledger_entries_currency_check CHECK ((btrim(currency) <> ''::text)),
+    CONSTRAINT provider_ledger_entries_entry_type_check CHECK ((entry_type = ANY (ARRAY['usage_debit'::text, 'probe_debit'::text, 'adjustment_credit'::text, 'adjustment_debit'::text]))),
+    CONSTRAINT provider_ledger_entries_idempotency_key_check CHECK ((btrim(idempotency_key) <> ''::text)),
+    CONSTRAINT provider_ledger_entries_reason_check CHECK ((btrim(reason) <> ''::text)),
+    CONSTRAINT provider_ledger_entries_source_check CHECK ((((entry_type = 'usage_debit'::text) AND (provider_probe_record_id IS NULL) AND (request_record_id IS NOT NULL) AND (request_attempt_id IS NOT NULL) AND (cost_snapshot_id IS NOT NULL) AND (channel_id IS NOT NULL) AND (request_id IS NOT NULL) AND (btrim(request_id) <> ''::text) AND (channel_name IS NOT NULL) AND (btrim(channel_name) <> ''::text) AND (upstream_model IS NOT NULL) AND (btrim(upstream_model) <> ''::text) AND (usage_source = ANY (ARRAY['upstream_response'::text, 'upstream_stream'::text, 'partial_stream_estimate'::text]))) OR ((entry_type = 'probe_debit'::text) AND (provider_probe_record_id IS NOT NULL) AND (request_record_id IS NULL) AND (request_attempt_id IS NULL) AND (cost_snapshot_id IS NULL) AND (channel_id IS NULL) AND (request_id IS NULL) AND (channel_name IS NULL) AND (upstream_model IS NULL) AND (usage_source = ANY (ARRAY['upstream_response'::text, 'upstream_stream'::text]))) OR ((entry_type = ANY (ARRAY['adjustment_credit'::text, 'adjustment_debit'::text])) AND (provider_probe_record_id IS NULL) AND (request_record_id IS NULL) AND (request_attempt_id IS NULL) AND (cost_snapshot_id IS NULL) AND (channel_id IS NULL) AND (request_id IS NULL) AND (channel_name IS NULL) AND (upstream_model IS NULL) AND (usage_source IS NULL)))),
+    CONSTRAINT provider_ledger_entries_usage_source_check CHECK (((usage_source IS NULL) OR (usage_source = ANY (ARRAY['upstream_response'::text, 'upstream_stream'::text, 'partial_stream_estimate'::text]))))
 );
 
 ALTER SEQUENCE public.provider_ledger_entries_id_seq OWNED BY public.provider_ledger_entries.id;

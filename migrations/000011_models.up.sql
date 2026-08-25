@@ -28,6 +28,10 @@ CREATE TABLE public.models (
     source text DEFAULT 'manual'::text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    disabled_reason text,
+    disabled_at timestamp with time zone,
+    family text DEFAULT ''::text NOT NULL,
+    CONSTRAINT ck_models_disabled_reason CHECK (((disabled_reason IS NULL) OR (disabled_reason = ANY (ARRAY['manual_delisted'::text, 'binding_disabled'::text, 'channel_disabled'::text])))),
     CONSTRAINT models_context_window_tokens_check CHECK (((context_window_tokens IS NULL) OR (context_window_tokens > 0))),
     CONSTRAINT models_input_price_usd_per_million_tokens_check CHECK (((input_price_usd_per_million_tokens IS NULL) OR (input_price_usd_per_million_tokens >= (0)::numeric))),
     CONSTRAINT models_max_output_tokens_check CHECK (((max_output_tokens IS NULL) OR (max_output_tokens > 0))),
@@ -61,3 +65,7 @@ ALTER TABLE ONLY public.models
 -- DEC-024 移除能力自动校正与证据 v2。
 -- 自动校正与 used_capabilities/delivery_mode 证据链全部废止；能力改为人工声明。
 -- Migration renumbered after merging Provider Origin into Provider.
+
+COMMENT ON COLUMN public.models.disabled_reason IS '停用直接原因：manual_delisted 管理员主动下架；binding_disabled 最后一条渠道绑定被停用或解除；channel_disabled 最后一条可用渠道被停用。enabled 时为空。';
+
+COMMENT ON COLUMN public.models.family IS '模型系列（来自 models.dev feed 的 family），仅用于列表分组展示，空串表示未归类。';

@@ -30,7 +30,10 @@ CREATE TABLE public.price_snapshots (
     price_ratio numeric(20,10),
     cache_write_30m_input_price numeric(20,10),
     -- long_context_applied: 本单是否按长上下文阶梯计价（对账用）。--
-    long_context_applied boolean NOT NULL DEFAULT false,
+    long_context_applied boolean DEFAULT false NOT NULL,
+    service_tier text,
+    model_price_service_tier_id bigint,
+    CONSTRAINT ck_price_snapshots_service_tier CHECK (((service_tier IS NULL) OR (service_tier = ANY (ARRAY['standard'::text, 'fast'::text])))),
     CONSTRAINT price_snapshots_cache_read_input_price_check CHECK (((cache_read_input_price IS NULL) OR (cache_read_input_price >= (0)::numeric))),
     CONSTRAINT price_snapshots_cache_write_1h_input_price_check CHECK (((cache_write_1h_input_price IS NULL) OR (cache_write_1h_input_price >= (0)::numeric))),
     CONSTRAINT price_snapshots_cache_write_30m_input_price_check CHECK (((cache_write_30m_input_price IS NULL) OR (cache_write_30m_input_price >= (0)::numeric))),
@@ -69,9 +72,9 @@ ALTER TABLE ONLY public.price_snapshots
 --
 -- price_snapshots.price_id：模型级 prices(id) -> 渠道级 channel_prices(id)。
 -- [000071_add_price_ratio_snapshots]
--- 为「客户售价快照」与「结算补偿任务」补记结算当时使用的线路倍率（DEC-026：客户售价 = 模型基准价 × 线路倍率）。
+-- 为「客户售价快照」与「结算补偿任务」补记结算当时使用的售价倍率。
 --
--- 背景：此前请求列表/详情的「线路倍率」是实时读 routes.price_ratio，「模型基准价」是用 售价 ÷ 倍率 倒推。
+-- 背景：倍率若实时读设置、基准价用「售价 ÷ 倍率」倒推，改一次倍率就会让历史账单显示成新口径。
 -- 管理员改倍率后，历史请求会显示当前倍率（而非结算当时的倍率），倒推出的基准价随之失真。
 -- 快照结算当时的倍率后，历史请求恒显示当时真实倍率、基准价倒推也随之稳定，不再被后续改倍率污染。
 --

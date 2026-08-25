@@ -37,7 +37,6 @@ CREATE TABLE public.request_attempts (
     error_code text,
     error_message text,
     internal_error_detail text,
-    -- 稳定上游超时阶段；仅超时失败时填写。--
     upstream_timeout_phase text,
     gateway_first_token_at timestamp with time zone,
     final_usage_received boolean DEFAULT false NOT NULL,
@@ -45,20 +44,16 @@ CREATE TABLE public.request_attempts (
     started_at timestamp with time zone NOT NULL,
     completed_at timestamp with time zone,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    -- 上游调用边界时间事实（真实 transport 口径，与客户首帧 gateway_first_token_at 分离）。
     upstream_started_at timestamp with time zone,
     upstream_first_token_at timestamp with time zone,
     upstream_completed_at timestamp with time zone,
-    -- attempt 创建时冻结的不可变身份/版本快照；真实 attempt 必须完整记录。
     provider_origin_revision bigint NOT NULL,
     provider_status_revision bigint NOT NULL,
     channel_config_revision bigint NOT NULL,
     routing_candidate_index integer NOT NULL,
     upstream_endpoint text NOT NULL,
-    -- Finish 终态收口时写入的 breaker applied/stale disposition。
     breaker_provider_disposition text,
     breaker_channel_disposition text,
-    -- 记录该 attempt 是否进入路由评分的 30 分钟样本窗口。--
     ttft_scoring_sample boolean DEFAULT false NOT NULL,
     error_scoring_sample boolean DEFAULT false NOT NULL,
     error_scoring_failure boolean DEFAULT false NOT NULL,
@@ -72,27 +67,32 @@ CASE
     ELSE 'upstream'::text
 END) STORED,
     permit_id text,
+    requested_service_tier text,
+    upstream_service_tier text,
+    forwarded_service_tier text,
+    CONSTRAINT ck_request_attempts_forwarded_service_tier CHECK (((forwarded_service_tier IS NULL) OR (forwarded_service_tier = ANY (ARRAY['standard'::text, 'fast'::text])))),
+    CONSTRAINT ck_request_attempts_requested_service_tier CHECK (((requested_service_tier IS NULL) OR (requested_service_tier = ANY (ARRAY['standard'::text, 'fast'::text])))),
+    CONSTRAINT ck_request_attempts_upstream_completed_after_start CHECK (((upstream_completed_at IS NULL) OR ((upstream_started_at IS NOT NULL) AND (upstream_started_at <= upstream_completed_at)))),
+    CONSTRAINT ck_request_attempts_upstream_first_after_start CHECK (((upstream_first_token_at IS NULL) OR ((upstream_started_at IS NOT NULL) AND (upstream_started_at <= upstream_first_token_at)))),
+    CONSTRAINT ck_request_attempts_upstream_first_before_completed CHECK (((upstream_first_token_at IS NULL) OR (upstream_completed_at IS NULL) OR (upstream_first_token_at <= upstream_completed_at))),
+    CONSTRAINT ck_request_attempts_upstream_service_tier CHECK (((upstream_service_tier IS NULL) OR (btrim(upstream_service_tier) <> ''::text))),
     CONSTRAINT request_attempts_attempt_index_check CHECK ((attempt_index >= 0)),
+    CONSTRAINT request_attempts_breaker_channel_disposition_check CHECK (((breaker_channel_disposition IS NULL) OR (breaker_channel_disposition = ANY (ARRAY['applied'::text, 'stale_revision'::text, 'stale_status_revision'::text, 'stale_config_revision'::text, 'stale_generation'::text, 'runtime_state_lost'::text, 'stale_integrity_epoch'::text, 'runtime_sync_required'::text, 'expired'::text, 'unknown_permit'::text, 'terminal_conflict'::text, 'result_unknown'::text, 'not_applicable'::text])))),
+    CONSTRAINT request_attempts_breaker_provider_disposition_check CHECK (((breaker_provider_disposition IS NULL) OR (breaker_provider_disposition = ANY (ARRAY['applied'::text, 'stale_revision'::text, 'stale_status_revision'::text, 'stale_config_revision'::text, 'stale_generation'::text, 'runtime_state_lost'::text, 'stale_integrity_epoch'::text, 'runtime_sync_required'::text, 'expired'::text, 'unknown_permit'::text, 'terminal_conflict'::text, 'result_unknown'::text, 'not_applicable'::text])))),
+    CONSTRAINT request_attempts_channel_config_revision_check CHECK ((channel_config_revision >= 1)),
+    CONSTRAINT request_attempts_error_sample_failure_check CHECK (((NOT error_scoring_failure) OR error_scoring_sample)),
     CONSTRAINT request_attempts_finish_class_check CHECK (((finish_class IS NULL) OR (finish_class = ANY (ARRAY['stop'::text, 'length'::text, 'tool_use'::text, 'content_filter'::text, 'refusal'::text, 'pause'::text, 'other'::text])))),
+    CONSTRAINT request_attempts_permit_id_check CHECK (((permit_id IS NULL) OR (btrim(permit_id) <> ''::text))),
+    CONSTRAINT request_attempts_provider_origin_revision_check CHECK ((provider_origin_revision >= 1)),
+    CONSTRAINT request_attempts_provider_status_revision_check CHECK ((provider_status_revision >= 1)),
+    CONSTRAINT request_attempts_routing_candidate_index_check CHECK ((routing_candidate_index >= 0)),
     CONSTRAINT request_attempts_status_check CHECK ((status = ANY (ARRAY['running'::text, 'succeeded'::text, 'failed'::text, 'canceled'::text]))),
+    CONSTRAINT request_attempts_upstream_endpoint_check CHECK ((upstream_endpoint = ANY (ARRAY['chat_completions'::text, 'responses'::text, 'responses_compact'::text, 'messages'::text]))),
     CONSTRAINT request_attempts_upstream_protocol_check CHECK ((upstream_protocol = ANY (ARRAY['openai'::text, 'anthropic'::text]))),
     CONSTRAINT request_attempts_upstream_response_id_check CHECK (((upstream_response_id IS NULL) OR (upstream_response_id <> ''::text))),
     CONSTRAINT request_attempts_upstream_status_code_check CHECK (((upstream_status_code IS NULL) OR ((upstream_status_code >= 100) AND (upstream_status_code <= 599)))),
-    CONSTRAINT request_attempts_usage_mapping_version_check CHECK (((usage_mapping_version IS NULL) OR (usage_mapping_version <> ''::text))),
     CONSTRAINT request_attempts_upstream_timeout_phase_check CHECK (((upstream_timeout_phase IS NULL) OR (upstream_timeout_phase = ANY (ARRAY['response_header'::text, 'first_token'::text, 'stream_idle'::text, 'response_body'::text])))),
-    CONSTRAINT request_attempts_error_sample_failure_check CHECK ((NOT error_scoring_failure OR error_scoring_sample)),
-    CONSTRAINT request_attempts_permit_id_check CHECK (((permit_id IS NULL) OR (btrim(permit_id) <> ''::text))),
-    -- 上游时间事实拆开约束：first/completed 非空则 start 非空且有序；first、completed 均非空才要求 first<=completed。
-    CONSTRAINT ck_request_attempts_upstream_first_after_start CHECK (((upstream_first_token_at IS NULL) OR ((upstream_started_at IS NOT NULL) AND (upstream_started_at <= upstream_first_token_at)))),
-    CONSTRAINT ck_request_attempts_upstream_completed_after_start CHECK (((upstream_completed_at IS NULL) OR ((upstream_started_at IS NOT NULL) AND (upstream_started_at <= upstream_completed_at)))),
-    CONSTRAINT ck_request_attempts_upstream_first_before_completed CHECK (((upstream_first_token_at IS NULL) OR (upstream_completed_at IS NULL) OR (upstream_first_token_at <= upstream_completed_at))),
-    CONSTRAINT request_attempts_provider_origin_revision_check CHECK ((provider_origin_revision >= 1)),
-    CONSTRAINT request_attempts_provider_status_revision_check CHECK ((provider_status_revision >= 1)),
-    CONSTRAINT request_attempts_channel_config_revision_check CHECK ((channel_config_revision >= 1)),
-    CONSTRAINT request_attempts_routing_candidate_index_check CHECK ((routing_candidate_index >= 0)),
-    CONSTRAINT request_attempts_upstream_endpoint_check CHECK ((upstream_endpoint = ANY (ARRAY['chat_completions'::text, 'responses'::text, 'responses_compact'::text, 'messages'::text]))),
-    CONSTRAINT request_attempts_breaker_provider_disposition_check CHECK (((breaker_provider_disposition IS NULL) OR (breaker_provider_disposition = ANY (ARRAY['applied'::text, 'stale_revision'::text, 'stale_status_revision'::text, 'stale_config_revision'::text, 'stale_generation'::text, 'runtime_state_lost'::text, 'stale_integrity_epoch'::text, 'runtime_sync_required'::text, 'expired'::text, 'unknown_permit'::text, 'terminal_conflict'::text, 'result_unknown'::text, 'not_applicable'::text])))),
-    CONSTRAINT request_attempts_breaker_channel_disposition_check CHECK (((breaker_channel_disposition IS NULL) OR (breaker_channel_disposition = ANY (ARRAY['applied'::text, 'stale_revision'::text, 'stale_status_revision'::text, 'stale_config_revision'::text, 'stale_generation'::text, 'runtime_state_lost'::text, 'stale_integrity_epoch'::text, 'runtime_sync_required'::text, 'expired'::text, 'unknown_permit'::text, 'terminal_conflict'::text, 'result_unknown'::text, 'not_applicable'::text]))))
+    CONSTRAINT request_attempts_usage_mapping_version_check CHECK (((usage_mapping_version IS NULL) OR (usage_mapping_version <> ''::text)))
 );
 
 ALTER SEQUENCE public.request_attempts_id_seq OWNED BY public.request_attempts.id;

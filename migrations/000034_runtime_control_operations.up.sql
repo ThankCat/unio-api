@@ -250,33 +250,17 @@ CREATE TABLE public.runtime_control_operations (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     -- completed_at: 仅在 committed|aborted 终态非空。--
     completed_at timestamp with time zone,
-    CONSTRAINT runtime_control_operations_token_check CHECK ((token <> ''::text)),
-    CONSTRAINT runtime_control_operations_payload_hash_check CHECK ((payload_hash <> ''::text)),
-    CONSTRAINT runtime_control_operations_kind_check CHECK ((kind = ANY (ARRAY['channel_capacity'::text, 'app_setting'::text, 'runtime_state_epoch'::text]))),
-    CONSTRAINT runtime_control_operations_state_check CHECK ((state = ANY (ARRAY['preparing'::text, 'prepared'::text, 'db_committed'::text, 'awaiting_release'::text, 'committed'::text, 'aborted'::text]))),
-    CONSTRAINT runtime_control_operations_revision_check CHECK (((current_revision >= 0) AND (next_revision = current_revision + 1))),
     CONSTRAINT ck_runtime_control_operations_completed_at CHECK (((state = ANY (ARRAY['committed'::text, 'aborted'::text])) = (completed_at IS NOT NULL))),
-    CONSTRAINT ck_runtime_control_operations_target CHECK ((
-        ((kind = 'channel_capacity'::text) AND (channel_id IS NOT NULL) AND (setting_key IS NULL))
-        OR ((kind = 'app_setting'::text) AND (channel_id IS NULL) AND (setting_key = ANY (ARRAY['gateway.route_rate_limit_defaults'::text, 'gateway.concurrency_defaults'::text, 'gateway.circuit_breaker'::text, 'gateway.routing_balance'::text])))
-        OR ((kind = 'runtime_state_epoch'::text) AND (channel_id IS NULL) AND (setting_key = 'gateway.runtime_state_epoch'::text))
-    )),
-    CONSTRAINT ck_runtime_control_operations_epoch_cols CHECK ((
-        ((kind = 'runtime_state_epoch'::text) AND (epoch_transition IS NOT NULL) AND state <> 'aborted')
-        OR ((kind <> 'runtime_state_epoch'::text) AND (epoch_transition IS NULL) AND (expected_marker_hash IS NULL) AND (recovery_evidence IS NULL) AND (release_evidence IS NULL) AND state <> 'awaiting_release')
-    )),
-    CONSTRAINT ck_runtime_control_operations_epoch_transition CHECK (
-        kind <> 'runtime_state_epoch'
-        OR public.runtime_control_epoch_transition_valid(epoch_transition, current_revision, next_revision)
-    ),
-    CONSTRAINT ck_runtime_control_operations_recovery_evidence_shape CHECK (
-        kind <> 'runtime_state_epoch'
-        OR public.runtime_control_recovery_evidence_valid(recovery_evidence, epoch_transition, current_revision, state)
-    ),
-    CONSTRAINT ck_runtime_control_operations_release_evidence_shape CHECK (
-        kind <> 'runtime_state_epoch'
-        OR public.runtime_control_release_evidence_valid(release_evidence, epoch_transition, state)
-    )
+    CONSTRAINT ck_runtime_control_operations_epoch_cols CHECK ((((kind = 'runtime_state_epoch'::text) AND (epoch_transition IS NOT NULL) AND (state <> 'aborted'::text)) OR ((kind <> 'runtime_state_epoch'::text) AND (epoch_transition IS NULL) AND (expected_marker_hash IS NULL) AND (recovery_evidence IS NULL) AND (release_evidence IS NULL) AND (state <> 'awaiting_release'::text)))),
+    CONSTRAINT ck_runtime_control_operations_epoch_transition CHECK (((kind <> 'runtime_state_epoch'::text) OR public.runtime_control_epoch_transition_valid(epoch_transition, current_revision, next_revision))),
+    CONSTRAINT ck_runtime_control_operations_recovery_evidence_shape CHECK (((kind <> 'runtime_state_epoch'::text) OR public.runtime_control_recovery_evidence_valid(recovery_evidence, epoch_transition, current_revision, state))),
+    CONSTRAINT ck_runtime_control_operations_release_evidence_shape CHECK (((kind <> 'runtime_state_epoch'::text) OR public.runtime_control_release_evidence_valid(release_evidence, epoch_transition, state))),
+    CONSTRAINT ck_runtime_control_operations_target CHECK ((((kind = 'channel_capacity'::text) AND (channel_id IS NOT NULL) AND (setting_key IS NULL)) OR ((kind = 'app_setting'::text) AND (channel_id IS NULL) AND (setting_key = ANY (ARRAY['gateway.request_rate_limit_defaults'::text, 'gateway.concurrency_defaults'::text, 'gateway.circuit_breaker'::text, 'gateway.routing_balance'::text]))) OR ((kind = 'runtime_state_epoch'::text) AND (channel_id IS NULL) AND (setting_key = 'gateway.runtime_state_epoch'::text)))),
+    CONSTRAINT runtime_control_operations_kind_check CHECK ((kind = ANY (ARRAY['channel_capacity'::text, 'app_setting'::text, 'runtime_state_epoch'::text]))),
+    CONSTRAINT runtime_control_operations_payload_hash_check CHECK ((payload_hash <> ''::text)),
+    CONSTRAINT runtime_control_operations_revision_check CHECK (((current_revision >= 0) AND (next_revision = (current_revision + 1)))),
+    CONSTRAINT runtime_control_operations_state_check CHECK ((state = ANY (ARRAY['preparing'::text, 'prepared'::text, 'db_committed'::text, 'awaiting_release'::text, 'committed'::text, 'aborted'::text]))),
+    CONSTRAINT runtime_control_operations_token_check CHECK ((token <> ''::text))
 );
 
 CREATE FUNCTION public.enforce_runtime_control_operation_transition() RETURNS trigger

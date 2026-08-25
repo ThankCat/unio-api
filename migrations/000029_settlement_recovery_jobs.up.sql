@@ -89,17 +89,23 @@ CREATE TABLE public.settlement_recovery_jobs (
     cost_base_model_price_id bigint,
     channel_cost_multiplier_id bigint,
     channel_recharge_factor_id bigint,
-    -- 重放事实：worker 必须按 job 原样恢复首次结算的终态与错误，不依赖默认值或成本来源 ID 推断。--
     request_final_status text NOT NULL,
     attempt_final_status text NOT NULL,
     settlement_error_code text NOT NULL,
     settlement_error_message text NOT NULL,
     settlement_internal_error_detail text NOT NULL,
-    -- 长上下文策略独立快照：售价与 Provider 成本都要按结算当时的门槛和倍率复算。--
     long_context_enabled boolean NOT NULL,
     long_context_threshold bigint,
     long_context_input_multiplier numeric(20,10),
     long_context_output_multiplier numeric(20,10),
+    requested_service_tier text,
+    actual_service_tier text,
+    settled_service_tier text,
+    upstream_service_tier text,
+    service_tier_resolution text,
+    model_price_service_tier_id bigint,
+    channel_price_service_tier_id bigint,
+    CONSTRAINT ck_settlement_recovery_actual_service_tier CHECK (((actual_service_tier IS NULL) OR (actual_service_tier = ANY (ARRAY['standard'::text, 'fast'::text])))),
     CONSTRAINT ck_settlement_recovery_jobs_attempt_count CHECK ((attempt_count <= max_attempts)),
     CONSTRAINT ck_settlement_recovery_jobs_attempt_final_status CHECK ((attempt_final_status = ANY (ARRAY['succeeded'::text, 'failed'::text, 'canceled'::text]))),
     CONSTRAINT ck_settlement_recovery_jobs_authorized_not_above_estimated CHECK ((authorized_amount <= estimated_amount)),
@@ -110,6 +116,10 @@ CREATE TABLE public.settlement_recovery_jobs (
     CONSTRAINT ck_settlement_recovery_jobs_non_known_values_zero CHECK ((((usage_uncached_input_tokens_state = 'known'::text) OR (usage_uncached_input_tokens = 0)) AND ((usage_cache_read_input_tokens_state = 'known'::text) OR (usage_cache_read_input_tokens = 0)) AND ((usage_cache_write_5m_input_tokens_state = 'known'::text) OR (usage_cache_write_5m_input_tokens = 0)) AND ((usage_cache_write_1h_input_tokens_state = 'known'::text) OR (usage_cache_write_1h_input_tokens = 0)) AND ((usage_cache_write_30m_input_tokens_state = 'known'::text) OR (usage_cache_write_30m_input_tokens = 0)) AND ((usage_output_tokens_total_state = 'known'::text) OR (usage_output_tokens_total = 0)) AND ((usage_reasoning_output_tokens_state = 'known'::text) OR (usage_reasoning_output_tokens = 0)))),
     CONSTRAINT ck_settlement_recovery_jobs_reasoning_not_above_output CHECK (((usage_reasoning_output_tokens_state <> 'known'::text) OR (usage_output_tokens_total_state <> 'known'::text) OR (usage_reasoning_output_tokens <= usage_output_tokens_total))),
     CONSTRAINT ck_settlement_recovery_jobs_request_final_status CHECK ((request_final_status = ANY (ARRAY['succeeded'::text, 'failed'::text, 'canceled'::text]))),
+    CONSTRAINT ck_settlement_recovery_requested_service_tier CHECK (((requested_service_tier IS NULL) OR (requested_service_tier = ANY (ARRAY['standard'::text, 'fast'::text])))),
+    CONSTRAINT ck_settlement_recovery_service_tier_resolution CHECK (((service_tier_resolution IS NULL) OR (service_tier_resolution = ANY (ARRAY['upstream_response'::text, 'standard_fallback_missing'::text, 'standard_fallback_unknown'::text, 'standard_fallback_fast_price_missing'::text])))),
+    CONSTRAINT ck_settlement_recovery_settled_service_tier CHECK (((settled_service_tier IS NULL) OR (settled_service_tier = ANY (ARRAY['standard'::text, 'fast'::text])))),
+    CONSTRAINT ck_settlement_recovery_upstream_service_tier CHECK (((upstream_service_tier IS NULL) OR (btrim(upstream_service_tier) <> ''::text))),
     CONSTRAINT settlement_recovery_jobs_attempt_count_check CHECK ((attempt_count >= 0)),
     CONSTRAINT settlement_recovery_jobs_authorized_amount_check CHECK ((authorized_amount > (0)::numeric)),
     CONSTRAINT settlement_recovery_jobs_cache_read_input_price_check CHECK (((cache_read_input_price IS NULL) OR (cache_read_input_price >= (0)::numeric))),
@@ -236,9 +246,9 @@ ALTER TABLE ONLY public.settlement_recovery_jobs
 -- 从 ~4 分钟拉长到 ~1 小时级，覆盖 DB/网络短时故障，避免过早 dead 导致请求被收口为 failed + 平台白白承担风险敞口。
 -- 新 job 由应用层显式写入配置值（WORKER_SETTLEMENT_RECOVERY_MAX_ATTEMPTS），此默认值仅作 schema 兜底与文档对齐。
 -- [000071_add_price_ratio_snapshots]
--- 为「客户售价快照」与「结算补偿任务」补记结算当时使用的线路倍率（DEC-026：客户售价 = 模型基准价 × 线路倍率）。
+-- 为「客户售价快照」与「结算补偿任务」补记结算当时使用的售价倍率。
 --
--- 背景：此前请求列表/详情的「线路倍率」是实时读 routes.price_ratio，「模型基准价」是用 售价 ÷ 倍率 倒推。
+-- 背景：倍率若实时读设置、基准价用「售价 ÷ 倍率」倒推，改一次倍率就会让历史账单显示成新口径。
 -- 管理员改倍率后，历史请求会显示当前倍率（而非结算当时的倍率），倒推出的基准价随之失真。
 -- 快照结算当时的倍率后，历史请求恒显示当时真实倍率、基准价倒推也随之稳定，不再被后续改倍率污染。
 --

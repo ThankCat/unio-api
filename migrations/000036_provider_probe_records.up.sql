@@ -11,34 +11,34 @@ CREATE TABLE public.provider_probe_records (
     source text NOT NULL,
     upstream_model text NOT NULL,
     success boolean NOT NULL,
-    http_status integer NOT NULL DEFAULT 0,
+    http_status integer DEFAULT 0 NOT NULL,
     error_code text,
     message text,
     latency_ms bigint,
     usage_source text,
     usage_facts jsonb,
-    usage_reliable boolean NOT NULL DEFAULT false,
+    usage_reliable boolean DEFAULT false NOT NULL,
     cost_amount numeric(20,10),
     currency text,
     formula_version text,
     idempotency_key text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT provider_probe_records_id_pkey PRIMARY KEY (id),
-    CONSTRAINT provider_probe_records_source_check CHECK (btrim(source) <> ''),
-    CONSTRAINT provider_probe_records_model_check CHECK (btrim(upstream_model) <> ''),
-    CONSTRAINT provider_probe_records_status_check CHECK (http_status >= 0 AND http_status <= 599),
-    CONSTRAINT provider_probe_records_latency_check CHECK (latency_ms IS NULL OR latency_ms >= 0),
-    CONSTRAINT provider_probe_records_usage_check CHECK (
-        (usage_reliable = false)
-        OR (usage_reliable = true AND usage_source IS NOT NULL AND usage_facts IS NOT NULL AND cost_amount IS NOT NULL AND currency IS NOT NULL)
-    ),
-    CONSTRAINT provider_probe_records_cost_check CHECK (cost_amount IS NULL OR cost_amount >= 0),
-    CONSTRAINT provider_probe_records_idempotency_key_check CHECK (btrim(idempotency_key) <> '')
+    CONSTRAINT provider_probe_records_cost_check CHECK (((cost_amount IS NULL) OR (cost_amount >= (0)::numeric))),
+    CONSTRAINT provider_probe_records_cost_details_check CHECK ((((cost_amount IS NULL) AND (currency IS NULL) AND (formula_version IS NULL)) OR ((cost_amount IS NOT NULL) AND (currency IS NOT NULL) AND (btrim(currency) <> ''::text) AND (formula_version IS NOT NULL) AND (btrim(formula_version) <> ''::text)))),
+    CONSTRAINT provider_probe_records_idempotency_key_check CHECK ((btrim(idempotency_key) <> ''::text)),
+    CONSTRAINT provider_probe_records_latency_check CHECK (((latency_ms IS NULL) OR (latency_ms >= 0))),
+    CONSTRAINT provider_probe_records_model_check CHECK ((btrim(upstream_model) <> ''::text)),
+    CONSTRAINT provider_probe_records_source_check CHECK ((btrim(source) <> ''::text)),
+    CONSTRAINT provider_probe_records_status_check CHECK (((http_status >= 0) AND (http_status <= 599))),
+    CONSTRAINT provider_probe_records_usage_check CHECK (((usage_reliable = false) OR ((usage_source IS NOT NULL) AND (usage_facts IS NOT NULL))))
 );
 
 ALTER SEQUENCE public.provider_probe_records_id_seq OWNED BY public.provider_probe_records.id;
 ALTER TABLE ONLY public.provider_probe_records
     ALTER COLUMN id SET DEFAULT nextval('public.provider_probe_records_id_seq'::regclass);
+ALTER TABLE ONLY public.provider_probe_records
+    ADD CONSTRAINT provider_probe_records_id_pkey PRIMARY KEY (id);
+
 ALTER TABLE ONLY public.provider_probe_records
     ADD CONSTRAINT provider_probe_records_idempotency_key_key UNIQUE (idempotency_key);
 ALTER TABLE ONLY public.provider_probe_records

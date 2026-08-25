@@ -104,7 +104,7 @@ JOIN channels c ON c.id = cm.channel_id
 JOIN providers p ON p.id = c.provider_id
 JOIN LATERAL (
     -- base: 模型当前生效的基准价（DEC-026/DEC-031，售价与成本的唯一基数）。
-    -- 客户售价 = base × 线路倍率；渠道真实成本（倍率路径）= base × 价格倍率 × 充值倍率。
+    -- 客户售价 = base × 全局售价倍率；渠道真实成本（倍率路径）= base × 价格倍率 × 充值倍率。
     SELECT mp.id, mp.currency, mp.pricing_unit,
         mp.uncached_input_price, mp.cache_read_input_price,
         mp.cache_write_5m_input_price, mp.cache_write_1h_input_price,
@@ -272,7 +272,7 @@ type FindModelCandidatesRow struct {
 }
 
 // FindModelCandidates 按请求模型与入口协议查找可用 channel 候选。
-// 供给的根是 Model：能服务该模型的渠道即候选，不再经过线路渠道池。
+// 供给的根是 Model：能服务该模型的渠道即候选。
 //  1. 供给过滤：model/channel/provider/binding 四级 enabled + 凭据有效 + 协议匹配；
 //     协议用 protocols 数组包含判定，一条渠道可同时服务 openai 与 anthropic；
 //  2. 已定价过滤：候选必须有 model_prices 基准价（base，INNER JOIN 保证），且渠道成本可解析——

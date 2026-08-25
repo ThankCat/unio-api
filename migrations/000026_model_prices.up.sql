@@ -1,6 +1,6 @@
 -- Model price 是某个 Unio 模型的「基准客户售价」（DEC-026 倍率定价）。
--- 客户最终售价 = 本表基准售价 × routes.price_ratio（线路倍率）；售价不再挂渠道，渠道只记成本。
--- 结算审计：price snapshot 记录命中的 model_prices.id + 当时线路倍率，历史账单可按原事实复算。
+-- 客户最终售价 = 本表 sale_* 绝对售价，或基准售价 × 全局售价倍率；售价不挂渠道，渠道只记成本。
+-- 结算审计：price snapshot 记录命中的 model_prices.id + 当时倍率，历史账单可按原事实复算。
 -- btree_gist 让 exclusion constraint 可同时比较等值列与时间范围重叠（000001 已建，幂等保证）。
 CREATE SEQUENCE public.model_prices_id_seq
     START WITH 1
@@ -37,6 +37,16 @@ CREATE TABLE public.model_prices (
     long_context_threshold bigint,
     long_context_input_multiplier numeric(20,10),
     long_context_output_multiplier numeric(20,10),
+    -- sale_*: 模型对外绝对售价；整组为空时回退「基准价 × 全局售价倍率」。--
+    sale_uncached_input_price numeric(20,10),
+    sale_cache_read_input_price numeric(20,10),
+    sale_cache_write_5m_input_price numeric(20,10),
+    sale_cache_write_1h_input_price numeric(20,10),
+    sale_cache_write_30m_input_price numeric(20,10),
+    sale_output_price numeric(20,10),
+    sale_reasoning_output_price numeric(20,10),
+    CONSTRAINT ck_model_prices_sale_all_or_none CHECK ((((sale_uncached_input_price IS NULL) AND (sale_cache_read_input_price IS NULL) AND (sale_cache_write_5m_input_price IS NULL) AND (sale_cache_write_1h_input_price IS NULL) AND (sale_cache_write_30m_input_price IS NULL) AND (sale_output_price IS NULL) AND (sale_reasoning_output_price IS NULL)) OR ((sale_uncached_input_price IS NOT NULL) AND (sale_output_price IS NOT NULL)))),
+    CONSTRAINT ck_model_prices_sale_non_negative CHECK ((((sale_uncached_input_price IS NULL) OR (sale_uncached_input_price >= (0)::numeric)) AND ((sale_cache_read_input_price IS NULL) OR (sale_cache_read_input_price >= (0)::numeric)) AND ((sale_cache_write_5m_input_price IS NULL) OR (sale_cache_write_5m_input_price >= (0)::numeric)) AND ((sale_cache_write_1h_input_price IS NULL) OR (sale_cache_write_1h_input_price >= (0)::numeric)) AND ((sale_cache_write_30m_input_price IS NULL) OR (sale_cache_write_30m_input_price >= (0)::numeric)) AND ((sale_output_price IS NULL) OR (sale_output_price >= (0)::numeric)) AND ((sale_reasoning_output_price IS NULL) OR (sale_reasoning_output_price >= (0)::numeric)))),
     CONSTRAINT ck_model_prices_window CHECK (((effective_to IS NULL) OR (effective_to > effective_from))),
     CONSTRAINT ck_model_prices_long_context CHECK (
         (NOT long_context_enabled)
@@ -62,6 +72,8 @@ CREATE TABLE public.model_prices (
 );
 
 ALTER SEQUENCE public.model_prices_id_seq OWNED BY public.model_prices.id;
+
+COMMENT ON COLUMN public.model_prices.sale_uncached_input_price IS '模型对外绝对售价；整组为空时回退「基准价 × 全局售价倍率」。可选分项为空按 billing fallback 归一。';
 
 ALTER TABLE ONLY public.model_prices ALTER COLUMN id SET DEFAULT nextval('public.model_prices_id_seq'::regclass);
 
@@ -95,3 +107,10 @@ ALTER TABLE ONLY public.model_prices
 -- 长上下文阶梯列与 ck_model_prices_long_context 直接建表（启用时 threshold/multipliers 必填）。
 -- DEC-031：model_prices 同时作为售价与成本基数（真实成本 = 本表 × 渠道倍率/充值倍率或 channel_prices 覆盖）。
 -- Migration renumbered after merging Provider Origin into Provider.
+-- [sale_* / 绝对售价]
+-- 与成本侧对称的两级解析：客户售价 = 绝对售价（sale_* 非空时）或 基准价 × 全局售价倍率；
+-- 渠道成本 = channel_prices 绝对覆盖 或 基准价 × 成本倍率 × 充值倍率。
+-- sale_* 与基准价共享同一时间窗行，改售价与改基准价一样通过新开窗口完成。
+--
+-- 绝对售价必须整组给齐或整组留空：只填一半会让「这项用绝对价、其余用倍率」这种
+-- 混合语义进入计费，既难解释也难校验。所以 all_or_none 约束只认两种状态。

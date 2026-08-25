@@ -31,7 +31,6 @@ CREATE TABLE public.api_keys (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     spend_limit numeric(20,10),
     spent_total numeric(20,10) DEFAULT 0 NOT NULL,
-    route_id bigint NOT NULL,
     user_id bigint NOT NULL,
     CONSTRAINT api_keys_spend_limit_check CHECK (((spend_limit IS NULL) OR (spend_limit >= (0)::numeric))),
     CONSTRAINT api_keys_spent_total_check CHECK ((spent_total >= (0)::numeric))
@@ -49,12 +48,7 @@ ALTER TABLE ONLY public.api_keys
 
 CREATE INDEX idx_api_keys_key_prefix ON public.api_keys USING btree (key_prefix);
 
-CREATE INDEX idx_api_keys_route_id ON public.api_keys USING btree (route_id) WHERE (route_id IS NOT NULL);
-
 CREATE INDEX idx_api_keys_user_id ON public.api_keys USING btree (user_id);
-
-ALTER TABLE ONLY public.api_keys
-    ADD CONSTRAINT api_keys_route_id_fkey FOREIGN KEY (route_id) REFERENCES public.routes(id);
 
 ALTER TABLE ONLY public.api_keys
     ADD CONSTRAINT api_keys_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
@@ -66,18 +60,9 @@ ALTER TABLE ONLY public.api_keys
 -- API Key 费用上限：生命周期累计封顶（M7）。
 -- 口径同 OpenRouter：每把 Key 设一个累计花费上限，spent_total 达到 spend_limit 即停用该 Key。
 -- 假设单币种部署（与计费币种一致，实践为 USD）；spent_total 在 settlement capture 时累加客户实扣金额。
--- [000034_add_route_bindings]
--- 阶段 15：API Key 与项目绑定线路。
--- 线路解析优先级：api_keys.route_id ?? projects.default_route_id ?? 内置「经济」。
---
--- api_keys.route_id：该 Key 选定的线路，NULL 表示回落项目默认 / 内置经济。
--- [000052_add_api_keys_rate_limits]
--- 曾为 API Key 增加过 rpm_limit / tpm_limit / rpd_limit 三列（P2-8）。
--- DEC-027 之后限流全部归线路、按 (线路, 用户) 计数，这三列再没有被写入或读取过，已随本次改造删除。
--- [000058_collapse_projects_into_users]
--- 折叠 user → project → api_key 三级为 user → api_key 两级，彻底移除 projects 概念。
--- API Key、模型策略与请求归属全部直接挂在用户上。
--- 同时把线路改为 API Key 必填：彻底移除「用户/项目默认线路」回落，线路只认 api_keys.route_id。
--- 数据无需保留，但仍写正确回填，保证存量库平滑迁移。
---
--- 1. api_keys.project_id → api_keys.user_id（API Key 直接归属用户）。
+-- [限流不在 Key 上]
+-- 曾为 API Key 设过 rpm_limit / tpm_limit / rpd_limit 三列，现已移除：
+-- 配额挂在用户上（users 表三列），同一用户的多把 Key 共享额度，
+-- 否则客户多建几把 Key 就能绕过限流。
+-- [归属层级]
+-- user → api_key 两级，没有中间的项目层：API Key、请求归属都直接挂用户。
