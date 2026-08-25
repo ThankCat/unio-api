@@ -452,7 +452,7 @@ func (s *Service) Overview(ctx context.Context, params OverviewParams) (Overview
 	}, nil
 }
 
-// Groups 返回按模型/密钥/线路分组的用量排行，按消费降序。
+// Groups 返回按模型/密钥分组的用量排行，按消费降序。
 func (s *Service) Groups(ctx context.Context, params GroupParams) ([]GroupItem, *consoleservice.Error) {
 	from, to := &params.From, &params.To
 	switch params.By {

@@ -1,6 +1,6 @@
 -- Console 用量统计：只查当前用户、且账本 USD 净扣费大于 0 的请求。
 -- 口径与 console/requests.sql 一致，只补两件请求中心做不到的事：
--- 按时间分桶的趋势，以及按模型/密钥/线路的分组排行。
+-- 按时间分桶的趋势，以及按模型/密钥的分组排行。
 --
 -- 账本一律用 JOIN LATERAL + idx_ledger_entries_request_record_id 做索引点查，
 -- 不要改回「charges CTE 再 JOIN windowed」：两个 CTE 的行数在 generic plan 下都会被

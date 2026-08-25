@@ -222,17 +222,17 @@ func circuitBreakerDefinition() Definition {
 	}
 }
 
-// ---- 线路/渠道限流默认 ----
+// ---- 请求入口限流默认 ----
 
-// RateLimitDefaultsSettings 是线路使用的 RPM/RPD 默认。
-// 为 0 表示该维度默认不限；具体线路可在 routes 行覆盖。
+// RateLimitDefaultsSettings 是请求入口的 RPM/RPD 默认。
+// 为 0 表示该维度默认不限；单个用户可在 users 行覆盖。
 // 这里没有 TPM：Unio 不限制 TPM，token 吞吐只做观测（§8）。
 type RateLimitDefaultsSettings struct {
 	RPM int64
 	RPD int64
 }
 
-// DefaultRateLimitDefaultsSettings 按 DEC-053/DEC-054 默认两维均不限；显式线路限额仍可覆盖。
+// DefaultRateLimitDefaultsSettings 默认两维均不限；用户级显式限额仍可覆盖。
 func DefaultRateLimitDefaultsSettings() RateLimitDefaultsSettings {
 	return RateLimitDefaultsSettings{RPM: 0, RPD: 0}
 }
@@ -267,8 +267,8 @@ func requestRateLimitDefaultsDefinition() Definition {
 	return Definition{
 		Key:      GatewayRequestRateLimitDefaultsKey,
 		Category: "gateway",
-		Label:    "线路默认限流(RPM/RPD)",
-		Description: "线路未单独配置时，按(线路,用户)生效的默认上限，0=该维度不限。" +
+		Label:    "请求默认限流(RPM/RPD)",
+		Description: "用户未单独配置时按用户生效的默认上限，0=该维度不限。" +
 			"Redis revisioned control 是执行权威；Redis 或 BreakerStore 故障固定拒绝准入，不提供绕过开关。",
 		HotReload: true,
 		Default:   encodeRateLimitDefaultsSettings(DefaultRateLimitDefaultsSettings()),
@@ -462,7 +462,7 @@ func GatewayCredential401Threshold(ctx context.Context, store *SettingsStore) in
 // ---- 在途并发全局默认（DEC-029） ----
 
 // ConcurrencyDefaultsSettings 是两级在途并发上限的全局默认（0=该级不限）。
-// KeyLimit 作用于「线路+用户」（ingress 中间件，多余并发立即 429）；
+// KeyLimit 作用于用户（ingress 中间件，多余并发立即 429）；
 // ChannelLimit 作用于渠道（attempt runner，满员跳过该候选 fallback）。渠道行 concurrency_limit 可覆盖。
 type ConcurrencyDefaultsSettings struct {
 	KeyLimit     int64
@@ -506,7 +506,7 @@ func concurrencyDefaultsDefinition() Definition {
 		Key:      GatewayConcurrencyDefaultsKey,
 		Category: "gateway",
 		Label:    "在途并发全局默认",
-		Description: "「同时进行中」请求数上限（含整段流式传输），0=不限。key_limit 作用于线路+用户" +
+		Description: "「同时进行中」请求数上限（含整段流式传输），0=不限。key_limit 作用于用户" +
 			"（ingress，超出立即 429，专防客户端自动重试风暴堆积慢请求）；channel_limit 作用于渠道" +
 			"（满员跳过该候选 fallback），渠道行 concurrency_limit 可覆盖。进程内计数，多实例各自独立。",
 		HotReload: true,
@@ -645,8 +645,8 @@ func routingBalanceDefinition() Definition {
 	return Definition{
 		Key:      GatewayRoutingBalanceKey,
 		Category: "gateway",
-		Label:    "线路负载均衡",
-		Description: "balanced 在线路显式渠道池内按成本、渠道并发容量、TTFT、错误率与 Priority 五项客观分确定性排序。" +
+		Label:    "渠道负载均衡",
+		Description: "在该模型的可用渠道之间按成本、渠道并发容量、TTFT、错误率与 Priority 五项客观分确定性排序。" +
 			"五项百分比权重之和必须为 100；TTFT 与错误率无样本时对应指标分为 100。",
 		HotReload: true,
 		Default:   encodeRoutingBalanceSettings(DefaultRoutingBalanceSettings()),
@@ -714,7 +714,7 @@ func routingStickyDefinition() Definition {
 		Label:    "会话粘性路由(sticky)",
 		Description: "同会话请求钉住上次成功渠道以保上游 prompt cache（OpenAI prompt_cache_key / " +
 			"Claude Code 会话头）。enabled_default 是渠道未单独配置时的默认开关；读取命中本身不续期，" +
-			"只有原绑定渠道完整成功后把 ttl_ms 重新延长；到期后回落线路策略排序。",
+			"只有原绑定渠道完整成功后把 ttl_ms 重新延长；到期后回落负载均衡排序。",
 		HotReload: true,
 		Default:   encodeRoutingStickySettings(DefaultRoutingStickySettings()),
 		Validate: func(raw json.RawMessage) error {

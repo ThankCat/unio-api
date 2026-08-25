@@ -151,7 +151,7 @@ type FilterOption struct {
 	Name string `json:"name"`
 }
 
-// Filters 是线路目录全量、当前用户的 API Key，以及扣费请求上出现过的端点和类型。
+// Filters 是当前用户的 API Key，以及扣费请求上出现过的端点和类型。
 type Filters struct {
 	APIKeys     []FilterOption
 	Endpoints   []string
@@ -317,7 +317,7 @@ func (s *Service) compare(
 	}, series, nil
 }
 
-// Filters 返回线路目录全量、当前用户的 API Key，以及扣费请求上出现过的端点和类型。
+// Filters 返回当前用户的 API Key，以及扣费请求上出现过的端点和类型。
 func (s *Service) Filters(ctx context.Context, userID int64) (Filters, *consoleservice.Error) {
 	keys, err := s.store.ListConsoleFilterAPIKeys(ctx, userID)
 	if err != nil {

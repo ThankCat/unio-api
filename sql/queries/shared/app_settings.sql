@@ -20,7 +20,7 @@ WHERE key = $1
 FOR UPDATE;
 
 -- name: GetGatewayAdmissionControlRevisions :one
--- GetGatewayAdmissionControlRevisions 在同一 PostgreSQL statement snapshot 中读取完整性 epoch、线路入口限流与全局并发 revision；任一必需行缺失时返回 no rows。
+-- GetGatewayAdmissionControlRevisions 在同一 PostgreSQL statement snapshot 中读取完整性 epoch、请求入口限流与全局并发 revision；任一必需行缺失时返回 no rows。
 SELECT
     epoch.value AS runtime_state_epoch_value,
     epoch.revision AS runtime_state_epoch_revision,
