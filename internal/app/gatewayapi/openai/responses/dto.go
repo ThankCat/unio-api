@@ -290,14 +290,20 @@ type ResponseOutputItem struct {
 	Input string `json:"input,omitempty"`
 }
 
-// MarshalJSON 对 message item 始终输出 content 字段（空时为 []）。
+// MarshalJSON 对 message 与 reasoning item 强制输出结构性空数组字段。
 //
-// Codex（responses 解析）的 ResponseItem::Message 把 content 当作必填，缺省会导致 output_item.added
-// 反序列化失败、item 不被登记，后续 output_text.delta 报 "OutputTextDelta without active item" 并丢字。
-// 仅对 message 强制；reasoning/function_call 仍按 omitempty（与上游 OpenAI 形状一致）。
+// Codex（responses 解析）把这些字段当作必填，缺省会导致 output_item.added 反序列化失败、
+// item 不被登记，后续增量事件报 "*Delta without active item" 并丢字：
+//   - message 需要 content（v0.142.3 实测：缺省时报 OutputTextDelta without active item）；
+//   - reasoning 需要 content 与 summary（v0.147 实测：缺省时报 ReasoningRawContentDelta /
+//     ReasoningSummaryDelta without active item；真实上游 reasoning item 恒带 content:[] 与 summary:[]）。
+//
+// reasoning item 不被登记的连锁后果是客户端不再回传 encrypted_content，桥接因此无法回灌
+// reasoning_content，chat-only 上游（DeepSeek）会以 400 拒绝后续工具调用轮次。
 func (i ResponseOutputItem) MarshalJSON() ([]byte, error) {
 	type alias ResponseOutputItem
-	if i.Type == "message" {
+	switch i.Type {
+	case "message":
 		content := i.Content
 		if content == nil {
 			content = []ResponseOutputContent{}
@@ -306,6 +312,20 @@ func (i ResponseOutputItem) MarshalJSON() ([]byte, error) {
 			alias
 			Content []ResponseOutputContent `json:"content"`
 		}{alias(i), content})
+	case "reasoning":
+		content := i.Content
+		if content == nil {
+			content = []ResponseOutputContent{}
+		}
+		summary := i.Summary
+		if summary == nil {
+			summary = []ResponseOutputContent{}
+		}
+		return json.Marshal(struct {
+			alias
+			Content []ResponseOutputContent `json:"content"`
+			Summary []ResponseOutputContent `json:"summary"`
+		}{alias(i), content, summary})
 	}
 	return json.Marshal(alias(i))
 }

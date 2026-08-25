@@ -139,6 +139,39 @@
    - `?beta=true` query 不转发上游：上游 URL 由 `BuildUpstreamURL` 固定拼接，
      Anthropic 官方渠道以 `anthropic-beta` 头为准，该 query 不影响能力协商。
 
+## 端到端验证暴露并修复的三个回归（2026-08-25）
+
+以真实 codex CLI 打本地 gateway、经 DeepSeek chat-only 渠道跑完整多轮工具会话后，
+暴露出三个单测与半链路验证都抓不到的缺陷。三者串联导致 Codex 在桥接渠道上
+**第二轮起必定 400**，`apply_patch` 无从执行。均已修复并补回归测试。
+
+1. **reasoning item 缺结构性空字段**（`internal/app/gatewayapi/openai/responses/dto.go`）
+   真实上游的 reasoning item 恒带 `content:[]` 与 `summary:[]`，而两字段都标了 `omitempty`，
+   空值时整个被省略。Codex 反序列化失败 → item 不被登记 → 增量事件报
+   `ReasoningRawContentDelta / ReasoningSummaryDelta without active item` → 客户端不再回传
+   `encrypted_content` → 桥接无法回灌 `reasoning_content` → 上游 400。
+   已在 `MarshalJSON` 对 reasoning 强制输出两字段（与既有 message 的处理同源）。
+
+2. **思维链承载形态与客户端索取形态不符**（`responses_stream.go` / `responses_response_map.go`）
+   Codex 只发 `reasoning:{"summary":"auto"}` 与 `include:["reasoning.encrypted_content"]`，
+   从未索取 raw reasoning content；桥接却按 raw 形态下发
+   `content_part.added(reasoning_text)` + `reasoning_text.delta`。新增
+   `requestWantsReasoningSummary`，按索取形态在 summary（`reasoning_summary_part.added` +
+   `reasoning_summary_text.delta/.done`，走 `summary_index`）与 raw 两套事件间分流，
+   终态 item 的承载字段随之一致。BRIDGE §6「对外暴露 DeepSeek 原始 CoT」的结论不变，
+   仅改承载字段与事件名。
+
+3. **同轮 assistant 正文与 tool_call 被拆成两条消息**（`responses_chat_map.go`）
+   Chat 协议中一条 assistant 消息可同时带 content、`reasoning_content` 与 `tool_calls`
+   （实测 DeepSeek 单次响应三者同出），Responses 侧却拆成 message + function_call 两个 item。
+   回传时若不合并，会多出一条不带 `reasoning_content` 的 assistant，thinking 模式上游
+   以 400 拒绝整轮。已引入 `pendingAssistantIdx` 合并窗口；另修正 Codex v0.147 在 reasoning
+   与 function_call 之间插入 `phase=commentary` assistant 消息时错误清空暂存思维链的问题
+   （v0.130 下 reasoning 紧邻 function_call，故从未暴露）。
+
+修复后端到端复测：三次上游请求全部 200，Codex 完成「读文件 → apply_patch → 读回验证 → 总结」
+完整多轮，目标文件被正确修改，客户端无任何 `without active item` 报错。
+
 ## 已核对确认无缺口
 
 以下项已用本次抓包逐项比对现有实现，结论是当前实现正确，不列入改造范围，
@@ -202,6 +235,13 @@ P2-1a 与 P1 实测结果（2026-08-24）：
 8. `go test ./...` 退出码 0，97 个包通过、0 个 FAIL；`gofmt` 无输出。
 9. migration `000051` 已应用到本地 Dev 库并校验三列就位；`sqlc generate` 使用 v1.31.1，
    与 DEVELOPMENT.md 记录一致。
+10. 完整链路验证（2026-08-25）：临时建 DeepSeek chat-only 渠道并挂进 OpenAI 路由，用真实
+    codex CLI 打本地 gateway 跑多轮工具会话。P1 审计字段确认落库（同会话多请求共享
+    `client_thread_id`）；`apply_patch` 经桥接在 DeepSeek 上真实改写目标文件。
+    验证后按外键依赖清理全部 e2e 数据（provider / channel / model / 定价 / 路由绑定 /
+    请求审计链），并复核原有 6 个渠道与用户余额未受影响。
+11. 复测后 `go test ./...` 退出码 0、97 包 0 失败；真实上游回归
+    `TestCustomToolBridgeAgainstRealUpstream` 通过；`gofmt` 与 `git diff --check` 均无问题。
 
 ## 约束
 

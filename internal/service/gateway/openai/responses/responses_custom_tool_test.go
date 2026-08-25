@@ -303,6 +303,43 @@ func TestReasoningSurvivesCommentaryBeforeToolCall(t *testing.T) {
 	}
 }
 
+// TestAssistantTextMergesWithToolCall 锁住端到端实测暴露的回归：Responses 把同一轮的
+// 模型正文与工具调用拆成 message + function_call 两个 item，回传时必须合回一条 assistant
+// 消息。若拆成两条，就会多出一条不带 reasoning_content 的 assistant，thinking 模式的
+// chat-only 上游（DeepSeek）以 400 拒绝整轮。
+func TestAssistantTextMergesWithToolCall(t *testing.T) {
+	carrier := encodeReasoningCarrier("check the file first")
+	chat, _ := mapBody(t, `{
+		"model": "gpt-5.4-mini",
+		"input": [
+			{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "add multiply"}]},
+			{"type": "reasoning", "encrypted_content": `+mustJSONString(t, carrier)+`},
+			{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Let me check calc.py."}]},
+			{"type": "function_call", "call_id": "call_1", "name": "exec_command", "arguments": "{\"cmd\":\"cat calc.py\"}"}
+		]
+	}`)
+
+	var assistants []chatcompletionsadapter.ChatMessage
+	for _, m := range chat.Messages {
+		if m.Role == roleAssistant {
+			assistants = append(assistants, m)
+		}
+	}
+	if len(assistants) != 1 {
+		t.Fatalf("同一轮的正文与 tool_call 必须合并为一条 assistant，实际 %d 条", len(assistants))
+	}
+	merged := assistants[0]
+	if merged.ContentString() != "Let me check calc.py." {
+		t.Errorf("合并后丢失正文: %q", merged.ContentString())
+	}
+	if len(merged.ToolCalls) != 1 || merged.ToolCalls[0].Function.Name != "exec_command" {
+		t.Errorf("合并后丢失 tool_call: %+v", merged.ToolCalls)
+	}
+	if merged.ReasoningContent == nil || *merged.ReasoningContent != "check the file first" {
+		t.Errorf("合并后未挂上该轮思维链: %v", merged.ReasoningContent)
+	}
+}
+
 // TestReasoningDroppedOnNewUserTurn 验证换轮语义未被上一条修复破坏：
 // 新的 user 输入代表新一轮，此前暂存的思维链必须丢弃。
 func TestReasoningDroppedOnNewUserTurn(t *testing.T) {

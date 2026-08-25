@@ -153,6 +153,11 @@ func buildChatMessages(req gatewayapi.ResponsesRequest) []chatcompletionsadapter
 	// 轮次，后续请求必须完整回传该轮 reasoning_content，否则上游 400；非工具轮的 reasoning 不需要
 	// （上游忽略），由后续非 function_call 分支清空丢弃。
 	pendingReasoning := ""
+	// pendingAssistantIdx 指向同一轮里模型已产出的 assistant 正文消息。Chat 协议中一条 assistant
+	// 消息可同时携带 content、reasoning_content 与 tool_calls，Responses 侧却把它拆成 message 与
+	// function_call 两个 item；回传时必须合回一条，否则会多出一条不带 reasoning_content 的
+	// assistant，thinking 模式的上游（DeepSeek）会以 400 拒绝整轮。
+	pendingAssistantIdx := -1
 	for _, item := range req.Input.Items {
 		itemType := item.Type
 		if itemType == "" {
@@ -164,12 +169,16 @@ func buildChatMessages(req gatewayapi.ResponsesRequest) []chatcompletionsadapter
 			pendingToolCallIdx = -1
 			// assistant 消息与随后的 tool_call 属同一轮：Codex v0.147 会在 reasoning 与
 			// function_call 之间插入 phase=commentary 的 assistant 消息，若在此清空暂存思维链，
-			// 该轮 tool_call 就会缺 reasoning_content，DeepSeek 直接 400。只有新的
-			// user/developer/system 输入才代表换轮，此时才丢弃。
+			// 该轮 tool_call 就会缺 reasoning_content。只有新的 user/developer/system 输入
+			// 才代表换轮，此时才丢弃暂存并结束合并窗口。
 			if item.Role != roleAssistant {
 				pendingReasoning = ""
+				pendingAssistantIdx = -1
 			}
 			msgs = append(msgs, buildMessageItem(item))
+			if item.Role == roleAssistant {
+				pendingAssistantIdx = len(msgs) - 1
+			}
 
 		case itemTypeFunctionCall, itemTypeCustomToolCall:
 			// 两者在 Chat 侧同为 function tool_call，只有参数承载不同：custom 的 freeform
@@ -182,9 +191,18 @@ func buildChatMessages(req gatewayapi.ResponsesRequest) []chatcompletionsadapter
 					Arguments: toolCallArguments(itemType, item),
 				},
 			}
-			if pendingToolCallIdx >= 0 {
+			switch {
+			case pendingToolCallIdx >= 0:
 				msgs[pendingToolCallIdx].ToolCalls = append(msgs[pendingToolCallIdx].ToolCalls, toolCall)
-			} else {
+			case pendingAssistantIdx >= 0:
+				// 合并回同一轮的 assistant 正文消息，并把该轮思维链挂上去。
+				msgs[pendingAssistantIdx].ToolCalls = append(msgs[pendingAssistantIdx].ToolCalls, toolCall)
+				if pendingReasoning != "" && msgs[pendingAssistantIdx].ReasoningContent == nil {
+					reasoning := pendingReasoning
+					msgs[pendingAssistantIdx].ReasoningContent = &reasoning
+				}
+				pendingToolCallIdx = pendingAssistantIdx
+			default:
 				assistant := chatcompletionsadapter.ChatMessage{Role: "assistant", ToolCalls: []chatcompletionsadapter.ChatToolCall{toolCall}}
 				if pendingReasoning != "" {
 					reasoning := pendingReasoning
@@ -197,6 +215,7 @@ func buildChatMessages(req gatewayapi.ResponsesRequest) []chatcompletionsadapter
 
 		case itemTypeFunctionCallOutput, itemTypeCustomToolCallOutput:
 			pendingToolCallIdx = -1
+			pendingAssistantIdx = -1
 			pendingReasoning = ""
 			msgs = append(msgs, chatcompletionsadapter.ChatMessage{
 				Role:       "tool",
@@ -213,10 +232,12 @@ func buildChatMessages(req gatewayapi.ResponsesRequest) []chatcompletionsadapter
 		case itemTypeItemReference, itemTypeCompaction:
 			// 无状态第一版：引用 server-side 历史 item / compaction 历史不还原（GAP-11-001）。
 			pendingToolCallIdx = -1
+			pendingAssistantIdx = -1
 			pendingReasoning = ""
 
 		default:
 			pendingToolCallIdx = -1
+			pendingAssistantIdx = -1
 			pendingReasoning = ""
 		}
 	}
