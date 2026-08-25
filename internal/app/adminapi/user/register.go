@@ -25,6 +25,8 @@ func Register(r chi.Router, d Deps) {
 	if d.Service != nil {
 		uh := &usersHandler{service: d.Service}
 		r.Get("/users/{id}", uh.get)
+		// 限流配额挂在用户上：同一用户的多把 Key 共享额度。
+		r.Patch("/users/{id}/rate-limits", uh.setRateLimits)
 
 		// 手工调额是用户的子资源：充值/扣款一律走账本留痕。
 		if d.AdjustmentService != nil {

@@ -347,18 +347,23 @@ func (q *Queries) GetAPIKeyByID(ctx context.Context, id int64) (GetAPIKeyByIDRow
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT u.id, u.email, u.display_name, u.created_at, u.updated_at
+SELECT u.id, u.email, u.display_name,
+       u.rpm_limit, u.rpd_limit, u.concurrency_limit,
+       u.created_at, u.updated_at
 FROM users u
 WHERE u.id = $1
 LIMIT 1
 `
 
 type GetUserByIDRow struct {
-	ID          int64
-	Email       string
-	DisplayName string
-	CreatedAt   pgtype.Timestamptz
-	UpdatedAt   pgtype.Timestamptz
+	ID               int64
+	Email            string
+	DisplayName      string
+	RpmLimit         pgtype.Int4
+	RpdLimit         pgtype.Int4
+	ConcurrencyLimit pgtype.Int4
+	CreatedAt        pgtype.Timestamptz
+	UpdatedAt        pgtype.Timestamptz
 }
 
 // GetUserByID 供 admin 按 id 读取用户（不返回 password_hash）。
@@ -369,6 +374,9 @@ func (q *Queries) GetUserByID(ctx context.Context, id int64) (GetUserByIDRow, er
 		&i.ID,
 		&i.Email,
 		&i.DisplayName,
+		&i.RpmLimit,
+		&i.RpdLimit,
+		&i.ConcurrencyLimit,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -775,6 +783,60 @@ func (q *Queries) SetAPIKeySpendLimit(ctx context.Context, arg SetAPIKeySpendLim
 		&i.RevokedAt,
 		&i.SpendLimit,
 		&i.SpentTotal,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const setUserRateLimits = `-- name: SetUserRateLimits :one
+UPDATE users
+SET rpm_limit = $1,
+    rpd_limit = $2,
+    concurrency_limit = $3,
+    updated_at = now()
+WHERE id = $4
+RETURNING id, email, display_name,
+          rpm_limit, rpd_limit, concurrency_limit,
+          created_at, updated_at
+`
+
+type SetUserRateLimitsParams struct {
+	RpmLimit         pgtype.Int4
+	RpdLimit         pgtype.Int4
+	ConcurrencyLimit pgtype.Int4
+	ID               int64
+}
+
+type SetUserRateLimitsRow struct {
+	ID               int64
+	Email            string
+	DisplayName      string
+	RpmLimit         pgtype.Int4
+	RpdLimit         pgtype.Int4
+	ConcurrencyLimit pgtype.Int4
+	CreatedAt        pgtype.Timestamptz
+	UpdatedAt        pgtype.Timestamptz
+}
+
+// SetUserRateLimits 设置用户级限流。三个维度语义一致：
+// NULL 继承全局默认，0 表示不限，正数为具体上限。
+// 配额挂在用户上而非 Key 上：同一用户的多把 Key 共享额度，否则多开 Key 即可绕过限流。
+func (q *Queries) SetUserRateLimits(ctx context.Context, arg SetUserRateLimitsParams) (SetUserRateLimitsRow, error) {
+	row := q.db.QueryRow(ctx, setUserRateLimits,
+		arg.RpmLimit,
+		arg.RpdLimit,
+		arg.ConcurrencyLimit,
+		arg.ID,
+	)
+	var i SetUserRateLimitsRow
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.DisplayName,
+		&i.RpmLimit,
+		&i.RpdLimit,
+		&i.ConcurrencyLimit,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)

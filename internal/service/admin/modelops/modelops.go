@@ -4,6 +4,7 @@ package modelops
 
 import (
 	"context"
+	"github.com/jackc/pgx/v5/pgtype"
 	"time"
 
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
@@ -33,11 +34,15 @@ func NewService(store Store) *Service {
 
 // Row 是模型商品运维主表行（静态元数据 + 渠道/基准价；请求/毛利等指标在详情页聚合）。
 type Row struct {
-	ID                        int64
-	ModelID                   string
-	DisplayName               string
-	OwnedBy                   string
-	Status                    string
+	ID          int64
+	ModelID     string
+	DisplayName string
+	OwnedBy     string
+	Status      string
+	// Family 是模型系列（来自 models.dev），空串表示未归类。
+	Family string
+	// DisabledReason 解释模型为何被停用；启用中为 nil。
+	DisabledReason            *string
 	CreatedAt                 time.Time
 	MaxOutputTokens           *int64
 	ContextWindowTokens       *int64
@@ -172,6 +177,8 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 			ModelID:                         r.ModelID,
 			DisplayName:                     r.DisplayName,
 			OwnedBy:                         r.OwnedBy,
+			Family:                          r.Family,
+			DisabledReason:                  textPtr(r.DisabledReason),
 			Status:                          r.Status,
 			CreatedAt:                       r.CreatedAt.Time,
 			MaxOutputTokens:                 opsutil.Int8Value(r.MaxOutputTokens),
@@ -238,6 +245,15 @@ func (s *Service) Detail(ctx context.Context, modelID int64, from, to time.Time)
 		d.TPS = float64(r.OutputTokens) / r.GenerationSeconds
 	}
 	return d, nil
+}
+
+// textPtr 把可空文本转成 *string（NULL → nil）。
+func textPtr(value pgtype.Text) *string {
+	if !value.Valid {
+		return nil
+	}
+	out := value.String
+	return &out
 }
 
 func cacheReadRate(cacheReadTokens, inputTokens int64) float64 {

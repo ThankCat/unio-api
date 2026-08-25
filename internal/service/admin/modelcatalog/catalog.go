@@ -454,6 +454,7 @@ func (s *Service) Refresh(ctx context.Context, modelID int64) error {
 		ID:                             modelID,
 		DisplayName:                    entry.DisplayName,
 		OwnedBy:                        entry.Lab,
+		Family:                         entry.Family,
 		MaxOutputTokens:                entry.MaxOutputTokens,
 		ContextWindowTokens:            entry.ContextWindowTokens,
 		InputPriceUsdPerMillionTokens:  entry.InputPriceUsdPerMillionTokens,

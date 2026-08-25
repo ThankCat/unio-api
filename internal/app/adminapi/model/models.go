@@ -36,6 +36,9 @@ type modelDTO struct {
 	InputPriceUSDPerMTokens  *string               `json:"input_price_usd_per_million_tokens"`
 	OutputPriceUSDPerMTokens *string               `json:"output_price_usd_per_million_tokens"`
 	ReleaseDate              *string               `json:"release_date"`
+	Family                   string                `json:"family"`
+	DisabledReason           *string               `json:"disabled_reason"`
+	DisabledAt               *string               `json:"disabled_at"`
 	Source                   string                `json:"source"`
 	Catalog                  *modelCatalogStateDTO `json:"catalog"`
 	CreatedAt                string                `json:"created_at"`
@@ -79,8 +82,8 @@ type updateModelRequest struct {
 	OwnedBy     string `json:"owned_by"`
 	Status      string `json:"status"`
 	modelMetadataRequest
-	// ConfirmSupplyImpact + ExpectedImpactFingerprint 是全局暂停前的客户影响确认；
-	// 停用动作可连带停用受影响模型，但不改动渠道绑定配置。
+	// ConfirmSupplyImpact + ExpectedImpactFingerprint 是停用前的客户影响确认：
+	// 告知有多少调用会因此失败，渠道绑定配置不受影响。
 	ConfirmSupplyImpact       bool   `json:"confirm_supply_impact"`
 	ExpectedImpactFingerprint string `json:"expected_impact_fingerprint"`
 }
@@ -194,12 +197,6 @@ func (h *modelsHandler) update(w http.ResponseWriter, r *http.Request) {
 	adminhttp.WriteData(w, http.StatusOK, toModelDTO(m))
 }
 
-type delistModelRequest struct {
-	ConfirmSupplyImpact       bool                                    `json:"confirm_supply_impact"`
-	ExpectedImpactFingerprint string                                  `json:"expected_impact_fingerprint"`
-	SelectedModels            []adminhttp.SupplyModelSelectionRequest `json:"selected_models"`
-}
-
 func (h *modelsHandler) delete(w http.ResponseWriter, r *http.Request) {
 	id, err := adminhttp.PathID(r)
 	if err != nil {
@@ -244,9 +241,15 @@ func toModelDTO(m model.Model) modelDTO {
 		ContextWindowTokens:      m.ContextWindowTokens,
 		InputPriceUSDPerMTokens:  m.InputPriceUSDPerMTokens,
 		OutputPriceUSDPerMTokens: m.OutputPriceUSDPerMTokens,
+		Family:                   m.Family,
+		DisabledReason:           m.DisabledReason,
 		Source:                   m.Source,
 		CreatedAt:                m.CreatedAt.UTC().Format(time.RFC3339),
 		UpdatedAt:                m.UpdatedAt.UTC().Format(time.RFC3339),
+	}
+	if m.DisabledAt != nil {
+		disabledAt := m.DisabledAt.UTC().Format(time.RFC3339)
+		dto.DisabledAt = &disabledAt
 	}
 	if m.ReleaseDate != nil {
 		formatted := m.ReleaseDate.Format("2006-01-02")

@@ -16,8 +16,21 @@ type User struct {
 	ID          int64
 	Email       string
 	DisplayName string
-	CreatedAt   pgtype.Timestamptz
-	UpdatedAt   pgtype.Timestamptz
+	// RPMLimit/RPDLimit/ConcurrencyLimit 是用户级限流：
+	// nil 继承全局默认，0 表示不限，正数为具体上限。
+	RPMLimit         *int64
+	RPDLimit         *int64
+	ConcurrencyLimit *int64
+	CreatedAt        pgtype.Timestamptz
+	UpdatedAt        pgtype.Timestamptz
+}
+
+// RateLimitsInput 是设置用户级限流的入参；nil 表示继承全局默认。
+type RateLimitsInput struct {
+	UserID           int64
+	RPMLimit         *int64
+	RPDLimit         *int64
+	ConcurrencyLimit *int64
 }
 
 // Balance 表示某用户某币种的余额视图（金额为十进制字符串）。
@@ -46,9 +59,10 @@ type UserStore interface {
 	CountUsers(ctx context.Context, q pgtype.Text) (int64, error)
 	GetUserByID(ctx context.Context, id int64) (sqlc.GetUserByIDRow, error)
 	ListUserBalancesByUser(ctx context.Context, userID int64) ([]sqlc.UserBalance, error)
+	SetUserRateLimits(ctx context.Context, arg sqlc.SetUserRateLimitsParams) (sqlc.SetUserRateLimitsRow, error)
 }
 
-// UserService 提供 admin 用户只读查询。
+// UserService 提供 admin 用户查询与限流配置。
 type UserService struct {
 	store UserStore
 }
@@ -119,11 +133,14 @@ func (s *UserService) Get(ctx context.Context, id int64) (UserDetail, error) {
 
 	return UserDetail{
 		User: User{
-			ID:          row.ID,
-			Email:       row.Email,
-			DisplayName: row.DisplayName,
-			CreatedAt:   row.CreatedAt,
-			UpdatedAt:   row.UpdatedAt,
+			ID:               row.ID,
+			Email:            row.Email,
+			DisplayName:      row.DisplayName,
+			RPMLimit:         int4Ptr(row.RpmLimit),
+			RPDLimit:         int4Ptr(row.RpdLimit),
+			ConcurrencyLimit: int4Ptr(row.ConcurrencyLimit),
+			CreatedAt:        row.CreatedAt,
+			UpdatedAt:        row.UpdatedAt,
 		},
 		Balances: balances,
 	}, nil
@@ -136,4 +153,66 @@ func textNarg(s string) pgtype.Text {
 		return pgtype.Text{}
 	}
 	return pgtype.Text{String: s, Valid: true}
+}
+
+// SetRateLimits 设置用户级限流。
+//
+// 三个维度都允许为 nil（继承全局默认）或 0（不限），只拒绝负数——
+// 负数没有可解释的语义，静默当成 0 会让管理员以为自己关掉了限流。
+func (s *UserService) SetRateLimits(ctx context.Context, in RateLimitsInput) (User, error) {
+	if in.UserID <= 0 {
+		return User{}, invalidArgument("id", "user id must be positive")
+	}
+	for _, field := range []struct {
+		name  string
+		value *int64
+	}{
+		{"rpm_limit", in.RPMLimit},
+		{"rpd_limit", in.RPDLimit},
+		{"concurrency_limit", in.ConcurrencyLimit},
+	} {
+		if field.value != nil && *field.value < 0 {
+			return User{}, invalidArgument(field.name, "limit must be >= 0 (0 means unlimited)")
+		}
+	}
+
+	row, err := s.store.SetUserRateLimits(ctx, sqlc.SetUserRateLimitsParams{
+		ID:               in.UserID,
+		RpmLimit:         int4Narg(in.RPMLimit),
+		RpdLimit:         int4Narg(in.RPDLimit),
+		ConcurrencyLimit: int4Narg(in.ConcurrencyLimit),
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return User{}, notFound("user not found")
+		}
+		return User{}, storeFailed(err, "set user rate limits")
+	}
+	return User{
+		ID:               row.ID,
+		Email:            row.Email,
+		DisplayName:      row.DisplayName,
+		RPMLimit:         int4Ptr(row.RpmLimit),
+		RPDLimit:         int4Ptr(row.RpdLimit),
+		ConcurrencyLimit: int4Ptr(row.ConcurrencyLimit),
+		CreatedAt:        row.CreatedAt,
+		UpdatedAt:        row.UpdatedAt,
+	}, nil
+}
+
+// int4Narg 把可空限流上限转成 pgtype.Int4（nil = 继承全局默认）。
+func int4Narg(v *int64) pgtype.Int4 {
+	if v == nil {
+		return pgtype.Int4{}
+	}
+	return pgtype.Int4{Int32: int32(*v), Valid: true}
+}
+
+// int4Ptr 把可空限流上限转成 *int64。
+func int4Ptr(v pgtype.Int4) *int64 {
+	if !v.Valid {
+		return nil
+	}
+	out := int64(v.Int32)
+	return &out
 }

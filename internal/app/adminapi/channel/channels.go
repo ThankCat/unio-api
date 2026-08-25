@@ -130,10 +130,12 @@ type updateChannelRequest struct {
 	StickyTTLms         *int64        `json:"sticky_ttl_ms"`
 	ConcurrencyLimit    optionalInt64 `json:"concurrency_limit"`
 	SupportsOpenAIFast  *bool         `json:"supports_openai_fast"`
-	// ConfirmSupplyImpact + ExpectedImpactFingerprint 是停用 Channel 触发 Offering 联动时的
-	// ADR-0019 Channel 暂停影响确认；首次请求缺省，收到 409 后携带最新指纹重试。
-	ConfirmSupplyImpact       bool   `json:"confirm_supply_impact"`
-	ExpectedImpactFingerprint string `json:"expected_impact_fingerprint"`
+	// 停用渠道可能让某些模型失去最后一条可用渠道：首次请求缺省，收到 409 后
+	// 携带最新指纹重试。SelectedModels 是管理员明确选择要一并停用的模型，
+	// 留空表示只停渠道、让这些模型保持启用（客户会拿到 503 直到渠道恢复）。
+	ConfirmSupplyImpact       bool                                    `json:"confirm_supply_impact"`
+	ExpectedImpactFingerprint string                                  `json:"expected_impact_fingerprint"`
+	SelectedModels            []adminhttp.SupplyModelSelectionRequest `json:"selected_models"`
 }
 
 type rotateChannelCredentialRequest struct {
@@ -299,6 +301,7 @@ func (h *channelsHandler) update(w http.ResponseWriter, r *http.Request) {
 		Confirmation: supply.Confirmation{
 			Confirm:             req.ConfirmSupplyImpact,
 			ExpectedFingerprint: req.ExpectedImpactFingerprint,
+			SelectedModels:      adminhttp.SupplyModelSelections(req.SelectedModels),
 		},
 	}
 	c, err := h.service.Update(r.Context(), in)

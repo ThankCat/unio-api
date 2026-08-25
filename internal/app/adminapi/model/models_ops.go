@@ -24,19 +24,21 @@ type modelOpsHandler struct {
 }
 
 type modelOpsRowDTO struct {
-	ID                        int64  `json:"id"`
-	ModelID                   string `json:"model_id"`
-	DisplayName               string `json:"display_name"`
-	OwnedBy                   string `json:"owned_by"`
-	Status                    string `json:"status"`
-	CreatedAt                 string `json:"created_at"`
-	MaxOutputTokens           *int64 `json:"max_output_tokens"`
-	ContextWindowTokens       *int64 `json:"context_window_tokens"`
-	BindingsTotal             int64  `json:"bindings_total"`
-	BindingsAvailable         int64  `json:"bindings_available"`
-	CapabilitiesDeclaredCount int64  `json:"capabilities_declared_count"`
-	HasPrice                  bool   `json:"has_price"`
-	SupplyAvailable           bool   `json:"supply_available"`
+	ID                        int64   `json:"id"`
+	ModelID                   string  `json:"model_id"`
+	DisplayName               string  `json:"display_name"`
+	OwnedBy                   string  `json:"owned_by"`
+	Status                    string  `json:"status"`
+	Family                    string  `json:"family"`
+	DisabledReason            *string `json:"disabled_reason"`
+	CreatedAt                 string  `json:"created_at"`
+	MaxOutputTokens           *int64  `json:"max_output_tokens"`
+	ContextWindowTokens       *int64  `json:"context_window_tokens"`
+	BindingsTotal             int64   `json:"bindings_total"`
+	BindingsAvailable         int64   `json:"bindings_available"`
+	CapabilitiesDeclaredCount int64   `json:"capabilities_declared_count"`
+	HasPrice                  bool    `json:"has_price"`
+	SupplyAvailable           bool    `json:"supply_available"`
 	// 基准售价（DEC-026 model_prices，每 1M tokens；无基准价时为 null）。
 	BaseCurrency                *string `json:"base_currency"`
 	BaseUncachedInputPrice      *string `json:"base_uncached_input_price"`
@@ -153,6 +155,8 @@ func (h *modelOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 			ModelID:                         row.ModelID,
 			DisplayName:                     row.DisplayName,
 			OwnedBy:                         row.OwnedBy,
+			Family:                          row.Family,
+			DisabledReason:                  row.DisabledReason,
 			Status:                          row.Status,
 			CreatedAt:                       adminhttp.RFC3339(row.CreatedAt),
 			MaxOutputTokens:                 row.MaxOutputTokens,

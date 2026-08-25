@@ -1211,6 +1211,9 @@ WITH enriched AS (
         m.input_price_usd_per_million_tokens,
         m.output_price_usd_per_million_tokens,
         m.release_date,
+        m.family,
+        m.disabled_reason,
+        m.disabled_at,
         m.source,
         m.created_at,
         m.updated_at,
@@ -1236,7 +1239,7 @@ WITH enriched AS (
     LEFT JOIN model_catalog_links l ON l.model_id = m.id
     LEFT JOIN model_catalog mc ON mc.canonical_id = l.canonical_id
 )
-SELECT id, model_id, display_name, owned_by, status, max_output_tokens, context_window_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at, catalog_canonical_id, adopted_fingerprint, reminder_muted, reminder_snooze_until, dismissed_fingerprint, catalog_fingerprint, catalog_removed_upstream, update_available, should_remind
+SELECT id, model_id, display_name, owned_by, status, max_output_tokens, context_window_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, family, disabled_reason, disabled_at, source, created_at, updated_at, catalog_canonical_id, adopted_fingerprint, reminder_muted, reminder_snooze_until, dismissed_fingerprint, catalog_fingerprint, catalog_removed_upstream, update_available, should_remind
 FROM enriched
 WHERE ($1::text IS NULL OR status = $1::text)
   AND (
@@ -1269,6 +1272,9 @@ type ListModelsPageRow struct {
 	InputPriceUsdPerMillionTokens  pgtype.Numeric
 	OutputPriceUsdPerMillionTokens pgtype.Numeric
 	ReleaseDate                    pgtype.Date
+	Family                         string
+	DisabledReason                 pgtype.Text
+	DisabledAt                     pgtype.Timestamptz
 	Source                         string
 	CreatedAt                      pgtype.Timestamptz
 	UpdatedAt                      pgtype.Timestamptz
@@ -1312,6 +1318,9 @@ func (q *Queries) ListModelsPage(ctx context.Context, arg ListModelsPageParams) 
 			&i.InputPriceUsdPerMillionTokens,
 			&i.OutputPriceUsdPerMillionTokens,
 			&i.ReleaseDate,
+			&i.Family,
+			&i.DisabledReason,
+			&i.DisabledAt,
 			&i.Source,
 			&i.CreatedAt,
 			&i.UpdatedAt,
@@ -1845,6 +1854,8 @@ SELECT
     m.display_name,
     m.owned_by,
     m.status,
+    m.family,
+    m.disabled_reason,
     m.created_at,
     m.max_output_tokens,
     m.context_window_tokens,
@@ -2047,6 +2058,8 @@ type ModelsOpsTableRow struct {
 	DisplayName                     string
 	OwnedBy                         string
 	Status                          string
+	Family                          string
+	DisabledReason                  pgtype.Text
 	CreatedAt                       pgtype.Timestamptz
 	MaxOutputTokens                 pgtype.Int8
 	ContextWindowTokens             pgtype.Int8
@@ -2103,6 +2116,8 @@ func (q *Queries) ModelsOpsTable(ctx context.Context, arg ModelsOpsTableParams) 
 			&i.DisplayName,
 			&i.OwnedBy,
 			&i.Status,
+			&i.Family,
+			&i.DisabledReason,
 			&i.CreatedAt,
 			&i.MaxOutputTokens,
 			&i.ContextWindowTokens,
@@ -2164,19 +2179,21 @@ const refreshAdoptedModelFromCatalog = `-- name: RefreshAdoptedModelFromCatalog 
 UPDATE models
 SET display_name = $1,
     owned_by = $2,
-    max_output_tokens = $3,
-    context_window_tokens = $4,
-    input_price_usd_per_million_tokens = $5,
-    output_price_usd_per_million_tokens = $6,
-    release_date = $7,
+    family = $3,
+    max_output_tokens = $4,
+    context_window_tokens = $5,
+    input_price_usd_per_million_tokens = $6,
+    output_price_usd_per_million_tokens = $7,
+    release_date = $8,
     updated_at = now()
-WHERE id = $8
+WHERE id = $9
 RETURNING id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at, disabled_reason, disabled_at, family
 `
 
 type RefreshAdoptedModelFromCatalogParams struct {
 	DisplayName                    string
 	OwnedBy                        string
+	Family                         string
 	MaxOutputTokens                pgtype.Int8
 	ContextWindowTokens            pgtype.Int8
 	InputPriceUsdPerMillionTokens  pgtype.Numeric
@@ -2191,6 +2208,7 @@ func (q *Queries) RefreshAdoptedModelFromCatalog(ctx context.Context, arg Refres
 	row := q.db.QueryRow(ctx, refreshAdoptedModelFromCatalog,
 		arg.DisplayName,
 		arg.OwnedBy,
+		arg.Family,
 		arg.MaxOutputTokens,
 		arg.ContextWindowTokens,
 		arg.InputPriceUsdPerMillionTokens,

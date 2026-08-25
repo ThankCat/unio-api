@@ -278,7 +278,23 @@ WHERE (sqlc.narg('q')::text IS NULL
 
 -- name: GetUserByID :one
 -- GetUserByID 供 admin 按 id 读取用户（不返回 password_hash）。
-SELECT u.id, u.email, u.display_name, u.created_at, u.updated_at
+SELECT u.id, u.email, u.display_name,
+       u.rpm_limit, u.rpd_limit, u.concurrency_limit,
+       u.created_at, u.updated_at
 FROM users u
 WHERE u.id = sqlc.arg(id)
 LIMIT 1;
+
+-- name: SetUserRateLimits :one
+-- SetUserRateLimits 设置用户级限流。三个维度语义一致：
+-- NULL 继承全局默认，0 表示不限，正数为具体上限。
+-- 配额挂在用户上而非 Key 上：同一用户的多把 Key 共享额度，否则多开 Key 即可绕过限流。
+UPDATE users
+SET rpm_limit = sqlc.narg(rpm_limit),
+    rpd_limit = sqlc.narg(rpd_limit),
+    concurrency_limit = sqlc.narg(concurrency_limit),
+    updated_at = now()
+WHERE id = sqlc.arg(id)
+RETURNING id, email, display_name,
+          rpm_limit, rpd_limit, concurrency_limit,
+          created_at, updated_at;

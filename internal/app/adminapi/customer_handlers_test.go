@@ -12,9 +12,10 @@ import (
 )
 
 type fakeUserService struct {
-	list   []customer.User
-	detail customer.UserDetail
-	getErr error
+	list       []customer.User
+	detail     customer.UserDetail
+	getErr     error
+	rateLimits customer.RateLimitsInput
 }
 
 func (f *fakeUserService) List(context.Context, customer.UserListParams) ([]customer.User, int64, error) {
@@ -23,6 +24,16 @@ func (f *fakeUserService) List(context.Context, customer.UserListParams) ([]cust
 
 func (f *fakeUserService) Get(context.Context, int64) (customer.UserDetail, error) {
 	return f.detail, f.getErr
+}
+
+func (f *fakeUserService) SetRateLimits(_ context.Context, in customer.RateLimitsInput) (customer.User, error) {
+	f.rateLimits = in
+	return customer.User{
+		ID:               in.UserID,
+		RPMLimit:         in.RPMLimit,
+		RPDLimit:         in.RPDLimit,
+		ConcurrencyLimit: in.ConcurrencyLimit,
+	}, nil
 }
 
 type fakeAPIKeyService struct {
@@ -77,6 +88,33 @@ func TestGetUserReturnsBalances(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "\"balances\"") || !strings.Contains(rec.Body.String(), "12.5") {
 		t.Fatalf("expected balances in response: %s", rec.Body.String())
+	}
+}
+
+// 限流三个维度都能设成「不限」（0）与「继承全局默认」（null）：
+// 这两种意图必须能分别表达，合并成一个值会让管理员失去「显式不限」这个选择。
+func TestSetUserRateLimitsDistinguishesUnlimitedFromInherit(t *testing.T) {
+	service := &fakeUserService{}
+	handler := newQueryRouter(t, adminapi.RouterDeps{UserService: service})
+
+	rec := doAdmin(t, handler, http.MethodPatch, "/v1/users/7/rate-limits",
+		`{"rpm_limit":600,"rpd_limit":0,"concurrency_limit":null}`, true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", rec.Code, rec.Body.String())
+	}
+
+	got := service.rateLimits
+	if got.UserID != 7 {
+		t.Fatalf("user id = %d, want 7", got.UserID)
+	}
+	if got.RPMLimit == nil || *got.RPMLimit != 600 {
+		t.Fatalf("rpm limit = %v, want 600", got.RPMLimit)
+	}
+	if got.RPDLimit == nil || *got.RPDLimit != 0 {
+		t.Fatalf("rpd limit = %v, want 0（显式不限）", got.RPDLimit)
+	}
+	if got.ConcurrencyLimit != nil {
+		t.Fatalf("concurrency limit = %v, want nil（继承全局默认）", got.ConcurrencyLimit)
 	}
 }
 

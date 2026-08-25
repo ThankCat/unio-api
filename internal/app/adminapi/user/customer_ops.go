@@ -59,23 +59,20 @@ type apiKeysOpsSummaryDTO struct {
 }
 
 type apiKeyOpsRowDTO struct {
-	ID              int64   `json:"id"`
-	Name            string  `json:"name"`
-	KeyPrefix       string  `json:"key_prefix"`
-	KeyPlaintext    *string `json:"key_plaintext"`
-	UserID          int64   `json:"user_id"`
-	Status          string  `json:"status"`
-	RouteID         int64   `json:"route_id"`
-	RouteName       string  `json:"route_name"`
-	RoutePriceRatio string  `json:"route_price_ratio"`
-	SpendLimit      *string `json:"spend_limit"`
-	SpentTotal      string  `json:"spent_total"`
-	RequestTotal    int64   `json:"request_total"`
-	Succeeded       int64   `json:"succeeded"`
-	SuccessRate     float64 `json:"success_rate"`
-	ConsumptionUSD  string  `json:"consumption_usd"`
-	LastUsedAt      *string `json:"last_used_at"`
-	ExpiresAt       *string `json:"expires_at"`
+	ID             int64   `json:"id"`
+	Name           string  `json:"name"`
+	KeyPrefix      string  `json:"key_prefix"`
+	KeyPlaintext   *string `json:"key_plaintext"`
+	UserID         int64   `json:"user_id"`
+	Status         string  `json:"status"`
+	SpendLimit     *string `json:"spend_limit"`
+	SpentTotal     string  `json:"spent_total"`
+	RequestTotal   int64   `json:"request_total"`
+	Succeeded      int64   `json:"succeeded"`
+	SuccessRate    float64 `json:"success_rate"`
+	ConsumptionUSD string  `json:"consumption_usd"`
+	LastUsedAt     *string `json:"last_used_at"`
+	ExpiresAt      *string `json:"expires_at"`
 }
 
 func (h *customerOpsHandler) usersTable(w http.ResponseWriter, r *http.Request) {
@@ -206,6 +203,7 @@ func (h *customerOpsHandler) apiKeysTable(w http.ResponseWriter, r *http.Request
 	for _, k := range rows {
 		out = append(out, apiKeyOpsRowDTO{
 			ID: k.ID, Name: k.Name, KeyPrefix: k.KeyPrefix, KeyPlaintext: k.KeyPlaintext, UserID: k.UserID, Status: k.Status,
+			SpendLimit: k.SpendLimit, SpentTotal: k.SpentTotal,
 			RequestTotal: k.RequestTotal, Succeeded: k.Succeeded, SuccessRate: k.SuccessRate,
 			ConsumptionUSD: k.ConsumptionUSD, LastUsedAt: adminhttp.RFC3339Ptr(k.LastUsedAt), ExpiresAt: adminhttp.RFC3339Ptr(k.ExpiresAt),
 		})

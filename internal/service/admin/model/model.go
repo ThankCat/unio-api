@@ -77,10 +77,16 @@ type Model struct {
 	InputPriceUSDPerMTokens  *string
 	OutputPriceUSDPerMTokens *string
 	ReleaseDate              *time.Time
-	Source                   string
-	Catalog                  *CatalogState
-	CreatedAt                time.Time
-	UpdatedAt                time.Time
+	// Family 是模型系列（来自 models.dev），仅用于列表分组展示，空串表示未归类。
+	Family string
+	// DisabledReason/DisabledAt 解释模型为何被停用：管理员看到一批模型集体变灰时，
+	// 需要能立刻分清是自己停的还是被渠道变更连带的。enabled 时为空。
+	DisabledReason *string
+	DisabledAt     *time.Time
+	Source         string
+	Catalog        *CatalogState
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // CatalogState 是采纳模型相对 models.dev 目录的追更状态（阶段 14）。
@@ -392,15 +398,19 @@ func (s *Service) enableModel(ctx context.Context, modelID int64, params sqlc.Up
 		return Model{}, storeFailed(err, "check model runtime supply")
 	}
 
+	// 先清停用原因再写其余字段：EnableModelSupply 只认 status='disabled' 的行，
+	// 反过来先让 UpdateModel 把状态改成 enabled，它就再也匹配不到，
+	// 模型会带着「因渠道停用」的原因显示为已启用。
+	if _, err := q.EnableModelSupply(ctx, modelID); err != nil {
+		return Model{}, storeFailed(err, "clear model disable reason")
+	}
+
 	row, err := q.UpdateModel(ctx, params)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Model{}, notFound("model not found")
 		}
 		return Model{}, storeFailed(err, "update model")
-	}
-	if _, err := q.EnableModelSupply(ctx, modelID); err != nil {
-		return Model{}, storeFailed(err, "clear model disable reason")
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return Model{}, storeFailed(err, "commit model enable transaction")
@@ -444,6 +454,9 @@ func toModel(m sqlc.Model) Model {
 		InputPriceUSDPerMTokens:  numericString(m.InputPriceUsdPerMillionTokens),
 		OutputPriceUSDPerMTokens: numericString(m.OutputPriceUsdPerMillionTokens),
 		ReleaseDate:              datePtr(m.ReleaseDate),
+		Family:                   m.Family,
+		DisabledReason:           textPtr(m.DisabledReason),
+		DisabledAt:               timePtr(m.DisabledAt),
 		Source:                   m.Source,
 		CreatedAt:                m.CreatedAt.Time,
 		UpdatedAt:                m.UpdatedAt.Time,
@@ -463,6 +476,9 @@ func modelFromListRow(m sqlc.ListModelsPageRow) Model {
 		InputPriceUSDPerMTokens:  numericString(m.InputPriceUsdPerMillionTokens),
 		OutputPriceUSDPerMTokens: numericString(m.OutputPriceUsdPerMillionTokens),
 		ReleaseDate:              datePtr(m.ReleaseDate),
+		Family:                   m.Family,
+		DisabledReason:           textPtr(m.DisabledReason),
+		DisabledAt:               timePtr(m.DisabledAt),
 		Source:                   m.Source,
 		CreatedAt:                m.CreatedAt.Time,
 		UpdatedAt:                m.UpdatedAt.Time,
@@ -573,6 +589,15 @@ func int64Ptr(value pgtype.Int8) *int64 {
 }
 
 // timePtr 把 pgtype.Timestamptz 转成可选 time.Time。
+// textPtr 把可空文本转成 *string（NULL → nil）。
+func textPtr(value pgtype.Text) *string {
+	if !value.Valid {
+		return nil
+	}
+	out := value.String
+	return &out
+}
+
 func timePtr(value pgtype.Timestamptz) *time.Time {
 	if !value.Valid {
 		return nil
