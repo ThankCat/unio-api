@@ -43,6 +43,11 @@ func (s *fakeCatalogStore) UpsertCatalogEntry(context.Context, modelcatalog.Cano
 func (s *fakeCatalogStore) MarkCatalogRemovedUpstream(context.Context, string) (bool, error) {
 	return false, nil
 }
+func (s *fakeCatalogStore) UpsertLab(context.Context, string) error { return nil }
+func (s *fakeCatalogStore) ListLabsNeedingLogo(context.Context, time.Time) ([]string, error) {
+	return nil, nil
+}
+func (s *fakeCatalogStore) SaveLabLogo(context.Context, string, string) error         { return nil }
 func (s *fakeCatalogStore) CreateSyncJob(context.Context) (int64, error)              { return 0, nil }
 func (s *fakeCatalogStore) MarkSyncJobRunning(context.Context, int64) error           { return nil }
 func (s *fakeCatalogStore) MarkSyncJobSucceeded(context.Context, int64, []byte) error { return nil }

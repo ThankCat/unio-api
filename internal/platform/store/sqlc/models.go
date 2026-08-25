@@ -367,6 +367,8 @@ type ModelCatalog struct {
 	SyncedAt                       pgtype.Timestamptz
 	CreatedAt                      pgtype.Timestamptz
 	UpdatedAt                      pgtype.Timestamptz
+	// 模型系列（models.dev feed 的 family），采纳时带入 models.family，空串表示上游未归类。
+	Family string
 }
 
 type ModelCatalogCapability struct {

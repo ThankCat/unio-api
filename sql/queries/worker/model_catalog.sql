@@ -3,6 +3,7 @@
 INSERT INTO model_catalog (
     canonical_id,
     lab,
+    family,
     display_name,
     context_window_tokens,
     max_output_tokens,
@@ -16,6 +17,7 @@ INSERT INTO model_catalog (
 VALUES (
     sqlc.arg(canonical_id),
     sqlc.arg(lab),
+    sqlc.arg(family),
     sqlc.arg(display_name),
     sqlc.narg(context_window_tokens),
     sqlc.narg(max_output_tokens),
@@ -28,6 +30,7 @@ VALUES (
 )
 ON CONFLICT (canonical_id) DO UPDATE
 SET lab = EXCLUDED.lab,
+    family = EXCLUDED.family,
     display_name = EXCLUDED.display_name,
     context_window_tokens = EXCLUDED.context_window_tokens,
     max_output_tokens = EXCLUDED.max_output_tokens,
@@ -76,3 +79,30 @@ WHERE canonical_id = sqlc.arg(canonical_id)
 SELECT canonical_id, removed_upstream_at
 FROM model_catalog
 ORDER BY canonical_id ASC;
+
+-- name: UpsertModelLab :exec
+-- UpsertModelLab 按 slug 登记出品方；已存在时只补名称，不动图标
+-- （图标由 UpdateModelLabLogo 单独维护，避免目录同步把已抓到的图标覆盖成空）。
+INSERT INTO model_labs (slug, name)
+VALUES (sqlc.arg(slug), sqlc.arg(name))
+ON CONFLICT (slug) DO UPDATE
+SET name = EXCLUDED.name,
+    updated_at = now();
+
+-- name: ListModelLabsNeedingLogo :many
+-- ListModelLabsNeedingLogo 列出需要抓取图标的出品方：从未同步过，或上次同步早于给定时间。
+-- 有图标的不重复抓：厂商 logo 极少变动，每次目录同步都全量重抓只是白费上游带宽。
+SELECT slug
+FROM model_labs
+WHERE logo_synced_at IS NULL
+   OR logo_synced_at < sqlc.arg(stale_before)
+ORDER BY slug;
+
+-- name: UpdateModelLabLogo :exec
+-- UpdateModelLabLogo 写入图标内容并打上同步时间。
+-- 空串是合法结果，表示「上游确实没有这个图标」——同样要记时间，否则每次同步都会重试。
+UPDATE model_labs
+SET logo_svg = sqlc.arg(logo_svg),
+    logo_synced_at = now(),
+    updated_at = now()
+WHERE slug = sqlc.arg(slug);

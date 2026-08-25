@@ -32,6 +32,13 @@ type SyncStore interface {
 	// MarkCatalogRemovedUpstream 标记上游已下架的目录条目；applied=false 表示无需更新（已标记）。
 	MarkCatalogRemovedUpstream(ctx context.Context, canonicalID string) (applied bool, err error)
 
+	// UpsertLab 登记出品方（只补名称，不动图标）。
+	UpsertLab(ctx context.Context, slug string) error
+	// ListLabsNeedingLogo 列出图标从未同步、或同步时间早于 staleBefore 的出品方。
+	ListLabsNeedingLogo(ctx context.Context, staleBefore time.Time) ([]string, error)
+	// SaveLabLogo 写入图标内容并打上同步时间；空串表示上游确实没有该图标。
+	SaveLabLogo(ctx context.Context, slug, logoSVG string) error
+
 	CreateSyncJob(ctx context.Context) (jobID int64, err error)
 	MarkSyncJobRunning(ctx context.Context, jobID int64) error
 	MarkSyncJobSucceeded(ctx context.Context, jobID int64, stats []byte) error
@@ -79,6 +86,7 @@ func (s *syncQueriesStore) UpsertCatalogEntry(ctx context.Context, model Canonic
 	if _, err := s.queries.UpsertModelCatalogEntry(ctx, sqlc.UpsertModelCatalogEntryParams{
 		CanonicalID:                    model.CanonicalID,
 		Lab:                            model.Lab,
+		Family:                         model.Family,
 		DisplayName:                    model.DisplayName,
 		ContextWindowTokens:            int8Value(model.ContextTokens),
 		MaxOutputTokens:                int8Value(model.MaxOutputTokens),
@@ -202,4 +210,26 @@ func dateValue(value *time.Time) pgtype.Date {
 		return pgtype.Date{Valid: false}
 	}
 	return pgtype.Date{Time: *value, Valid: true}
+}
+
+func (s *syncQueriesStore) UpsertLab(ctx context.Context, slug string) error {
+	if err := s.queries.UpsertModelLab(ctx, sqlc.UpsertModelLabParams{Slug: slug, Name: slug}); err != nil {
+		return catalogFailure(err, "upsert model lab")
+	}
+	return nil
+}
+
+func (s *syncQueriesStore) ListLabsNeedingLogo(ctx context.Context, staleBefore time.Time) ([]string, error) {
+	slugs, err := s.queries.ListModelLabsNeedingLogo(ctx, pgtype.Timestamptz{Time: staleBefore, Valid: true})
+	if err != nil {
+		return nil, catalogFailure(err, "list labs needing logo")
+	}
+	return slugs, nil
+}
+
+func (s *syncQueriesStore) SaveLabLogo(ctx context.Context, slug, logoSVG string) error {
+	if err := s.queries.UpdateModelLabLogo(ctx, sqlc.UpdateModelLabLogoParams{Slug: slug, LogoSvg: logoSVG}); err != nil {
+		return catalogFailure(err, "update model lab logo")
+	}
+	return nil
 }

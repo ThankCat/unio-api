@@ -3,7 +3,9 @@ package modelcatalog
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
@@ -27,6 +29,16 @@ type Fetcher interface {
 	Fetch(ctx context.Context) (RawFeed, error)
 }
 
+// LogoFetcher 是 Fetcher 的可选扩展：能抓出品方图标的实现才需要满足它。
+// 做成可选是为了让只关心元数据的测试替身不必实现图标抓取。
+type LogoFetcher interface {
+	FetchLabLogo(ctx context.Context, slug string) (string, error)
+}
+
+// logoRefreshInterval 是图标的重抓间隔。厂商 logo 极少变动，
+// 抓一次管很久；间隔太短只是白费上游带宽。
+const logoRefreshInterval = 30 * 24 * time.Hour
+
 // Options 控制单次同步行为。
 type Options struct {
 	// DryRun 为 true 时只计算合并计划、不写任何库（含 sync_job），供 sync-models --dry-run 预演。
@@ -42,6 +54,8 @@ type Result struct {
 	CapabilityHints     int
 	RemovedCanonicalIDs []string
 	Fingerprint         string
+	// LogosSynced 是本次实际抓到内容的出品方图标数（不含「确认上游没有」的）。
+	LogosSynced int
 }
 
 // syncStats 是写入 model_capability_sync_jobs.stats_json 的审计载荷（含 license 指纹）。
@@ -54,6 +68,7 @@ type syncStats struct {
 	Removed           int      `json:"removed"`
 	CapabilityHints   int      `json:"capability_hints"`
 	RemovedCanonical  []string `json:"removed_canonical_ids"`
+	LogosSynced       int      `json:"logos_synced"`
 }
 
 // Syncer 编排 models.dev 同步：拉取 → 解析 → 合并规划 → 落库 → 记 sync_job（含 license 审计）。
@@ -181,7 +196,62 @@ func (s *Syncer) applyPlan(ctx context.Context, feed Feed, plan Plan) (Result, e
 		}
 	}
 
+	logos, err := s.syncLabLogos(ctx, feed)
+	if err != nil {
+		return Result{}, err
+	}
+	result.LogosSynced = logos
+
 	return result, nil
+}
+
+// syncLabLogos 登记 feed 里出现的出品方，并补齐缺失或过期的图标。
+//
+// 图标是纯展示资产，单个抓取失败不该让整次目录同步失败——那会让「上游少了一个 svg」
+// 升级成「模型目录同步不了」。所以这里逐个 best-effort，失败的留到下次同步再试。
+func (s *Syncer) syncLabLogos(ctx context.Context, feed Feed) (int, error) {
+	labs := make(map[string]struct{}, 16)
+	for _, model := range feed.Models {
+		if model.Lab != "" {
+			labs[model.Lab] = struct{}{}
+		}
+	}
+	slugs := make([]string, 0, len(labs))
+	for slug := range labs {
+		slugs = append(slugs, slug)
+	}
+	sort.Strings(slugs)
+	for _, slug := range slugs {
+		if err := s.store.UpsertLab(ctx, slug); err != nil {
+			return 0, err
+		}
+	}
+
+	fetcher, ok := s.fetcher.(LogoFetcher)
+	if !ok {
+		return 0, nil
+	}
+	stale, err := s.store.ListLabsNeedingLogo(ctx, time.Now().Add(-logoRefreshInterval))
+	if err != nil {
+		return 0, err
+	}
+
+	synced := 0
+	for _, slug := range stale {
+		svg, fetchErr := fetcher.FetchLabLogo(ctx, slug)
+		if fetchErr != nil {
+			continue
+		}
+		// 空串也要落库并打时间戳：它记录「已经确认上游没有」，
+		// 否则每次同步都会为同一批缺图标的出品方重新发一轮请求。
+		if err := s.store.SaveLabLogo(ctx, slug, svg); err != nil {
+			return 0, err
+		}
+		if svg != "" {
+			synced++
+		}
+	}
+	return synced, nil
 }
 
 func truncateError(err error) string {

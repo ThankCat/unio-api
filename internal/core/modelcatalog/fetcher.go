@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -16,7 +17,11 @@ const (
 	defaultMaxResponseBytes = 16 << 20 // 16 MiB，api.json 约 2.2MB，留足余量。
 	modelsResourcePath      = "/models.json"
 	apiResourcePath         = "/api.json"
+	logoResourcePathFormat  = "/logos/%s.svg"
 	modelCatalogUserAgent   = "unio-gateway-model-catalog-sync"
+	// maxLogoBytes 限制单个图标体积：图标是要内联进管理页面的，
+	// 上游给出异常大的文件时宁可不要，也不能把它塞进数据库再塞给浏览器。
+	maxLogoBytes = 256 << 10 // 256 KiB
 )
 
 // HTTPFetcher 从 models.dev 拉取 models.json（必需）与 api.json（价格，best-effort）。
@@ -58,14 +63,65 @@ func (f *HTTPFetcher) Fetch(ctx context.Context) (RawFeed, error) {
 	return RawFeed{ModelsJSON: modelsJSON, APIJSON: apiJSON}, nil
 }
 
+// FetchLabLogo 拉取某出品方的 SVG 图标。
+//
+// 返回空串表示上游没有这个图标或内容不可用（404、非 SVG、超限），调用方按「暂无图标」处理即可：
+// 图标缺失只是展示上少了个标识，不该让整次目录同步失败。
+// 只接受 SVG：图标要能随主题改色、任意尺寸不失真，位图两条都做不到。
+func (f *HTTPFetcher) FetchLabLogo(ctx context.Context, slug string) (string, error) {
+	slug = strings.TrimSpace(slug)
+	if slug == "" {
+		return "", nil
+	}
+
+	path := fmt.Sprintf(logoResourcePathFormat, url.PathEscape(slug))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, f.baseURL+path, nil)
+	if err != nil {
+		return "", failure.Wrap(failure.CodeModelCatalogStoreFailed, err, failure.WithMessage("build logo request"))
+	}
+	req.Header.Set("Accept", "image/svg+xml")
+	req.Header.Set("User-Agent", modelCatalogUserAgent)
+
+	resp, err := f.client.Do(req)
+	if err != nil {
+		return "", failure.Wrap(failure.CodeModelCatalogStoreFailed, err, failure.WithMessage("fetch "+path))
+	}
+	defer resp.Body.Close()
+
+	// 上游没有这个出品方的图标是常态（新 lab、冷门 lab），不算错误。
+	if resp.StatusCode == http.StatusNotFound {
+		return "", nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", failure.New(
+			failure.CodeModelCatalogStoreFailed,
+			failure.WithMessage(fmt.Sprintf("models.dev %s returned status %d", path, resp.StatusCode)),
+		)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxLogoBytes))
+	if err != nil {
+		return "", failure.Wrap(failure.CodeModelCatalogStoreFailed, err, failure.WithMessage("read "+path))
+	}
+	svg := strings.TrimSpace(string(body))
+	if !strings.Contains(svg, "<svg") {
+		return "", nil
+	}
+	return svg, nil
+}
+
 func (f *HTTPFetcher) get(ctx context.Context, path string) ([]byte, error) {
+	return f.getWithLimit(ctx, path, "application/json", f.maxBytes)
+}
+
+func (f *HTTPFetcher) getWithLimit(ctx context.Context, path, accept string, maxBytes int64) ([]byte, error) {
 	url := f.baseURL + path
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, failure.Wrap(failure.CodeModelCatalogStoreFailed, err, failure.WithMessage("build models.dev request"))
 	}
-	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Accept", accept)
 	req.Header.Set("User-Agent", modelCatalogUserAgent)
 
 	resp, err := f.client.Do(req)
@@ -81,7 +137,7 @@ func (f *HTTPFetcher) get(ctx context.Context, path string) ([]byte, error) {
 		)
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, f.maxBytes))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes))
 	if err != nil {
 		return nil, failure.Wrap(failure.CodeModelCatalogStoreFailed, err, failure.WithMessage("read "+path))
 	}

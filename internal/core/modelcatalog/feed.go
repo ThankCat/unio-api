@@ -62,8 +62,10 @@ type costJSON struct {
 
 // CanonicalModel 是 models.dev 一条 canonical 模型合并后的 Layer 1 种子。
 type CanonicalModel struct {
-	CanonicalID     string
-	Lab             string
+	CanonicalID string
+	Lab         string
+	// Family 是上游给出的模型系列（如 gpt-4、claude-3），仅用于列表分组展示。
+	Family          string
 	DisplayName     string
 	ReleaseDate     *time.Time
 	ContextTokens   *int64
@@ -102,6 +104,7 @@ func ParseFeed(modelsJSON, apiJSON []byte) (Feed, error) {
 		model := CanonicalModel{
 			CanonicalID:        canonicalID,
 			Lab:                lab,
+			Family:             entry.Family,
 			DisplayName:        firstNonEmpty(entry.Name, canonicalID),
 			ReleaseDate:        parseDate(entry.ReleaseDate),
 			ContextTokens:      positiveOrNil(entry.Limit.Context),
@@ -267,6 +270,8 @@ func entryFingerprint(m CanonicalModel) string {
 	b.WriteString(m.CanonicalID)
 	b.WriteByte('\n')
 	b.WriteString(m.Lab)
+	b.WriteByte('\n')
+	b.WriteString(m.Family)
 	b.WriteByte('\n')
 	b.WriteString(m.DisplayName)
 	b.WriteByte('\n')

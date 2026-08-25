@@ -191,6 +191,7 @@ INSERT INTO models (
     model_id,
     display_name,
     owned_by,
+    family,
     status,
     max_output_tokens,
     context_window_tokens,
@@ -209,6 +210,7 @@ VALUES (
     $7,
     $8,
     $9,
+    $10,
     'catalog'
 )
 RETURNING id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at, disabled_reason, disabled_at, family
@@ -218,6 +220,7 @@ type CreateModelFromCatalogParams struct {
 	ModelID                        string
 	DisplayName                    string
 	OwnedBy                        string
+	Family                         string
 	Status                         string
 	MaxOutputTokens                pgtype.Int8
 	ContextWindowTokens            pgtype.Int8
@@ -234,6 +237,7 @@ func (q *Queries) CreateModelFromCatalog(ctx context.Context, arg CreateModelFro
 		arg.ModelID,
 		arg.DisplayName,
 		arg.OwnedBy,
+		arg.Family,
 		arg.Status,
 		arg.MaxOutputTokens,
 		arg.ContextWindowTokens,
@@ -668,7 +672,7 @@ func (q *Queries) DeleteModelCascade(ctx context.Context, id int64) (int64, erro
 
 const getModelCatalogEntry = `-- name: GetModelCatalogEntry :one
 SELECT
-    mc.canonical_id, mc.lab, mc.display_name, mc.context_window_tokens, mc.max_output_tokens, mc.input_price_usd_per_million_tokens, mc.output_price_usd_per_million_tokens, mc.release_date, mc.removed_upstream_at, mc.fingerprint, mc.synced_at, mc.created_at, mc.updated_at,
+    mc.canonical_id, mc.lab, mc.display_name, mc.context_window_tokens, mc.max_output_tokens, mc.input_price_usd_per_million_tokens, mc.output_price_usd_per_million_tokens, mc.release_date, mc.removed_upstream_at, mc.fingerprint, mc.synced_at, mc.created_at, mc.updated_at, mc.family,
     (SELECT COUNT(*) FROM model_catalog_links l WHERE l.canonical_id = mc.canonical_id) AS adopted_count
 FROM model_catalog mc
 WHERE mc.canonical_id = $1
@@ -688,6 +692,7 @@ type GetModelCatalogEntryRow struct {
 	SyncedAt                       pgtype.Timestamptz
 	CreatedAt                      pgtype.Timestamptz
 	UpdatedAt                      pgtype.Timestamptz
+	Family                         string
 	AdoptedCount                   int64
 }
 
@@ -709,6 +714,7 @@ func (q *Queries) GetModelCatalogEntry(ctx context.Context, canonicalID string) 
 		&i.SyncedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Family,
 		&i.AdoptedCount,
 	)
 	return i, err
@@ -942,7 +948,7 @@ func (q *Queries) ListModelCatalogCapabilities(ctx context.Context, canonicalID 
 
 const listModelCatalogPage = `-- name: ListModelCatalogPage :many
 SELECT
-    mc.canonical_id, mc.lab, mc.display_name, mc.context_window_tokens, mc.max_output_tokens, mc.input_price_usd_per_million_tokens, mc.output_price_usd_per_million_tokens, mc.release_date, mc.removed_upstream_at, mc.fingerprint, mc.synced_at, mc.created_at, mc.updated_at,
+    mc.canonical_id, mc.lab, mc.display_name, mc.context_window_tokens, mc.max_output_tokens, mc.input_price_usd_per_million_tokens, mc.output_price_usd_per_million_tokens, mc.release_date, mc.removed_upstream_at, mc.fingerprint, mc.synced_at, mc.created_at, mc.updated_at, mc.family,
     (SELECT COUNT(*) FROM model_catalog_capabilities cc WHERE cc.canonical_id = mc.canonical_id) AS capability_count,
     (SELECT COUNT(*) FROM model_catalog_links l WHERE l.canonical_id = mc.canonical_id) AS adopted_count
 FROM model_catalog mc
@@ -977,6 +983,7 @@ type ListModelCatalogPageRow struct {
 	SyncedAt                       pgtype.Timestamptz
 	CreatedAt                      pgtype.Timestamptz
 	UpdatedAt                      pgtype.Timestamptz
+	Family                         string
 	CapabilityCount                int64
 	AdoptedCount                   int64
 }
@@ -1010,6 +1017,7 @@ func (q *Queries) ListModelCatalogPage(ctx context.Context, arg ListModelCatalog
 			&i.SyncedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Family,
 			&i.CapabilityCount,
 			&i.AdoptedCount,
 		); err != nil {

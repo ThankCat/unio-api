@@ -377,9 +377,11 @@ func (s *Service) prepareAdopt(ctx context.Context, in AdoptInput) (preparedAdop
 
 func (s *Service) adoptWithQueries(ctx context.Context, q *sqlc.Queries, in preparedAdopt) (sqlc.Model, error) {
 	model, err := q.CreateModelFromCatalog(ctx, sqlc.CreateModelFromCatalogParams{
-		ModelID:                        in.modelID,
-		DisplayName:                    in.displayName,
-		OwnedBy:                        in.ownedBy,
+		ModelID:     in.modelID,
+		DisplayName: in.displayName,
+		OwnedBy:     in.ownedBy,
+		// family 直接沿用目录条目：它是上游的归类结论，采纳时没有理由让管理员重填。
+		Family:                         in.entry.Family,
 		Status:                         in.status,
 		MaxOutputTokens:                int8Param(in.input.MaxOutputTokens),
 		ContextWindowTokens:            int8Param(in.input.ContextWindowTokens),

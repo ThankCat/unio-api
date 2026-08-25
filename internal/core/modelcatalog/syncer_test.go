@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"testing"
+	"time"
 )
 
 type fakeFetcher struct {
@@ -35,13 +37,33 @@ type fakeSyncStore struct {
 	jobFailed    int
 	lastStats    []byte
 	lastErrText  string
+
+	upsertedLabs []string
+	// staleLabs 是 ListLabsNeedingLogo 的返回值，模拟「图标缺失或过期」的出品方。
+	staleLabs  []string
+	savedLogos map[string]string
 }
 
 func newFakeSyncStore(existing ...ExistingCatalogEntry) *fakeSyncStore {
 	return &fakeSyncStore{
-		existing: existing,
-		capHints: map[string]int{},
+		existing:   existing,
+		capHints:   map[string]int{},
+		savedLogos: map[string]string{},
 	}
+}
+
+func (s *fakeSyncStore) UpsertLab(_ context.Context, slug string) error {
+	s.upsertedLabs = append(s.upsertedLabs, slug)
+	return nil
+}
+
+func (s *fakeSyncStore) ListLabsNeedingLogo(context.Context, time.Time) ([]string, error) {
+	return s.staleLabs, nil
+}
+
+func (s *fakeSyncStore) SaveLabLogo(_ context.Context, slug, logoSVG string) error {
+	s.savedLogos[slug] = logoSVG
+	return nil
 }
 
 func (s *fakeSyncStore) ListCatalogEntries(context.Context) ([]ExistingCatalogEntry, error) {
@@ -170,5 +192,93 @@ func TestSyncApplyErrorMarksJobFailed(t *testing.T) {
 	}
 	if store.lastErrText == "" {
 		t.Fatal("want error text recorded on failed job")
+	}
+}
+
+// logoFakeFetcher 在元数据 fetcher 之上实现 LogoFetcher，可对指定 slug 制造抓取失败。
+type logoFakeFetcher struct {
+	fakeFetcher
+	logos     map[string]string
+	failSlugs map[string]bool
+	requested []string
+}
+
+func (f *logoFakeFetcher) FetchLabLogo(_ context.Context, slug string) (string, error) {
+	f.requested = append(f.requested, slug)
+	if f.failSlugs[slug] {
+		return "", errors.New("boom logo")
+	}
+	return f.logos[slug], nil
+}
+
+// 出品方图标随目录同步补齐：feed 里出现的 lab 都要登记，缺图标的抓一次。
+func TestSyncRegistersLabsAndFetchesMissingLogos(t *testing.T) {
+	store := newFakeSyncStore()
+	store.staleLabs = []string{"acme", "deepseek"}
+	fetcher := &logoFakeFetcher{
+		fakeFetcher: fakeFetcher{raw: RawFeed{ModelsJSON: []byte(sampleModelsJSON), APIJSON: []byte(sampleAPIJSON)}},
+		logos:       map[string]string{"acme": `<svg viewBox="0 0 24 24"/>`},
+	}
+
+	result, err := NewSyncer(fetcher, store).Sync(context.Background(), Options{})
+	if err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+
+	if !slices.Contains(store.upsertedLabs, "acme") || !slices.Contains(store.upsertedLabs, "deepseek") {
+		t.Fatalf("feed 里的出品方都要登记，实际 %+v", store.upsertedLabs)
+	}
+	if got := store.savedLogos["acme"]; got != `<svg viewBox="0 0 24 24"/>` {
+		t.Fatalf("acme 图标 = %q", got)
+	}
+	// 上游没有 deepseek 图标：也要落空串并打时间戳，否则每次同步都会重抓。
+	got, ok := store.savedLogos["deepseek"]
+	if !ok || got != "" {
+		t.Fatalf("上游缺图标时应落空串，实际 ok=%v value=%q", ok, got)
+	}
+	if result.LogosSynced != 1 {
+		t.Fatalf("LogosSynced = %d, want 1（只计实际抓到内容的）", result.LogosSynced)
+	}
+}
+
+// 单个图标抓取失败不写库、也不让整次目录同步失败——留到下次重试。
+func TestSyncLogoFetchFailureDoesNotFailSync(t *testing.T) {
+	store := newFakeSyncStore()
+	store.staleLabs = []string{"acme"}
+	fetcher := &logoFakeFetcher{
+		fakeFetcher: fakeFetcher{raw: RawFeed{ModelsJSON: []byte(sampleModelsJSON), APIJSON: []byte(sampleAPIJSON)}},
+		failSlugs:   map[string]bool{"acme": true},
+	}
+
+	result, err := NewSyncer(fetcher, store).Sync(context.Background(), Options{})
+	if err != nil {
+		t.Fatalf("图标抓取失败不应让目录同步失败: %v", err)
+	}
+	if result.Upserted == 0 {
+		t.Fatal("目录条目仍应正常写入")
+	}
+	if _, saved := store.savedLogos["acme"]; saved {
+		t.Fatal("抓取失败不应写库，否则会把失败固化成「已确认没有」")
+	}
+	if store.jobSucceeded != 1 || store.jobFailed != 0 {
+		t.Fatalf("同步任务应记为成功: succeeded=%d failed=%d", store.jobSucceeded, store.jobFailed)
+	}
+}
+
+// 不实现 LogoFetcher 的 fetcher 照常工作：图标能力是可选扩展。
+func TestSyncWithoutLogoFetcherStillRegistersLabs(t *testing.T) {
+	store := newFakeSyncStore()
+	store.staleLabs = []string{"acme"}
+
+	result, err := NewSyncer(fakeFetcher{raw: RawFeed{ModelsJSON: []byte(sampleModelsJSON), APIJSON: []byte(sampleAPIJSON)}}, store).
+		Sync(context.Background(), Options{})
+	if err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if len(store.upsertedLabs) == 0 {
+		t.Fatal("出品方登记不依赖图标能力")
+	}
+	if len(store.savedLogos) != 0 || result.LogosSynced != 0 {
+		t.Fatalf("没有图标能力时不应写图标: saved=%+v synced=%d", store.savedLogos, result.LogosSynced)
 	}
 }

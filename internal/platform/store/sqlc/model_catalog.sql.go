@@ -90,6 +90,36 @@ func (q *Queries) ListModelCatalogCanonicalIDs(ctx context.Context) ([]ListModel
 	return items, nil
 }
 
+const listModelLabsNeedingLogo = `-- name: ListModelLabsNeedingLogo :many
+SELECT slug
+FROM model_labs
+WHERE logo_synced_at IS NULL
+   OR logo_synced_at < $1
+ORDER BY slug
+`
+
+// ListModelLabsNeedingLogo 列出需要抓取图标的出品方：从未同步过，或上次同步早于给定时间。
+// 有图标的不重复抓：厂商 logo 极少变动，每次目录同步都全量重抓只是白费上游带宽。
+func (q *Queries) ListModelLabsNeedingLogo(ctx context.Context, staleBefore pgtype.Timestamptz) ([]string, error) {
+	rows, err := q.db.Query(ctx, listModelLabsNeedingLogo, staleBefore)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var slug string
+		if err := rows.Scan(&slug); err != nil {
+			return nil, err
+		}
+		items = append(items, slug)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const markModelCatalogRemovedUpstream = `-- name: MarkModelCatalogRemovedUpstream :execrows
 UPDATE model_catalog
 SET removed_upstream_at = now(),
@@ -107,10 +137,31 @@ func (q *Queries) MarkModelCatalogRemovedUpstream(ctx context.Context, canonical
 	return result.RowsAffected(), nil
 }
 
+const updateModelLabLogo = `-- name: UpdateModelLabLogo :exec
+UPDATE model_labs
+SET logo_svg = $1,
+    logo_synced_at = now(),
+    updated_at = now()
+WHERE slug = $2
+`
+
+type UpdateModelLabLogoParams struct {
+	LogoSvg string
+	Slug    string
+}
+
+// UpdateModelLabLogo 写入图标内容并打上同步时间。
+// 空串是合法结果，表示「上游确实没有这个图标」——同样要记时间，否则每次同步都会重试。
+func (q *Queries) UpdateModelLabLogo(ctx context.Context, arg UpdateModelLabLogoParams) error {
+	_, err := q.db.Exec(ctx, updateModelLabLogo, arg.LogoSvg, arg.Slug)
+	return err
+}
+
 const upsertModelCatalogEntry = `-- name: UpsertModelCatalogEntry :one
 INSERT INTO model_catalog (
     canonical_id,
     lab,
+    family,
     display_name,
     context_window_tokens,
     max_output_tokens,
@@ -131,11 +182,13 @@ VALUES (
     $7,
     $8,
     $9,
+    $10,
     NULL,
     now()
 )
 ON CONFLICT (canonical_id) DO UPDATE
 SET lab = EXCLUDED.lab,
+    family = EXCLUDED.family,
     display_name = EXCLUDED.display_name,
     context_window_tokens = EXCLUDED.context_window_tokens,
     max_output_tokens = EXCLUDED.max_output_tokens,
@@ -146,12 +199,13 @@ SET lab = EXCLUDED.lab,
     removed_upstream_at = NULL,
     synced_at = now(),
     updated_at = now()
-RETURNING canonical_id, lab, display_name, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, removed_upstream_at, fingerprint, synced_at, created_at, updated_at
+RETURNING canonical_id, lab, display_name, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, removed_upstream_at, fingerprint, synced_at, created_at, updated_at, family
 `
 
 type UpsertModelCatalogEntryParams struct {
 	CanonicalID                    string
 	Lab                            string
+	Family                         string
 	DisplayName                    string
 	ContextWindowTokens            pgtype.Int8
 	MaxOutputTokens                pgtype.Int8
@@ -166,6 +220,7 @@ func (q *Queries) UpsertModelCatalogEntry(ctx context.Context, arg UpsertModelCa
 	row := q.db.QueryRow(ctx, upsertModelCatalogEntry,
 		arg.CanonicalID,
 		arg.Lab,
+		arg.Family,
 		arg.DisplayName,
 		arg.ContextWindowTokens,
 		arg.MaxOutputTokens,
@@ -189,6 +244,27 @@ func (q *Queries) UpsertModelCatalogEntry(ctx context.Context, arg UpsertModelCa
 		&i.SyncedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Family,
 	)
 	return i, err
+}
+
+const upsertModelLab = `-- name: UpsertModelLab :exec
+INSERT INTO model_labs (slug, name)
+VALUES ($1, $2)
+ON CONFLICT (slug) DO UPDATE
+SET name = EXCLUDED.name,
+    updated_at = now()
+`
+
+type UpsertModelLabParams struct {
+	Slug string
+	Name string
+}
+
+// UpsertModelLab 按 slug 登记出品方；已存在时只补名称，不动图标
+// （图标由 UpdateModelLabLogo 单独维护，避免目录同步把已抓到的图标覆盖成空）。
+func (q *Queries) UpsertModelLab(ctx context.Context, arg UpsertModelLabParams) error {
+	_, err := q.db.Exec(ctx, upsertModelLab, arg.Slug, arg.Name)
+	return err
 }
