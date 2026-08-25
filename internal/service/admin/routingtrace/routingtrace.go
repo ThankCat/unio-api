@@ -25,7 +25,6 @@ type Decision struct {
 	RequestRecordID  int64
 	RequestID        string
 	RequestStatus    string
-	RouteID          int64
 	Mode             string
 	RequestedModelID string
 	Protocol         string
@@ -85,7 +84,7 @@ func (s *Service) GetByRequestID(ctx context.Context, requestID string) (Decisio
 func fromGetRow(row sqlc.GetRoutingDecisionTraceByRequestIDRow) Decision {
 	return Decision{
 		ID: row.ID, RequestRecordID: row.RequestRecordID, RequestID: row.RequestID,
-		RequestStatus: row.RequestStatus, RouteID: row.RouteID, Mode: row.Mode,
+		RequestStatus: row.RequestStatus, Mode: row.Mode,
 		RequestedModelID: row.RequestedModelID, Protocol: row.Protocol, Endpoint: row.Endpoint,
 		TraceStatus: row.TraceStatus, SchemaVersion: row.SchemaVersion,
 		AlgorithmVersion: row.AlgorithmVersion, Process: rawJSONObject(row.TracePayload),

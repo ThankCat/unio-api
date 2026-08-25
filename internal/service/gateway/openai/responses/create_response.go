@@ -187,7 +187,6 @@ func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.Resp
 		ModelID:         req.Model,
 		IngressProtocol: routing.ProtocolOpenAI,
 		Endpoint:        routing.EndpointResponses,
-		RouteID:         principal.RouteID,
 	}
 	if err := s.router.ValidateChat(ctx, routeRequest); err != nil {
 		s.lifecycle.RecordRequestRejected(err)
@@ -216,7 +215,7 @@ func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.Resp
 		if createErr != nil {
 			return nil, createErr
 		}
-		s.lifecycle.RecordRoutingFailure(ctx, requestRecord, principal.RouteID, err)
+		s.lifecycle.RecordRoutingFailure(ctx, requestRecord, err)
 		s.lifecycle.MarkRequestFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
 		return nil, err
 	}
@@ -226,28 +225,24 @@ func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.Resp
 	stickyHint := sessionhint.OpenAISessionHint(ctx, req.PromptCacheKey)
 	stickySession := s.sticky.Resolve(ctx, lifecycle.StickyResolveParams{
 		Protocol:   routing.ProtocolOpenAI,
-		RouteID:    principal.RouteID,
 		APIKeyID:   principal.APIKeyID,
 		ModelID:    plan.ModelDBID,
 		SessionKey: stickyHint.Key,
 		Source:     stickyHint.Source,
 		Candidates: plan.Candidates,
-		Mode:       plan.RouteMode,
 	})
 
-	candidatePlan, err := s.prepareResponsesCandidates(ctx, req, plan.Candidates, plan.RouteMode, false, strat.allowDirect, stickySession.BoundChannelID())
+	candidatePlan, err := s.prepareResponsesCandidates(ctx, req, plan.Candidates, false, strat.allowDirect, stickySession.BoundChannelID())
 	if err != nil {
 		requestRecord, createErr := s.lifecycle.CreatePreparedRequest(ctx, requestParams)
 		if createErr != nil {
 			return nil, createErr
 		}
-		if principal.RouteID != nil {
-			s.lifecycle.RecordRoutingDecisionFailure(ctx, lifecycle.RoutingDecisionTraceInput{
-				Request: requestRecord, RouteID: *principal.RouteID, Mode: plan.RouteMode,
-				PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(),
-				Sticky: stickySession.Audit(),
-			}, err)
-		}
+		s.lifecycle.RecordRoutingDecisionFailure(ctx, lifecycle.RoutingDecisionTraceInput{
+			Request:  requestRecord,
+			PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(),
+			Sticky: stickySession.Audit(),
+		}, err)
 		s.lifecycle.MarkRequestFailed(ctx, requestRecord, lifecycle.RoutingFailureCode(err), err)
 		return nil, err
 	}
@@ -266,13 +261,11 @@ func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.Resp
 	requestRecord := authorized.RequestRecord
 	authorization := authorized.Authorization
 	stickySession.ApplyPlanOutcome(ctx, candidatePlan)
-	if principal.RouteID != nil {
-		s.lifecycle.RecordRoutingDecision(ctx, lifecycle.RoutingDecisionTraceInput{
-			Request: requestRecord, RouteID: *principal.RouteID, Mode: plan.RouteMode,
-			PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(),
-			Sticky: stickySession.Audit(), Status: lifecycle.TraceStatusPartial,
-		})
-	}
+	s.lifecycle.RecordRoutingDecision(ctx, lifecycle.RoutingDecisionTraceInput{
+		Request:  requestRecord,
+		PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(),
+		Sticky: stickySession.Audit(), Status: lifecycle.TraceStatusPartial,
+	})
 
 	runResult, err := s.attemptRunner.RunNonStream(ctx, lifecycle.RunNonStreamParams{
 		RequestRecord:            requestRecord,
@@ -292,13 +285,11 @@ func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.Resp
 	})
 	// 每个请求在生命周期结束时都要把 partial trace 收口为 complete（§13.1），
 	// 不只在发生 fallback 时——普通成功请求同样需要能解释「为什么选了这条渠道」。
-	if principal.RouteID != nil {
-		s.lifecycle.CompleteRoutingTrace(ctx, lifecycle.RoutingDecisionTraceInput{
-			Request: requestRecord, RouteID: *principal.RouteID, Mode: plan.RouteMode,
-			PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(),
-			Sticky: stickySession.Audit(),
-		}, runResult, err)
-	}
+	s.lifecycle.CompleteRoutingTrace(ctx, lifecycle.RoutingDecisionTraceInput{
+		Request:  requestRecord,
+		PoolSize: plan.PoolSize, Plan: candidatePlan, StickyChannelID: stickySession.ResolvedChannelID(),
+		Sticky: stickySession.Audit(),
+	}, runResult, err)
 	outcome = runResult.Outcome
 	return runResult.Delivery, err
 }

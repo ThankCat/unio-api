@@ -43,7 +43,7 @@ RETURNING r.*;
 SELECT
     r.*,
     c.provider_id,
-    c.protocol,
+    c.protocols,
     c.adapter_key,
     c.credential,
     c.status AS channel_status,
@@ -161,7 +161,7 @@ WHERE target.channel_id = sqlc.arg(target_channel_id)
 
 -- name: GetChannelModelInventoryContext :one
 SELECT c.id AS channel_id, c.name AS channel_name, c.status AS channel_status,
-    c.config_revision, c.provider_id, c.protocol, c.adapter_key,
+    c.config_revision, c.provider_id, c.protocols, c.adapter_key,
     p.slug AS provider_slug, p.origin_revision, p.status_revision
 FROM channels c JOIN providers p ON p.id = c.provider_id
 WHERE c.id = sqlc.arg(channel_id);
@@ -251,7 +251,7 @@ WHERE r.id = candidate.id
 RETURNING r.*;
 
 -- name: GetChannelModelVerificationExecutionSnapshot :one
-SELECT r.*, c.provider_id, c.protocol, c.adapter_key, c.credential,
+SELECT r.*, c.provider_id, c.protocols, c.adapter_key, c.credential,
     c.status AS channel_status, c.config_revision AS current_channel_config_revision,
     p.slug AS provider_slug, p.origin,
     p.origin_revision AS current_provider_origin_revision,

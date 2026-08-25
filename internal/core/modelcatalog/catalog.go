@@ -13,11 +13,15 @@ type Model struct {
 	OwnedBy string
 	// Capabilities 是模型已声明（非 unsupported）的 cap-tags，升序去重；未声明为空切片。
 	Capabilities []string
+	// Protocols 是该模型当前实际可用的入口协议（openai / anthropic），升序去重。
+	// 它来自可用渠道的协议并集，不是一份独立声明，所以不会出现「写着支持却调不通」。
+	Protocols []string
 }
 
 // Store 定义 model catalog 读取可用模型所需的最小数据库能力。
 type Store interface {
-	ListAvailableModelsForUser(ctx context.Context, arg sqlc.ListAvailableModelsForUserParams) ([]sqlc.ListAvailableModelsForUserRow, error)
+	ListAvailableModels(ctx context.Context) ([]sqlc.ListAvailableModelsRow, error)
+	ListModelProtocols(ctx context.Context) ([]sqlc.ListModelProtocolsRow, error)
 }
 
 // Service 负责查询当前 user 可见的模型列表。
@@ -30,20 +34,32 @@ func NewService(store Store) *Service {
 	return &Service{store: store}
 }
 
-// ListAvailableModels 返回当前 user 可见的 OpenAI-compatible 模型。
+// ListAvailableModels 返回全部对外可见的模型。
 //
+// 不做用户级过滤：模型 enabled 的前置条件就是「至少有一条可用渠道能供」，所以列出即可调用。
 // requiredCapabilities 非空时按 cap-tags 做 AND 过滤（模型 cap 集合必须包含全部请求 cap），
 // 供 /v1/models?capability=a,b 预检；空过滤返回全部可见模型。未识别的 capability key 不报错，
 // 自然匹配不到模型（lenient filter 语义）。
-func (s *Service) ListAvailableModels(ctx context.Context, userID, routeID int64, requiredCapabilities []string) ([]Model, error) {
-	// TODO(阶段6/production): [GAP-6-006] /v1/models 已支持 user_model_policies 模型 allow-list/deny-list 与 cap-tags 暴露，但尚未表达用户禁用、预算约束或专属 channel 策略；与 routing 共用 user/channel policy，预算可用性由 reservation 统一判断。
-	rows, err := s.store.ListAvailableModelsForUser(ctx, sqlc.ListAvailableModelsForUserParams{UserID: userID, RouteID: routeID})
+func (s *Service) ListAvailableModels(ctx context.Context, requiredCapabilities []string) ([]Model, error) {
+	rows, err := s.store.ListAvailableModels(ctx)
 	if err != nil {
 		return nil, failure.Wrap(
 			failure.CodeModelCatalogStoreFailed,
 			err,
 			failure.WithMessage("list available models"),
 		)
+	}
+	protocolRows, err := s.store.ListModelProtocols(ctx)
+	if err != nil {
+		return nil, failure.Wrap(
+			failure.CodeModelCatalogStoreFailed,
+			err,
+			failure.WithMessage("list model protocols"),
+		)
+	}
+	protocols := make(map[string][]string, len(protocolRows))
+	for _, row := range protocolRows {
+		protocols[row.ModelID] = row.Protocols
 	}
 
 	models := make([]Model, 0, len(rows))
@@ -55,10 +71,15 @@ func (s *Service) ListAvailableModels(ctx context.Context, userID, routeID int64
 		if !capabilitiesSatisfy(caps, requiredCapabilities) {
 			continue
 		}
+		protos := protocols[row.ModelID]
+		if protos == nil {
+			protos = []string{}
+		}
 		models = append(models, Model{
 			ID:           row.ModelID,
 			OwnedBy:      row.OwnedBy,
 			Capabilities: caps,
+			Protocols:    protos,
 		})
 	}
 

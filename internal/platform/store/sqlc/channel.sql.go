@@ -166,9 +166,9 @@ SET status = 'archived', archived_at = now(), name = name || '__archived_' || id
 WHERE channels.id = $1 AND channels.status <> 'archived'
 `
 
-// ArchiveChannel 归档单个渠道；调用方必须先确认不存在任何 route_channels 引用。
+// ArchiveChannel 归档单个渠道。
 // 释放渠道名（追加 __archived_<id> 后缀释放 (provider_id, name) 槽位供复用）。不动 provider。
-// 返回 channels 受影响行数（0 = 渠道不存在或已归档）。恢复保持后缀名、不自动重加线路池。
+// 返回 channels 受影响行数（0 = 渠道不存在或已归档）。恢复保持后缀名。
 func (q *Queries) ArchiveChannel(ctx context.Context, id int64) (int64, error) {
 	result, err := q.db.Exec(ctx, archiveChannel, id)
 	if err != nil {
@@ -616,56 +616,13 @@ func (q *Queries) ChannelOpsPerformanceTimeseries(ctx context.Context, arg Chann
 	return items, nil
 }
 
-const channelOpsRoutes = `-- name: ChannelOpsRoutes :many
-SELECT rt.id, rt.name, rt.mode, rt.status, rt.price_ratio
-FROM route_channels rc
-JOIN routes rt ON rt.id = rc.route_id
-WHERE rc.channel_id = $1
-ORDER BY rt.id
-`
-
-type ChannelOpsRoutesRow struct {
-	ID         int64
-	Name       string
-	Mode       string
-	Status     string
-	PriceRatio pgtype.Numeric
-}
-
-// ChannelOpsRoutes 引用该渠道的线路池（抽屉线路 Tab）。
-func (q *Queries) ChannelOpsRoutes(ctx context.Context, channelID int64) ([]ChannelOpsRoutesRow, error) {
-	rows, err := q.db.Query(ctx, channelOpsRoutes, channelID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ChannelOpsRoutesRow
-	for rows.Next() {
-		var i ChannelOpsRoutesRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.Name,
-			&i.Mode,
-			&i.Status,
-			&i.PriceRatio,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const channelsOpsTable = `-- name: ChannelsOpsTable :many
 
 SELECT
     c.id,
     c.name,
     c.status,
-    c.protocol,
+    c.protocols,
     c.adapter_key,
     pr.origin,
     c.priority,
@@ -729,7 +686,6 @@ SELECT
         CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
              THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p99,
     (SELECT COUNT(*) FROM channel_models cm WHERE cm.channel_id = c.id AND cm.status = 'enabled') AS bound_models,
-    (SELECT COUNT(*) FROM route_channels rc WHERE rc.channel_id = c.id) AS bound_routes,
     (
         SELECT a2.error_code FROM request_attempts a2
         WHERE a2.channel_id = c.id AND a2.status = 'failed' AND a2.fault_party = 'upstream' AND a2.error_code IS NOT NULL
@@ -746,7 +702,7 @@ LEFT JOIN request_attempts a
 WHERE ($3::text IS NULL OR c.status = $3::text)
   AND ($4::bigint IS NULL OR c.provider_id = $4::bigint)
   AND ($5::text IS NULL OR c.name ILIKE '%' || $5::text || '%')
-GROUP BY c.id, c.name, c.status, c.protocol, c.adapter_key, pr.origin, c.priority,
+GROUP BY c.id, c.name, c.status, c.protocols, c.adapter_key, pr.origin, c.priority,
          c.response_timeout_ms, c.first_token_timeout_ms, c.credential,
          c.concurrency_limit, c.created_at, c.last_tested_at, c.last_test_ok,
          c.last_test_latency_ms, c.last_test_error, c.credential_valid, pr.name
@@ -769,8 +725,6 @@ ORDER BY
   CASE WHEN $6::text = 'timeout' AND NOT COALESCE($7::bool, false) THEN COUNT(a.id) FILTER (WHERE a.status = 'failed' AND (a.error_code ILIKE '%timeout%' OR a.error_code = 'context_deadline_exceeded')) END ASC NULLS LAST,
   CASE WHEN $6::text = 'bound_models' AND COALESCE($7::bool, false) THEN (SELECT COUNT(*) FROM channel_models cm WHERE cm.channel_id = c.id AND cm.status = 'enabled') END DESC NULLS LAST,
   CASE WHEN $6::text = 'bound_models' AND NOT COALESCE($7::bool, false) THEN (SELECT COUNT(*) FROM channel_models cm WHERE cm.channel_id = c.id AND cm.status = 'enabled') END ASC NULLS LAST,
-  CASE WHEN $6::text = 'bound_routes' AND COALESCE($7::bool, false) THEN (SELECT COUNT(*) FROM route_channels rc WHERE rc.channel_id = c.id) END DESC NULLS LAST,
-  CASE WHEN $6::text = 'bound_routes' AND NOT COALESCE($7::bool, false) THEN (SELECT COUNT(*) FROM route_channels rc WHERE rc.channel_id = c.id) END ASC NULLS LAST,
   CASE WHEN $6::text = 'priority' AND COALESCE($7::bool, false) THEN c.priority END DESC NULLS LAST,
   CASE WHEN $6::text = 'priority' AND NOT COALESCE($7::bool, false) THEN c.priority END ASC NULLS LAST,
   c.id
@@ -793,7 +747,7 @@ type ChannelsOpsTableRow struct {
 	ID                      int64
 	Name                    string
 	Status                  string
-	Protocol                string
+	Protocols               []string
 	AdapterKey              string
 	Origin                  string
 	Priority                int32
@@ -821,7 +775,6 @@ type ChannelsOpsTableRow struct {
 	LatencyP95              float64
 	LatencyP99              float64
 	BoundModels             int64
-	BoundRoutes             int64
 	RecentErrorCode         pgtype.Text
 }
 
@@ -854,7 +807,7 @@ func (q *Queries) ChannelsOpsTable(ctx context.Context, arg ChannelsOpsTablePara
 			&i.ID,
 			&i.Name,
 			&i.Status,
-			&i.Protocol,
+			&i.Protocols,
 			&i.AdapterKey,
 			&i.Origin,
 			&i.Priority,
@@ -882,7 +835,6 @@ func (q *Queries) ChannelsOpsTable(ctx context.Context, arg ChannelsOpsTablePara
 			&i.LatencyP95,
 			&i.LatencyP99,
 			&i.BoundModels,
-			&i.BoundRoutes,
 			&i.RecentErrorCode,
 		); err != nil {
 			return nil, err
@@ -926,7 +878,7 @@ WHERE id = $3
   AND capacity_revision = $4
   AND $2 = $4 + 1
   AND concurrency_limit IS DISTINCT FROM $1
-RETURNING id, provider_id, name, protocol, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast
+RETURNING id, provider_id, name, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast, protocols
 `
 
 type CommitChannelCapacityAtRevisionParams struct {
@@ -951,7 +903,6 @@ func (q *Queries) CommitChannelCapacityAtRevision(ctx context.Context, arg Commi
 		&i.ID,
 		&i.ProviderID,
 		&i.Name,
-		&i.Protocol,
 		&i.AdapterKey,
 		&i.Credential,
 		&i.ConfigRevision,
@@ -972,6 +923,7 @@ func (q *Queries) CommitChannelCapacityAtRevision(ctx context.Context, arg Commi
 		&i.ArchivedAt,
 		&i.ConcurrencyLimit,
 		&i.SupportsOpenaiFast,
+		&i.Protocols,
 	)
 	return i, err
 }
@@ -1019,7 +971,7 @@ func (q *Queries) CountChannels(ctx context.Context, arg CountChannelsParams) (i
 
 const createChannel = `-- name: CreateChannel :one
 INSERT INTO channels (
-    provider_id, name, protocol, adapter_key, credential, status, priority,
+    provider_id, name, protocols, adapter_key, credential, status, priority,
     supports_openai_fast,
     response_timeout_ms, first_token_timeout_ms, concurrency_limit,
     sticky_enabled, sticky_ttl_ms
@@ -1031,13 +983,13 @@ VALUES (
     $9, $10, $11,
     $12, $13
 )
-RETURNING id, provider_id, name, protocol, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast
+RETURNING id, provider_id, name, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast, protocols
 `
 
 type CreateChannelParams struct {
 	ProviderID          int64
 	Name                string
-	Protocol            string
+	Protocols           []string
 	AdapterKey          string
 	Credential          string
 	Status              string
@@ -1050,13 +1002,13 @@ type CreateChannelParams struct {
 	StickyTtlMs         pgtype.Int8
 }
 
-// CreateChannel 创建 channel；credential 为明文上游凭据，protocol+adapter_key 复合键须先在 adapter registry 校验存在。
+// CreateChannel 创建 channel；credential 为明文上游凭据，protocols 中每个协议与 adapter_key 的组合都须先在 adapter registry 校验存在。
 // 并发容量随业务行一次写入，初始 capacity_revision 固定使用表默认值 1；随后同步安装 revision=1 Redis control。
 func (q *Queries) CreateChannel(ctx context.Context, arg CreateChannelParams) (Channel, error) {
 	row := q.db.QueryRow(ctx, createChannel,
 		arg.ProviderID,
 		arg.Name,
-		arg.Protocol,
+		arg.Protocols,
 		arg.AdapterKey,
 		arg.Credential,
 		arg.Status,
@@ -1073,7 +1025,6 @@ func (q *Queries) CreateChannel(ctx context.Context, arg CreateChannelParams) (C
 		&i.ID,
 		&i.ProviderID,
 		&i.Name,
-		&i.Protocol,
 		&i.AdapterKey,
 		&i.Credential,
 		&i.ConfigRevision,
@@ -1094,6 +1045,7 @@ func (q *Queries) CreateChannel(ctx context.Context, arg CreateChannelParams) (C
 		&i.ArchivedAt,
 		&i.ConcurrencyLimit,
 		&i.SupportsOpenaiFast,
+		&i.Protocols,
 	)
 	return i, err
 }
@@ -1448,7 +1400,6 @@ DELETE FROM channels WHERE channels.id = $1
 // 子配置先删除，语句末 channels 的删除不会留下悬挂引用。若 channel 仍被请求/账务历史
 // （request_attempts/request_records/cost_snapshots/settlement_recovery_jobs）引用，
 // 整条语句报 23503 全部回滚，上层降级为 conflict，提示改用停用/保持归档。返回值为 channels 行的受影响数（0 表示 channel 不存在）。
-// 注：归档时已从 route_channels 线路池移除（ArchiveChannelCascade），故此处无需再清线路池。
 func (q *Queries) DeleteChannelCascade(ctx context.Context, id int64) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteChannelCascade, id)
 	if err != nil {
@@ -1488,7 +1439,7 @@ func (q *Queries) DeleteChannelModel(ctx context.Context, arg DeleteChannelModel
 }
 
 const getChannel = `-- name: GetChannel :one
-SELECT id, provider_id, name, protocol, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast
+SELECT id, provider_id, name, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast, protocols
 FROM channels
 WHERE id = $1
 LIMIT 1
@@ -1502,7 +1453,6 @@ func (q *Queries) GetChannel(ctx context.Context, id int64) (Channel, error) {
 		&i.ID,
 		&i.ProviderID,
 		&i.Name,
-		&i.Protocol,
 		&i.AdapterKey,
 		&i.Credential,
 		&i.ConfigRevision,
@@ -1523,6 +1473,7 @@ func (q *Queries) GetChannel(ctx context.Context, id int64) (Channel, error) {
 		&i.ArchivedAt,
 		&i.ConcurrencyLimit,
 		&i.SupportsOpenaiFast,
+		&i.Protocols,
 	)
 	return i, err
 }
@@ -1559,7 +1510,7 @@ const getChannelProbeSnapshot = `-- name: GetChannelProbeSnapshot :one
 SELECT
     c.id AS channel_id,
     c.provider_id,
-    c.protocol,
+    c.protocols,
     c.adapter_key,
     c.credential,
     c.credential_valid,
@@ -1577,7 +1528,7 @@ LIMIT 1
 type GetChannelProbeSnapshotRow struct {
 	ChannelID       int64
 	ProviderID      int64
-	Protocol        string
+	Protocols       []string
 	AdapterKey      string
 	Credential      string
 	CredentialValid bool
@@ -1595,7 +1546,7 @@ func (q *Queries) GetChannelProbeSnapshot(ctx context.Context, channelID int64) 
 	err := row.Scan(
 		&i.ChannelID,
 		&i.ProviderID,
-		&i.Protocol,
+		&i.Protocols,
 		&i.AdapterKey,
 		&i.Credential,
 		&i.CredentialValid,
@@ -1955,7 +1906,7 @@ func (q *Queries) ListChannelTestLogsByChannel(ctx context.Context, arg ListChan
 }
 
 const listChannelsByProvider = `-- name: ListChannelsByProvider :many
-SELECT id, provider_id, name, protocol, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast
+SELECT id, provider_id, name, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast, protocols
 FROM channels
 WHERE provider_id = $1
 ORDER BY priority, id
@@ -1975,7 +1926,6 @@ func (q *Queries) ListChannelsByProvider(ctx context.Context, providerID int64) 
 			&i.ID,
 			&i.ProviderID,
 			&i.Name,
-			&i.Protocol,
 			&i.AdapterKey,
 			&i.Credential,
 			&i.ConfigRevision,
@@ -1996,6 +1946,7 @@ func (q *Queries) ListChannelsByProvider(ctx context.Context, providerID int64) 
 			&i.ArchivedAt,
 			&i.ConcurrencyLimit,
 			&i.SupportsOpenaiFast,
+			&i.Protocols,
 		); err != nil {
 			return nil, err
 		}
@@ -2008,7 +1959,7 @@ func (q *Queries) ListChannelsByProvider(ctx context.Context, providerID int64) 
 }
 
 const listChannelsForRuntimeControlRestore = `-- name: ListChannelsForRuntimeControlRestore :many
-SELECT id, provider_id, name, protocol, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast
+SELECT id, provider_id, name, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast, protocols
 FROM channels
 ORDER BY id
 `
@@ -2027,7 +1978,6 @@ func (q *Queries) ListChannelsForRuntimeControlRestore(ctx context.Context) ([]C
 			&i.ID,
 			&i.ProviderID,
 			&i.Name,
-			&i.Protocol,
 			&i.AdapterKey,
 			&i.Credential,
 			&i.ConfigRevision,
@@ -2048,6 +1998,7 @@ func (q *Queries) ListChannelsForRuntimeControlRestore(ctx context.Context) ([]C
 			&i.ArchivedAt,
 			&i.ConcurrencyLimit,
 			&i.SupportsOpenaiFast,
+			&i.Protocols,
 		); err != nil {
 			return nil, err
 		}
@@ -2061,7 +2012,7 @@ func (q *Queries) ListChannelsForRuntimeControlRestore(ctx context.Context) ([]C
 
 const listChannelsPage = `-- name: ListChannelsPage :many
 SELECT
-    c.id, c.provider_id, c.name, c.protocol, c.adapter_key, p.origin,
+    c.id, c.provider_id, c.name, c.protocols, c.adapter_key, p.origin,
     c.credential, c.status, c.priority, c.created_at, c.updated_at,
     c.supports_openai_fast,
     c.concurrency_limit,
@@ -2095,7 +2046,7 @@ type ListChannelsPageRow struct {
 	ID                  int64
 	ProviderID          int64
 	Name                string
-	Protocol            string
+	Protocols           []string
 	AdapterKey          string
 	Origin              string
 	Credential          string
@@ -2140,7 +2091,7 @@ func (q *Queries) ListChannelsPage(ctx context.Context, arg ListChannelsPagePara
 			&i.ID,
 			&i.ProviderID,
 			&i.Name,
-			&i.Protocol,
+			&i.Protocols,
 			&i.AdapterKey,
 			&i.Origin,
 			&i.Credential,
@@ -2299,39 +2250,6 @@ func (q *Queries) ListEnabledChannelRechargeFactorWindows(ctx context.Context, a
 	return items, nil
 }
 
-const listRoutesReferencingChannel = `-- name: ListRoutesReferencingChannel :many
-SELECT rt.id, rt.name
-FROM routes rt
-JOIN route_channels target ON target.route_id = rt.id AND target.channel_id = $1
-ORDER BY rt.id
-`
-
-type ListRoutesReferencingChannelRow struct {
-	ID   int64
-	Name string
-}
-
-// 归档目标渠道前必须显式从所有线路池移除。
-func (q *Queries) ListRoutesReferencingChannel(ctx context.Context, channelID int64) ([]ListRoutesReferencingChannelRow, error) {
-	rows, err := q.db.Query(ctx, listRoutesReferencingChannel, channelID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListRoutesReferencingChannelRow
-	for rows.Next() {
-		var i ListRoutesReferencingChannelRow
-		if err := rows.Scan(&i.ID, &i.Name); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const prepareChannelCredentialRotation = `-- name: PrepareChannelCredentialRotation :one
 WITH current AS MATERIALIZED (
     SELECT c.id, c.credential AS previous_credential, c.credential_valid AS previous_credential_valid
@@ -2374,7 +2292,7 @@ WITH current AS MATERIALIZED (
     RETURNING
         c.id AS channel_id,
         c.provider_id,
-        c.protocol,
+        c.protocols,
         c.adapter_key,
         c.credential,
         c.credential_valid,
@@ -2384,7 +2302,7 @@ WITH current AS MATERIALIZED (
 SELECT
     updated.channel_id,
     updated.provider_id,
-    updated.protocol,
+    updated.protocols,
     updated.adapter_key,
     updated.credential,
     updated.credential_valid,
@@ -2406,7 +2324,7 @@ type PrepareChannelCredentialRotationParams struct {
 type PrepareChannelCredentialRotationRow struct {
 	ChannelID         int64
 	ProviderID        int64
-	Protocol          string
+	Protocols         []string
 	AdapterKey        string
 	Credential        string
 	CredentialValid   bool
@@ -2426,7 +2344,7 @@ func (q *Queries) PrepareChannelCredentialRotation(ctx context.Context, arg Prep
 	err := row.Scan(
 		&i.ChannelID,
 		&i.ProviderID,
-		&i.Protocol,
+		&i.Protocols,
 		&i.AdapterKey,
 		&i.Credential,
 		&i.CredentialValid,
@@ -2479,7 +2397,7 @@ SET name = $1,
     ),
     updated_at = now()
 WHERE id = $9
-RETURNING id, provider_id, name, protocol, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast
+RETURNING id, provider_id, name, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast, protocols
 `
 
 type UpdateChannelParams struct {
@@ -2494,7 +2412,7 @@ type UpdateChannelParams struct {
 	ID                  int64
 }
 
-// UpdateChannel 更新 channel 的展示名、绑定 Origin、启停状态、优先级与超时；protocol、adapter_key 与凭据不在此更新。
+// UpdateChannel 更新 channel 的展示名、绑定 Origin、启停状态、优先级与超时；protocols、adapter_key 与凭据不在此更新。
 // origin 归 Provider；config_revision 递增由服务层在真变化时于同事务处理。
 func (q *Queries) UpdateChannel(ctx context.Context, arg UpdateChannelParams) (Channel, error) {
 	row := q.db.QueryRow(ctx, updateChannel,
@@ -2513,7 +2431,6 @@ func (q *Queries) UpdateChannel(ctx context.Context, arg UpdateChannelParams) (C
 		&i.ID,
 		&i.ProviderID,
 		&i.Name,
-		&i.Protocol,
 		&i.AdapterKey,
 		&i.Credential,
 		&i.ConfigRevision,
@@ -2534,6 +2451,7 @@ func (q *Queries) UpdateChannel(ctx context.Context, arg UpdateChannelParams) (C
 		&i.ArchivedAt,
 		&i.ConcurrencyLimit,
 		&i.SupportsOpenaiFast,
+		&i.Protocols,
 	)
 	return i, err
 }

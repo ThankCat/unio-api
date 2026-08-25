@@ -268,9 +268,9 @@ func breakerEndpoint(operation requestlog.UpstreamEndpoint) breakerstore.Upstrea
 
 func attemptAdmissionFingerprint(in breakerstore.AcquireAttemptInput) string {
 	payload := fmt.Sprintf(
-		"%s|%s|%s|%d|%d|%d|%d|%d|%d|%d|%s|%s|%d|%d|%d|%d|%d",
+		"%s|%s|%s|%d|%d|%d|%d|%d|%d|%s|%s|%d|%d|%d|%d|%d",
 		in.PermitID, in.RequestAdmissionID, in.IntegrityEpoch, in.IntegrityRevision,
-		in.ProviderID, in.ChannelID, in.RouteID, in.OriginRevision, in.ProviderStatusRevision,
+		in.ProviderID, in.ChannelID, in.OriginRevision, in.ProviderStatusRevision,
 		in.ChannelConfigRevision, in.UpstreamEndpoint, in.RequestMode, in.ModelID,
 		in.GlobalConcurrencyRevision, in.CircuitBreakerRevision,
 		in.ChannelCapacityRevision, in.InputEstimate,
@@ -312,15 +312,6 @@ type AttemptPermitOwner struct {
 	terminalOnce   sync.Once
 	terminalResult breakerstore.FinishResult
 	terminalErr    error
-}
-
-// RouteID 返回本次 attempt 绑定的线路。它由 request admission token 注入 permit，
-// 是 TPM 观测里 Route 维度的唯一可信归属来源。
-func (o *AttemptPermitOwner) RouteID() int64 {
-	if o == nil {
-		return 0
-	}
-	return o.permit.RouteID
 }
 
 func newAttemptPermitOwner(

@@ -100,7 +100,7 @@ func (s *Service) GetInventory(ctx context.Context, channelID int64) (Inventory,
 	}
 	result := Inventory{Channel: InventoryChannel{
 		ID: contextRow.ChannelID, Name: contextRow.ChannelName, Status: contextRow.ChannelStatus,
-		Protocol: contextRow.Protocol, AdapterKey: contextRow.AdapterKey,
+		Protocol: primaryProtocol(contextRow.Protocols), AdapterKey: contextRow.AdapterKey,
 		ProviderID: contextRow.ProviderID, ProviderSlug: contextRow.ProviderSlug,
 	}}
 
@@ -283,4 +283,15 @@ func inventoryItemPending(item InventoryItem) bool {
 
 func verificationKey(modelID int64, upstream string) string {
 	return strings.Join([]string{strings.TrimSpace(upstream), strconv.FormatInt(modelID, 10)}, "\x00")
+}
+
+// primaryProtocol 取渠道的主协议（protocols 数组首项）。
+//
+// 探测与验活只需要一个协议形态：同一把上游凭据在 openai 和 anthropic 入口下能用的模型是同一批，
+// 上游可用性也不随入口形态变化。所以多协议渠道用主协议探一次即可，不必逐协议重复。
+func primaryProtocol(protocols []string) string {
+	if len(protocols) == 0 {
+		return ""
+	}
+	return protocols[0]
 }

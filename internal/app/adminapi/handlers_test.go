@@ -14,14 +14,12 @@ import (
 	achannel "github.com/ThankCat/unio-gateway/internal/app/adminapi/channel"
 	amodel "github.com/ThankCat/unio-gateway/internal/app/adminapi/model"
 	aprovider "github.com/ThankCat/unio-gateway/internal/app/adminapi/provider"
-	aroute "github.com/ThankCat/unio-gateway/internal/app/adminapi/route"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/channel"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/channelmodel"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/channelprice"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/model"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/provider"
-	"github.com/ThankCat/unio-gateway/internal/service/admin/route"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/supply"
 )
 
@@ -134,21 +132,9 @@ func (s *fakeModelService) Create(context.Context, model.CreateInput) (model.Mod
 func (s *fakeModelService) Update(context.Context, model.UpdateInput) (model.Model, error) {
 	return s.updateOut, s.updateErr
 }
-func (s *fakeModelService) Delist(_ context.Context, id int64, confirmation supply.Confirmation) (int, error) {
-	s.delistID = id
-	s.delistIn = confirmation
-	return s.delistOut, s.delistErr
-}
 func (s *fakeModelService) Delete(context.Context, int64) error {
 	return s.deleteErr
 }
-func (s *fakeModelService) ListDisabledOfferings(context.Context, int64, string) ([]model.ModelOffering, error) {
-	return nil, nil
-}
-func (s *fakeModelService) RestoreOfferings(context.Context, int64, []model.OfferingRestoreItem, supply.Confirmation) (int, error) {
-	return 0, nil
-}
-
 type fakeChannelModelService struct {
 	listOut   []channelmodel.Binding
 	createOut channelmodel.Binding
@@ -216,52 +202,6 @@ func newChannelPriceRouter(t *testing.T, cps achannel.ChannelPriceService) http.
 		Logger:              zap.NewNop(),
 		AdminAuthenticator:  authenticator,
 		ChannelPriceService: cps,
-	})
-}
-
-type fakeRouteService struct {
-	listOut   []route.Route
-	createOut route.Route
-	createErr error
-	createIn  route.CreateInput
-}
-
-func (s *fakeRouteService) List(context.Context) ([]route.Route, error) { return s.listOut, nil }
-func (s *fakeRouteService) Get(context.Context, int64) (route.Route, error) {
-	return s.createOut, nil
-}
-func (s *fakeRouteService) Create(_ context.Context, in route.CreateInput) (route.Route, error) {
-	s.createIn = in
-	return s.createOut, s.createErr
-}
-func (s *fakeRouteService) Update(context.Context, route.UpdateInput) (route.Route, error) {
-	return s.createOut, nil
-}
-func (s *fakeRouteService) Delete(context.Context, int64) error { return nil }
-func (s *fakeRouteService) Archive(context.Context, int64, *int64) ([]route.EmptyRouteWarning, error) {
-	return nil, nil
-}
-func (s *fakeRouteService) Restore(context.Context, int64) error                     { return nil }
-func (s *fakeRouteService) MigrateKeys(context.Context, int64, int64) (int64, error) { return 0, nil }
-func (s *fakeRouteService) SetChannels(context.Context, int64, []int64, supply.Confirmation) (route.Route, error) {
-	return s.createOut, nil
-}
-func (s *fakeRouteService) OfferingCandidates(context.Context, []int64) ([]route.OfferingCandidate, error) {
-	return nil, nil
-}
-
-func newRouteRouter(t *testing.T, rs aroute.RouteService) http.Handler {
-	t.Helper()
-
-	authenticator, err := newTestAdminAuthenticator()
-	if err != nil {
-		t.Fatalf("new authenticator: %v", err)
-	}
-
-	return adminapi.NewRouter(adminapi.RouterDeps{
-		Logger:             zap.NewNop(),
-		AdminAuthenticator: authenticator,
-		RouteService:       rs,
 	})
 }
 
@@ -433,7 +373,7 @@ func TestCreateChannelUnsupportedBindingReturns422(t *testing.T) {
 
 func TestCreateChannelForwardsRequestedStatus(t *testing.T) {
 	svc := &fakeChannelService{createOut: channel.Channel{
-		ID: 9, ProviderID: 1, Name: "primary", Protocol: "openai", AdapterKey: "openai", Status: "enabled",
+		ID: 9, ProviderID: 1, Name: "primary", Protocols: []string{"openai"}, AdapterKey: "openai", Status: "enabled",
 	}}
 	handler := newServicesRouter(t, nil, svc)
 
@@ -547,26 +487,6 @@ func TestDeleteModelConflictReturns409(t *testing.T) {
 	}
 }
 
-func TestDelistModelMapsExplicitOfferingSelection(t *testing.T) {
-	service := &fakeModelService{delistOut: 1}
-	handler := newModelRouter(t, service)
-	body := `{"confirm_supply_impact":true,"expected_impact_fingerprint":"fp-1","selected_offerings":[{"route_id":9,"model_db_id":7,"ingress_protocol":"openai"}]}`
-	rec := doAdmin(t, handler, http.MethodPost, "/v1/models/7/delist", body, true)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected %d, got %d (%s)", http.StatusOK, rec.Code, rec.Body.String())
-	}
-	if service.delistID != 7 || !service.delistIn.Confirm || service.delistIn.ExpectedFingerprint != "fp-1" {
-		t.Fatalf("delist request = id:%d confirmation:%+v", service.delistID, service.delistIn)
-	}
-	if len(service.delistIn.SelectedOfferings) != 1 ||
-		service.delistIn.SelectedOfferings[0] != (supply.OfferingSelection{RouteID: 9, ModelID: 7, IngressProtocol: "openai"}) {
-		t.Fatalf("selected offerings = %+v", service.delistIn.SelectedOfferings)
-	}
-	if !strings.Contains(rec.Body.String(), `"disabled_offerings":1`) {
-		t.Fatalf("response = %s", rec.Body.String())
-	}
-}
-
 func TestCreateChannelModelReturns201(t *testing.T) {
 	handler := newChannelModelRouter(t, &fakeChannelModelService{createOut: channelmodel.Binding{ID: 1, ChannelID: 5, ModelID: 2, UpstreamModel: "gpt-4o", Status: "enabled"}})
 
@@ -646,41 +566,6 @@ func TestChannelPricesRequireToken(t *testing.T) {
 	handler := newChannelPriceRouter(t, &fakeChannelPriceService{})
 
 	rec := doAdmin(t, handler, http.MethodGet, "/v1/channels/5/prices", "", false)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("expected %d, got %d", http.StatusUnauthorized, rec.Code)
-	}
-}
-
-func TestCreateRouteReturns201(t *testing.T) {
-	service := &fakeRouteService{createOut: route.Route{ID: 3, Name: "C-line", Mode: "fixed", Status: "enabled"}}
-	handler := newRouteRouter(t, service)
-
-	body := `{"name":"C-line","mode":"fixed","status":"enabled","channel_ids":[5],"offerings":[{"model_id":7,"ingress_protocol":"openai"}]}`
-	rec := doAdmin(t, handler, http.MethodPost, "/v1/routes", body, true)
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("expected %d, got %d (%s)", http.StatusCreated, rec.Code, rec.Body.String())
-	}
-	if len(service.createIn.Offerings) != 1 ||
-		service.createIn.Offerings[0].ModelID != 7 ||
-		service.createIn.Offerings[0].IngressProtocol != "openai" {
-		t.Fatalf("create offerings = %#v, want [{7 openai}]", service.createIn.Offerings)
-	}
-}
-
-func TestCreateRouteFixedValidationReturns400(t *testing.T) {
-	handler := newRouteRouter(t, &fakeRouteService{createErr: failure.New(failure.CodeAdminInvalidArgument, failure.WithMessage("fixed route must list exactly one channel"), failure.WithField("field", "channel_ids"))})
-
-	body := `{"name":"C-line","mode":"fixed","status":"enabled","channel_ids":[],"offerings":[{"model_id":7,"ingress_protocol":"openai"}]}`
-	rec := doAdmin(t, handler, http.MethodPost, "/v1/routes", body, true)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected %d, got %d (%s)", http.StatusBadRequest, rec.Code, rec.Body.String())
-	}
-}
-
-func TestRoutesRequireToken(t *testing.T) {
-	handler := newRouteRouter(t, &fakeRouteService{})
-
-	rec := doAdmin(t, handler, http.MethodGet, "/v1/routes", "", false)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected %d, got %d", http.StatusUnauthorized, rec.Code)
 	}

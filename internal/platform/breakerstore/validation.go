@@ -17,13 +17,13 @@ func validateRequestAdmissionInput(in RequestAdmissionInput) error {
 	if strings.TrimSpace(in.RequestAdmissionID) == "" || strings.TrimSpace(in.Fingerprint) == "" {
 		return configInvalid("request admission id and fingerprint are required")
 	}
-	if in.RouteID <= 0 || in.UserID <= 0 {
-		return configInvalid("request admission route and user ids must be positive")
+	if in.UserID <= 0 {
+		return configInvalid("request admission user id must be positive")
 	}
 	if strings.TrimSpace(in.IntegrityEpoch) == "" || in.IntegrityRevision <= 0 {
 		return configInvalid("request admission integrity epoch and revision are required")
 	}
-	if in.RouteRateRevision <= 0 || in.GlobalConcurrencyRevision <= 0 {
+	if in.RequestRateRevision <= 0 || in.GlobalConcurrencyRevision <= 0 {
 		return configInvalid("request admission control revisions must be positive")
 	}
 	for _, limit := range []*int64{
@@ -38,12 +38,12 @@ func validateRequestAdmissionInput(in RequestAdmissionInput) error {
 	return nil
 }
 
-func validateRequestLifecycleInput(requestAdmissionID string, routeID, userID int64, integrityEpoch string, integrityRevision int64) error {
+func validateRequestLifecycleInput(requestAdmissionID string, userID int64, integrityEpoch string, integrityRevision int64) error {
 	if strings.TrimSpace(requestAdmissionID) == "" {
 		return configInvalid("request admission id is required")
 	}
-	if routeID <= 0 || userID <= 0 {
-		return configInvalid("request admission route and user ids must be positive")
+	if userID <= 0 {
+		return configInvalid("request admission user id must be positive")
 	}
 	if strings.TrimSpace(integrityEpoch) == "" || integrityRevision <= 0 {
 		return configInvalid("request admission integrity epoch and revision are required")

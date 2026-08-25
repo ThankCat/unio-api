@@ -33,17 +33,17 @@ type ChannelService interface {
 // channelDTO 是 channel 的 admin API 响应体；含明文上游凭据（产品决策：渠道凭据明文，管理端可查看/复制）。
 // ProviderName 仅分页列表场景有值；单条读取/写入返回为空。
 type channelDTO struct {
-	ID                 int64  `json:"id"`
-	ProviderID         int64  `json:"provider_id"`
-	ProviderName       string `json:"provider_name"`
-	Name               string `json:"name"`
-	Protocol           string `json:"protocol"`
-	AdapterKey         string `json:"adapter_key"`
-	Origin             string `json:"origin"`
-	SupportsOpenAIFast bool   `json:"supports_openai_fast"`
-	ConfigRevision     int64  `json:"config_revision"`
-	CapacityRevision   int64  `json:"capacity_revision"`
-	RuntimeSyncPending bool   `json:"runtime_sync_pending"`
+	ID                 int64    `json:"id"`
+	ProviderID         int64    `json:"provider_id"`
+	ProviderName       string   `json:"provider_name"`
+	Name               string   `json:"name"`
+	Protocols          []string `json:"protocols"`
+	AdapterKey         string   `json:"adapter_key"`
+	Origin             string   `json:"origin"`
+	SupportsOpenAIFast bool     `json:"supports_openai_fast"`
+	ConfigRevision     int64    `json:"config_revision"`
+	CapacityRevision   int64    `json:"capacity_revision"`
+	RuntimeSyncPending bool     `json:"runtime_sync_pending"`
 	// Credential 是明文上游 API key（产品决策：明文存储，管理端可查看/复制/编辑）。
 	Credential          string `json:"credential"`
 	Status              string `json:"status"`
@@ -106,7 +106,7 @@ func validateConcurrencyLimit(value *int64) error {
 type createChannelRequest struct {
 	ProviderID          int64         `json:"provider_id"`
 	Name                string        `json:"name"`
-	Protocol            string        `json:"protocol"`
+	Protocols           []string      `json:"protocols"`
 	AdapterKey          string        `json:"adapter_key"`
 	Credential          string        `json:"credential"`
 	Status              string        `json:"status"`
@@ -244,7 +244,7 @@ func (h *channelsHandler) create(w http.ResponseWriter, r *http.Request) {
 	in := channel.CreateInput{
 		ProviderID:          req.ProviderID,
 		Name:                req.Name,
-		Protocol:            req.Protocol,
+		Protocols:           req.Protocols,
 		AdapterKey:          req.AdapterKey,
 		Credential:          req.Credential,
 		Status:              req.Status,
@@ -413,7 +413,7 @@ func toChannelDTO(c channel.Channel) channelDTO {
 		CapacityRevision:    c.CapacityRevision,
 		RuntimeSyncPending:  c.RuntimeSyncPending,
 		Name:                c.Name,
-		Protocol:            c.Protocol,
+		Protocols:           c.Protocols,
 		AdapterKey:          c.AdapterKey,
 		Origin:              c.Origin,
 		SupportsOpenAIFast:  c.SupportsOpenAIFast,

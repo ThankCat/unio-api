@@ -42,7 +42,7 @@ type RoutingTraceStore interface {
 }
 
 type routingTraceDiagnosticStore interface {
-	RouteRuntimePool(context.Context, sqlc.RouteRuntimePoolParams) ([]sqlc.RouteRuntimePoolRow, error)
+	ModelRuntimePool(context.Context, sqlc.ModelRuntimePoolParams) ([]sqlc.ModelRuntimePoolRow, error)
 }
 
 // RoutingTraceRecorder 为每个进入路由规划的请求持久化一条不含敏感数据的完整路由过程。
@@ -71,10 +71,13 @@ func NewRoutingTraceRecorder(store RoutingTraceStore, logger *zap.Logger) *Routi
 	return &RoutingTraceRecorder{store: store, logger: logger}
 }
 
+// RoutingModeBalanced 是唯一的选路模式：按容量与健康度加权排序。
+// 它仍记进 trace，因为 trace 要能解释「当时用的是哪套排序」——将来加新模式时历史仍可读。
+const RoutingModeBalanced = "balanced"
+
 // RoutingDecisionTraceInput 是一次计划或 fallback 后的 trace 输入。
 type RoutingDecisionTraceInput struct {
 	Request         requestlog.RequestRecord
-	RouteID         int64
 	Mode            string
 	PoolSize        int
 	Plan            CandidatePlan
@@ -167,7 +170,7 @@ type traceCandidateScore struct {
 	CandidateChannelCapacityRevision int64    `json:"candidate_channel_capacity_revision"`
 	RuntimeChannelCapacityRevision   int64    `json:"runtime_channel_capacity_revision"`
 	ChannelCapacityRevisionCurrent   bool     `json:"channel_capacity_revision_current"`
-	RouteRateLimitsRevision          int64    `json:"route_rate_limits_revision"`
+	RequestRateLimitsRevision        int64    `json:"request_rate_limits_revision"`
 	GlobalConcurrencyRevision        int64    `json:"global_concurrency_revision"`
 	CircuitBreakerRevision           int64    `json:"circuit_breaker_revision"`
 	RuntimeControlState              string   `json:"runtime_control_state"`
@@ -211,8 +214,11 @@ func (r *RoutingTraceRecorder) complete(ctx context.Context, in RoutingDecisionT
 }
 
 func (r *RoutingTraceRecorder) record(ctx context.Context, in RoutingDecisionTraceInput, logPlan bool) {
-	if r == nil || r.store == nil || in.RouteID <= 0 || in.Request.ID <= 0 {
+	if r == nil || r.store == nil || in.Request.ID <= 0 {
 		return
+	}
+	if in.Mode == "" {
+		in.Mode = RoutingModeBalanced
 	}
 	// pgx encodes a nil []string as SQL NULL, while abnormal_reasons is NOT NULL.
 	reasons := append(make([]string, 0, len(in.ForceReasons)+4), in.ForceReasons...)
@@ -251,21 +257,19 @@ func (r *RoutingTraceRecorder) record(ctx context.Context, in RoutingDecisionTra
 	scores := make([]traceCandidateScore, 0, len(in.Plan.Candidates)+len(in.Plan.Excluded))
 	poolSize := in.PoolSize
 	if diagnosticStore, ok := r.store.(routingTraceDiagnosticStore); ok {
-		poolRows, poolErr := diagnosticStore.RouteRuntimePool(ctx, sqlc.RouteRuntimePoolParams{
-			RouteID: in.RouteID, ModelID: in.Request.RequestedModelID,
-			AtTime: pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true},
+		poolRows, poolErr := diagnosticStore.ModelRuntimePool(ctx, sqlc.ModelRuntimePoolParams{
+			ModelID: in.Request.RequestedModelID,
+			AtTime:  pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true},
 		})
 		if poolErr != nil {
-			fields := []zap.Field{zap.String("request_id", in.Request.RequestID), zap.Int64("route_id", in.RouteID), zap.String("error_message", poolErr.Error())}
+			fields := []zap.Field{zap.String("request_id", in.Request.RequestID), zap.String("error_message", poolErr.Error())}
 			if requestFields, ok := logfields.FromContext(ctx); ok {
 				fields = append(requestFields.ZapFields(), fields...)
 			}
 			logging.Warn(r.logger, "routing", "trace", "routing trace diagnostics read failed", fields...)
 		} else {
 			poolSize = len(poolRows)
-			if in.Mode == "" && len(poolRows) > 0 {
-				in.Mode = poolRows[0].Mode
-			}
+
 			for index, row := range poolRows {
 				reason := routingdiagnostic.ExcludedReason(poolFactsFromRow(row), routingdiagnostic.Filter{
 					ModelID: in.Request.RequestedModelID, Protocol: string(in.Request.IngressProtocol),
@@ -340,7 +344,6 @@ func (r *RoutingTraceRecorder) record(ctx context.Context, in RoutingDecisionTra
 	}
 	planFields := []zap.Field{
 		zap.String("request_id", in.Request.RequestID),
-		zap.Int64("route_id", in.RouteID),
 		zap.String("mode", in.Mode),
 		zap.Int("pool_size", poolSize),
 		zap.Int("eligible_count", eligibleCount),
@@ -361,7 +364,6 @@ func (r *RoutingTraceRecorder) record(ctx context.Context, in RoutingDecisionTra
 	if status == TraceStatusComplete {
 		completedFields := []zap.Field{
 			zap.String("request_id", in.Request.RequestID),
-			zap.Int64("route_id", in.RouteID),
 			zap.Int64("selected_channel_id", in.SelectedChannelID),
 			zap.Int("attempt_count", len(in.FallbackChain)),
 			zap.Int("fallback_count", in.FallbackCount),
@@ -387,7 +389,6 @@ func (r *RoutingTraceRecorder) record(ctx context.Context, in RoutingDecisionTra
 
 	if err := r.store.UpsertRoutingDecisionTrace(ctx, sqlc.UpsertRoutingDecisionTraceParams{
 		RequestRecordID:       in.Request.ID,
-		RouteID:               in.RouteID,
 		Mode:                  in.Mode,
 		RequestedModelID:      in.Request.RequestedModelID,
 		Protocol:              string(in.Request.IngressProtocol),
@@ -494,7 +495,7 @@ func traceScore(candidate Candidate, channelID int64, routeIndex int, eligible b
 		CandidateChannelCapacityRevision: candidate.Balance.CandidateChannelCapacityRevision,
 		RuntimeChannelCapacityRevision:   candidate.Balance.RuntimeChannelCapacityRevision,
 		ChannelCapacityRevisionCurrent:   candidate.Balance.ChannelCapacityRevisionCurrent,
-		RouteRateLimitsRevision:          candidate.Balance.RouteRateLimitsRevision,
+		RequestRateLimitsRevision:        candidate.Balance.RequestRateLimitsRevision,
 		GlobalConcurrencyRevision:        candidate.Balance.GlobalConcurrencyRevision,
 		CircuitBreakerRevision:           candidate.Balance.CircuitBreakerRevision,
 		RuntimeControlState:              candidate.Balance.RuntimeControlState,
@@ -530,11 +531,11 @@ func traceScore(candidate Candidate, channelID int64, routeIndex int, eligible b
 	}
 }
 
-func poolFactsFromRow(row sqlc.RouteRuntimePoolRow) routingdiagnostic.PoolFacts {
+func poolFactsFromRow(row sqlc.ModelRuntimePoolRow) routingdiagnostic.PoolFacts {
 	return routingdiagnostic.PoolFacts{
-		RouteStatus: row.RouteStatus, ChannelStatus: row.ChannelStatus, ProviderStatus: row.ProviderStatus,
+		ChannelStatus: row.ChannelStatus, ProviderStatus: row.ProviderStatus,
 		CredentialValid: row.CredentialValid, HasCredential: row.HasCredential, HasBaseURL: row.HasOrigin,
-		Protocol: row.Protocol, ModelExists: row.ModelExists, ModelStatus: row.ModelStatus,
+		Protocols: row.Protocols, ModelExists: row.ModelExists, ModelStatus: row.ModelStatus,
 		BindingStatus: row.BindingStatus, HasModelPrice: row.HasModelPrice, HasChannelCost: row.HasChannelCost,
 	}
 }

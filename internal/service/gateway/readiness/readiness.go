@@ -118,7 +118,7 @@ func (c *Checker) expectedRuntime(
 	if err != nil || epoch.State != runtimecontrol.StateEpochReady || row.RuntimeStateEpochRevision < 1 {
 		return breakerstore.RuntimeReadinessInput{}, "epoch_not_ready", "lost", false
 	}
-	if row.RouteRateLimitDefaultsRevision < 1 || row.ConcurrencyDefaultsRevision < 1 ||
+	if row.RequestRateLimitDefaultsRevision < 1 || row.ConcurrencyDefaultsRevision < 1 ||
 		row.CircuitBreakerRevision < 1 || row.RoutingBalanceRevision < 1 {
 		return breakerstore.RuntimeReadinessInput{}, "control_revision_invalid", "ready", false
 	}
@@ -126,12 +126,12 @@ func (c *Checker) expectedRuntime(
 		return breakerstore.RuntimeReadinessInput{}, "runtime_operation_pending", "ready", false
 	}
 	return breakerstore.RuntimeReadinessInput{
-		Epoch:                  epoch.Epoch,
-		EpochRevision:          row.RuntimeStateEpochRevision,
-		RouteRateLimitRevision: row.RouteRateLimitDefaultsRevision,
-		ConcurrencyRevision:    row.ConcurrencyDefaultsRevision,
-		CircuitBreakerRevision: row.CircuitBreakerRevision,
-		RoutingBalanceRevision: row.RoutingBalanceRevision,
+		Epoch:                    epoch.Epoch,
+		EpochRevision:            row.RuntimeStateEpochRevision,
+		RequestRateLimitRevision: row.RequestRateLimitDefaultsRevision,
+		ConcurrencyRevision:      row.ConcurrencyDefaultsRevision,
+		CircuitBreakerRevision:   row.CircuitBreakerRevision,
+		RoutingBalanceRevision:   row.RoutingBalanceRevision,
 	}, "", "", true
 }
 

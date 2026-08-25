@@ -1,30 +1,30 @@
 // Package routingdiagnostic defines stable, sensitive-data-free route exclusion reasons.
 package routingdiagnostic
 
+import "slices"
+
 type Filter struct {
 	ModelID  string
 	Protocol string
 }
 
 type PoolFacts struct {
-	RouteStatus     string
 	ChannelStatus   string
 	ProviderStatus  string
 	CredentialValid bool
 	HasCredential   bool
 	HasBaseURL      bool
-	Protocol        string
-	ModelExists     bool
-	ModelStatus     string
-	BindingStatus   string
-	HasModelPrice   bool
-	HasChannelCost  bool
+	// Protocols 是渠道声明支持的入口协议集合；一条渠道可以同时接多个协议。
+	Protocols      []string
+	ModelExists    bool
+	ModelStatus    string
+	BindingStatus  string
+	HasModelPrice  bool
+	HasChannelCost bool
 }
 
 func ExcludedReason(facts PoolFacts, filter Filter) string {
 	switch {
-	case facts.RouteStatus != "enabled":
-		return "route_" + facts.RouteStatus
 	case facts.ChannelStatus != "enabled":
 		return "channel_" + facts.ChannelStatus
 	case facts.ProviderStatus != "enabled":
@@ -35,7 +35,7 @@ func ExcludedReason(facts PoolFacts, filter Filter) string {
 		return "credential_missing"
 	case !facts.HasBaseURL:
 		return "base_url_missing"
-	case filter.Protocol != "" && facts.Protocol != filter.Protocol:
+	case filter.Protocol != "" && !slices.Contains(facts.Protocols, filter.Protocol):
 		return "protocol_mismatch"
 	case filter.ModelID != "" && !facts.ModelExists:
 		return "model_not_found"

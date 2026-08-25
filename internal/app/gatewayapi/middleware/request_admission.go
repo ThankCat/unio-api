@@ -57,13 +57,12 @@ func RequestAdmission(acquirer RequestAdmissionAcquirer, opts RequestAdmissionOp
 		}
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			principal, ok := auth.APIKeyPrincipalFromContext(r.Context())
-			if !ok || principal == nil || principal.RouteID == nil {
+			if !ok || principal == nil {
 				writeRequestAdmissionUnavailable(w, r, opts.Protocol)
 				return
 			}
 
 			result, err := acquirer.Acquire(r.Context(), requestadmission.Identity{
-				RouteID:                  *principal.RouteID,
 				UserID:                   principal.UserID,
 				Scope:                    r.Method + " " + opts.Scope,
 				RPMLimitOverride:         principal.RPMLimit,

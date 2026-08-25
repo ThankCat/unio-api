@@ -41,7 +41,7 @@ func (s *createStore) CreateChannel(_ context.Context, arg sqlc.CreateChannelPar
 		ID:                 7,
 		ProviderID:         arg.ProviderID,
 		Name:               arg.Name,
-		Protocol:           arg.Protocol,
+		Protocols:          arg.Protocols,
 		AdapterKey:         arg.AdapterKey,
 		Credential:         arg.Credential,
 		CapacityRevision:   1,
@@ -74,10 +74,6 @@ func (s *createStore) CountEnabledBindingsByChannel(context.Context, int64) (int
 	return 0, nil
 }
 
-func (s *createStore) ListRoutesReferencingChannel(context.Context, int64) ([]sqlc.ListRoutesReferencingChannelRow, error) {
-	return nil, nil
-}
-
 func (s *createStore) RestoreChannel(context.Context, int64) (int64, error) {
 	return 0, nil
 }
@@ -101,7 +97,7 @@ func TestCreatePreservesRequestedStatus(t *testing.T) {
 			created, err := svc.Create(context.Background(), channel.CreateInput{
 				ProviderID: 1,
 				Name:       "primary",
-				Protocol:   channel.ProtocolOpenAI,
+				Protocols:   []string{channel.ProtocolOpenAI},
 				AdapterKey: channel.ProtocolOpenAI,
 				Credential: "test-credential",
 				Status:     requested,
@@ -132,7 +128,7 @@ func TestCreateEnabledRequiresEnabledProvider(t *testing.T) {
 	_, err := svc.Create(context.Background(), channel.CreateInput{
 		ProviderID: 1,
 		Name:       "primary",
-		Protocol:   channel.ProtocolOpenAI,
+		Protocols:   []string{channel.ProtocolOpenAI},
 		AdapterKey: channel.ProtocolOpenAI,
 		Credential: "test-credential",
 		Status:     channel.StatusEnabled,
@@ -153,7 +149,7 @@ func TestCreateOpenAIFastCapability(t *testing.T) {
 	svc := channel.NewService(store, createRegistry{})
 
 	created, err := svc.Create(context.Background(), channel.CreateInput{
-		ProviderID: 1, Name: "fast", Protocol: channel.ProtocolOpenAI,
+		ProviderID: 1, Name: "fast", Protocols: []string{channel.ProtocolOpenAI},
 		AdapterKey: channel.ProtocolOpenAI, SupportsOpenAIFast: true,
 		Credential: "test-credential", Status: channel.StatusDisabled,
 	})
@@ -172,7 +168,7 @@ func TestCreateRejectsOpenAIFastOnAnthropicChannel(t *testing.T) {
 	svc := channel.NewService(store, createRegistry{})
 
 	_, err := svc.Create(context.Background(), channel.CreateInput{
-		ProviderID: 1, Name: "anthropic-fast", Protocol: channel.ProtocolAnthropic,
+		ProviderID: 1, Name: "anthropic-fast", Protocols: []string{channel.ProtocolAnthropic},
 		AdapterKey: channel.ProtocolAnthropic, SupportsOpenAIFast: true,
 		Credential: "test-credential", Status: channel.StatusDisabled,
 	})
@@ -199,7 +195,7 @@ func TestUpdateOpenAIFastCapabilityPatchSemantics(t *testing.T) {
 			store := &createStore{
 				provider: sqlc.Provider{ID: 1, Name: "Provider", Status: channel.StatusEnabled},
 				channel: sqlc.Channel{
-					ID: 7, ProviderID: 1, Name: "primary", Protocol: channel.ProtocolOpenAI,
+					ID: 7, ProviderID: 1, Name: "primary", Protocols: []string{channel.ProtocolOpenAI},
 					AdapterKey: channel.ProtocolOpenAI, Status: channel.StatusDisabled,
 					CapacityRevision: 1, SupportsOpenaiFast: true,
 				},
@@ -227,7 +223,7 @@ func TestUpdateRejectsOpenAIFastOnAnthropicChannel(t *testing.T) {
 	store := &createStore{
 		provider: sqlc.Provider{ID: 1, Name: "Provider", Status: channel.StatusEnabled},
 		channel: sqlc.Channel{
-			ID: 7, ProviderID: 1, Name: "anthropic", Protocol: channel.ProtocolAnthropic,
+			ID: 7, ProviderID: 1, Name: "anthropic", Protocols: []string{channel.ProtocolAnthropic},
 			AdapterKey: channel.ProtocolAnthropic, Status: channel.StatusDisabled, CapacityRevision: 1,
 		},
 	}

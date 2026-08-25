@@ -46,7 +46,6 @@ type Store interface {
 	DashboardRadarBadChannels(ctx context.Context, arg sqlc.DashboardRadarBadChannelsParams) ([]sqlc.DashboardRadarBadChannelsRow, error)
 	DashboardBreakdownProvider(ctx context.Context, arg sqlc.DashboardBreakdownProviderParams) ([]sqlc.DashboardBreakdownProviderRow, error)
 	CountLowBalanceProviders(ctx context.Context) (int64, error)
-	DashboardBreakdownRoute(ctx context.Context, arg sqlc.DashboardBreakdownRouteParams) ([]sqlc.DashboardBreakdownRouteRow, error)
 	DashboardBreakdownChannel(ctx context.Context, arg sqlc.DashboardBreakdownChannelParams) ([]sqlc.DashboardBreakdownChannelRow, error)
 	DashboardChannelSuccessBuckets(ctx context.Context, arg sqlc.DashboardChannelSuccessBucketsParams) ([]sqlc.DashboardChannelSuccessBucketsRow, error)
 	DashboardBreakdownModel(ctx context.Context, arg sqlc.DashboardBreakdownModelParams) ([]sqlc.DashboardBreakdownModelRow, error)

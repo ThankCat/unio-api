@@ -108,7 +108,7 @@ func TestSettingsApplierDoesNotReadRuntimeControlSettings(t *testing.T) {
 
 	for _, key := range []string{
 		appsettings.GatewayCircuitBreakerKey,
-		appsettings.GatewayRouteRateLimitDefaultsKey,
+		appsettings.GatewayRequestRateLimitDefaultsKey,
 		appsettings.GatewayConcurrencyDefaultsKey,
 		appsettings.GatewayRoutingBalanceKey,
 	} {

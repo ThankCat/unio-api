@@ -34,7 +34,6 @@ const groupRowLimit = 20
 const (
 	GroupByModel  = "model"
 	GroupByAPIKey = "api_key"
-	GroupByRoute  = "route"
 )
 
 // Store 是用量统计所需的存储能力。
@@ -44,9 +43,7 @@ type Store interface {
 	ListConsoleUsageTrendByGroup(context.Context, sqlc.ListConsoleUsageTrendByGroupParams) ([]sqlc.ListConsoleUsageTrendByGroupRow, error)
 	ListConsoleUsageByModel(context.Context, sqlc.ListConsoleUsageByModelParams) ([]sqlc.ListConsoleUsageByModelRow, error)
 	ListConsoleUsageByAPIKey(context.Context, sqlc.ListConsoleUsageByAPIKeyParams) ([]sqlc.ListConsoleUsageByAPIKeyRow, error)
-	ListConsoleUsageByRoute(context.Context, sqlc.ListConsoleUsageByRouteParams) ([]sqlc.ListConsoleUsageByRouteRow, error)
 	ListConsoleUsageFilterModels(context.Context, int64) ([]sqlc.ListConsoleUsageFilterModelsRow, error)
-	ListConsoleFilterRoutes(context.Context) ([]sqlc.ListConsoleFilterRoutesRow, error)
 	ListConsoleFilterAPIKeys(context.Context, int64) ([]sqlc.ListConsoleFilterAPIKeysRow, error)
 }
 
@@ -54,7 +51,6 @@ var _ Store = (*sqlc.Queries)(nil)
 
 // Filters 是用量统计的筛选条件，口径与请求中心列表一致。
 type Filters struct {
-	RouteIDs    []int64
 	APIKeyIDs   []int64
 	ModelIDs    []string
 	Endpoints   []string
@@ -137,7 +133,7 @@ type TrendParams struct {
 	To     time.Time
 	Bucket string
 	TZ     string
-	// Dimension 取 model / api_key / route，与维度排行同名。
+	// Dimension 取 model / api_key，与维度排行同名。
 	Dimension string
 	Filters
 }
@@ -182,7 +178,7 @@ const OtherGroupID = "__other__"
 // trendTopN 是趋势图保留的分组数上限，超出的并入 OtherGroupID。
 const trendTopN = 6
 
-// Trend 返回按 model / api_key / route 拆分的分桶序列。
+// Trend 返回按 model / api_key 拆分的分桶序列。
 // 空桶在这里补齐：SQL 若按「桶 × 分组」补齐会放大成桶数乘分组数行，
 // 而前端需要完整的时间轴，否则「最近几天没用过」会被压缩掉看不出来。
 func (s *Service) Trend(ctx context.Context, params TrendParams) (Trend, *consoleservice.Error) {
@@ -209,7 +205,6 @@ func (s *Service) Trend(ctx context.Context, params TrendParams) (Trend, *consol
 		Tz:          tz,
 		Bucket:      bucket,
 		Dimension:   dimension,
-		RouteIds:    emptyInts(params.RouteIDs),
 		ApiKeyIds:   emptyInts(params.APIKeyIDs),
 		ModelIds:    emptyStrings(params.ModelIDs),
 		Endpoints:   emptyStrings(consolerequests.InternalEndpoints(params.Endpoints)),
@@ -377,7 +372,6 @@ type ModelOption struct {
 
 // UsageFilters 是用量统计筛选栏所需的选项集合。
 type UsageFilters struct {
-	Routes  []FilterOption
 	APIKeys []FilterOption
 	Models  []ModelOption
 }
@@ -424,7 +418,6 @@ func (s *Service) Overview(ctx context.Context, params OverviewParams) (Overview
 		ToTime:      pgtype.Timestamptz{Time: params.To, Valid: true},
 		Bucket:      bucket,
 		Tz:          normalizeTZ(params.TZ),
-		RouteIds:    emptyInts(params.RouteIDs),
 		ApiKeyIds:   emptyInts(params.APIKeyIDs),
 		ModelIds:    emptyStrings(params.ModelIDs),
 		Endpoints:   emptyStrings(consolerequests.InternalEndpoints(params.Endpoints)),
@@ -468,7 +461,6 @@ func (s *Service) Groups(ctx context.Context, params GroupParams) ([]GroupItem, 
 			UserID:      params.UserID,
 			FromTime:    tsNarg(from),
 			ToTime:      tsNarg(to),
-			RouteIds:    emptyInts(params.RouteIDs),
 			ApiKeyIds:   emptyInts(params.APIKeyIDs),
 			ModelIds:    emptyStrings(params.ModelIDs),
 			Endpoints:   emptyStrings(consolerequests.InternalEndpoints(params.Endpoints)),
@@ -498,7 +490,6 @@ func (s *Service) Groups(ctx context.Context, params GroupParams) ([]GroupItem, 
 			UserID:      params.UserID,
 			FromTime:    tsNarg(from),
 			ToTime:      tsNarg(to),
-			RouteIds:    emptyInts(params.RouteIDs),
 			ApiKeyIds:   emptyInts(params.APIKeyIDs),
 			ModelIds:    emptyStrings(params.ModelIDs),
 			Endpoints:   emptyStrings(consolerequests.InternalEndpoints(params.Endpoints)),
@@ -510,34 +501,13 @@ func (s *Service) Groups(ctx context.Context, params GroupParams) ([]GroupItem, 
 			return nil, consoleservice.RequestUnavailable("list usage by api key", err)
 		}
 		return apiKeyGroups(rows), nil
-	case GroupByRoute:
-		rows, err := s.store.ListConsoleUsageByRoute(ctx, sqlc.ListConsoleUsageByRouteParams{
-			UserID:      params.UserID,
-			FromTime:    tsNarg(from),
-			ToTime:      tsNarg(to),
-			RouteIds:    emptyInts(params.RouteIDs),
-			ApiKeyIds:   emptyInts(params.APIKeyIDs),
-			ModelIds:    emptyStrings(params.ModelIDs),
-			Endpoints:   emptyStrings(consolerequests.InternalEndpoints(params.Endpoints)),
-			StreamTypes: emptyStrings(params.StreamTypes),
-			Q:           textNarg(params.Q),
-			RowLimit:    groupRowLimit,
-		})
-		if err != nil {
-			return nil, consoleservice.RequestUnavailable("list usage by route", err)
-		}
-		return routeGroups(rows), nil
 	default:
-		return nil, consoleservice.InvalidArgument("by", "by must be model, api_key, or route.")
+		return nil, consoleservice.InvalidArgument("by", "by must be model or api_key.")
 	}
 }
 
-// Filters 返回用量统计筛选栏所需的线路、密钥与模型选项。
+// Filters 返回用量统计筛选栏所需的密钥与模型选项。
 func (s *Service) Filters(ctx context.Context, userID int64) (UsageFilters, *consoleservice.Error) {
-	routes, err := s.store.ListConsoleFilterRoutes(ctx)
-	if err != nil {
-		return UsageFilters{}, consoleservice.RequestUnavailable("list filter routes", err)
-	}
 	keys, err := s.store.ListConsoleFilterAPIKeys(ctx, userID)
 	if err != nil {
 		return UsageFilters{}, consoleservice.RequestUnavailable("list user api keys", err)
@@ -547,12 +517,8 @@ func (s *Service) Filters(ctx context.Context, userID int64) (UsageFilters, *con
 		return UsageFilters{}, consoleservice.RequestUnavailable("list usage filter models", err)
 	}
 	out := UsageFilters{
-		Routes:  make([]FilterOption, 0, len(routes)),
 		APIKeys: make([]FilterOption, 0, len(keys)),
 		Models:  make([]ModelOption, 0, len(models)),
-	}
-	for _, route := range routes {
-		out.Routes = append(out.Routes, FilterOption{ID: route.ID, Name: route.Name})
 	}
 	for _, key := range keys {
 		out.APIKeys = append(out.APIKeys, FilterOption{ID: key.ID, Name: key.Name})
@@ -577,33 +543,14 @@ func apiKeyGroups(rows []sqlc.ListConsoleUsageByAPIKeyRow) []GroupItem {
 	return out
 }
 
-// routeGroups 把「请求和密钥都没有线路」的兜底分组（id 0）标成空 ID，由前端显示为未指定。
-func routeGroups(rows []sqlc.ListConsoleUsageByRouteRow) []GroupItem {
-	out := make([]GroupItem, 0, len(rows))
-	for _, row := range rows {
-		id := ""
-		if row.GroupID > 0 {
-			id = strconv.FormatInt(row.GroupID, 10)
-		}
-		out = append(out, GroupItem{
-			ID:           id,
-			Name:         row.GroupName,
-			RequestCount: row.RequestCount,
-			TokenCount:   row.TokenCount,
-			ChargeUSD:    opsutil.NumericString(row.ChargeUsd),
-		})
-	}
-	return out
-}
-
 func normalizeGroupBy(dimension string) (string, *consoleservice.Error) {
 	switch dimension {
 	case "":
 		return GroupByModel, nil
-	case GroupByModel, GroupByAPIKey, GroupByRoute:
+	case GroupByModel, GroupByAPIKey:
 		return dimension, nil
 	default:
-		return "", consoleservice.InvalidArgument("by", "by must be model, api_key, or route.")
+		return "", consoleservice.InvalidArgument("by", "by must be model or api_key.")
 	}
 }
 
@@ -654,7 +601,6 @@ func toWindowSQL(userID int64, filters Filters, from, to *time.Time) sqlc.Summar
 		UserID:      userID,
 		FromTime:    tsNarg(from),
 		ToTime:      tsNarg(to),
-		RouteIds:    emptyInts(filters.RouteIDs),
 		ApiKeyIds:   emptyInts(filters.APIKeyIDs),
 		ModelIds:    emptyStrings(filters.ModelIDs),
 		Endpoints:   emptyStrings(consolerequests.InternalEndpoints(filters.Endpoints)),

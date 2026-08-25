@@ -14,25 +14,6 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/service/admin/customer"
 )
 
-// parseOptionalRouteID 解析 PATCH 的 route_id：字段缺省→(nil,false) 不变；null→(nil,true) 清除；数字→(&n,true) 设置。
-func parseOptionalRouteID(raw json.RawMessage) (*int64, bool, error) {
-	if len(raw) == 0 {
-		return nil, false, nil
-	}
-	if string(raw) == "null" {
-		return nil, true, nil
-	}
-	var id int64
-	if err := json.Unmarshal(raw, &id); err != nil {
-		return nil, false, failure.New(
-			failure.CodeAdminInvalidArgument,
-			failure.WithMessage("route_id must be an integer or null"),
-			failure.WithField("field", "route_id"),
-		)
-	}
-	return &id, true, nil
-}
-
 func parseOptionalExpiresAt(raw json.RawMessage) (*time.Time, bool, error) {
 	if len(raw) == 0 {
 		return nil, false, nil
@@ -79,8 +60,6 @@ type apiKeyDTO struct {
 	Status     string  `json:"status"`
 	SpendLimit *string `json:"spend_limit"`
 	SpentTotal string  `json:"spent_total"`
-	// RouteID 线路必填、恒有值（DB NOT NULL），故非空整型；前端按 number 读取。
-	RouteID int64 `json:"route_id"`
 	// 这里没有 Key 级限流字段：DEC-027 之后限流全部归线路，按 (线路, 用户) 计数。
 	LastUsedAt *string `json:"last_used_at"`
 	ExpiresAt  *string `json:"expires_at"`
@@ -94,18 +73,15 @@ type createAPIKeyRequest struct {
 	Name       string  `json:"name"`
 	ExpiresAt  *string `json:"expires_at"`  // RFC3339，可选
 	SpendLimit *string `json:"spend_limit"` // 可选，不传/空串表示不限额
-	RouteID    *int64  `json:"route_id"`    // 线路绑定（必填）；限流由所选线路决定（DEC-027），Key 不再单独配置
 }
 
 // updateAPIKeyRequest 是 PATCH 请求体。
 // disabled: 非空时启停；spend_limit: 不传=不变，空串=清除上限，否则设为该值。
-// route_id: 字段缺省=不变，null=清除绑定，数字=设为该线路。
 // name: 非空时更新名称；expires_at: 字段缺省=不变，null=永不过期，RFC3339=设为该时间。
 // 限流已归线路（DEC-027），此处不再接收 rate_limits。
 type updateAPIKeyRequest struct {
 	Disabled   *bool           `json:"disabled"`
 	SpendLimit *string         `json:"spend_limit"`
-	RouteID    json.RawMessage `json:"route_id"`
 	Name       *string         `json:"name"`
 	ExpiresAt  json.RawMessage `json:"expires_at"`
 }
@@ -139,7 +115,6 @@ func (h *apiKeysHandler) create(w http.ResponseWriter, r *http.Request) {
 		Name:       req.Name,
 		ExpiresAt:  expiresAt,
 		SpendLimit: req.SpendLimit,
-		RouteID:    req.RouteID,
 	}
 
 	created, err := h.service.Create(r.Context(), createParams)
@@ -168,11 +143,6 @@ func (h *apiKeysHandler) update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	routeID, routeProvided, err := parseOptionalRouteID(req.RouteID)
-	if err != nil {
-		adminhttp.WriteServiceError(w, err)
-		return
-	}
 	expiresAt, expiresProvided, err := parseOptionalExpiresAt(req.ExpiresAt)
 	if err != nil {
 		adminhttp.WriteServiceError(w, err)
@@ -182,8 +152,6 @@ func (h *apiKeysHandler) update(w http.ResponseWriter, r *http.Request) {
 	updateParams := customer.APIKeyUpdateParams{
 		Disabled:        req.Disabled,
 		SpendLimit:      req.SpendLimit,
-		RouteID:         routeID,
-		RouteProvided:   routeProvided,
 		Name:            req.Name,
 		ExpiresAt:       expiresAt,
 		ExpiresProvided: expiresProvided,
@@ -231,7 +199,7 @@ func (h *apiKeysHandler) delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// int64Value 解引用 *int64（nil→0）；用于恒有值但上游以指针承载的字段（如 route_id）。
+// int64Value 解引用 *int64（nil→0）。
 func int64Value(p *int64) int64 {
 	if p == nil {
 		return 0
@@ -249,7 +217,6 @@ func toAPIKeyDTO(k customer.APIKey) apiKeyDTO {
 		Status:     k.Status,
 		SpendLimit: k.SpendLimit,
 		SpentTotal: k.SpentTotal,
-		RouteID:    int64Value(k.RouteID),
 		LastUsedAt: adminhttp.RFC3339Ptr(k.LastUsedAt),
 		ExpiresAt:  adminhttp.RFC3339Ptr(k.ExpiresAt),
 		DisabledAt: adminhttp.RFC3339Ptr(k.DisabledAt),

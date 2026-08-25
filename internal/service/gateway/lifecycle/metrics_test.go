@@ -102,7 +102,6 @@ func TestRecordRequestRejectedUsesBoundedReasons(t *testing.T) {
 	}{
 		{name: "model not found", err: failure.New(failure.CodeRoutingModelNotFound), want: "openai/model_not_found"},
 		{name: "model not available", err: failure.New(failure.CodeRoutingModelNotAvailable), want: "openai/model_not_available"},
-		{name: "route not configured", err: failure.New(failure.CodeRoutingRouteNotConfigured), want: "openai/route_not_configured"},
 		{name: "protocol invalid", err: failure.New(failure.CodeRoutingProtocolInvalid), want: "openai/protocol_invalid"},
 		{name: "store failure", err: failure.New(failure.CodeRoutingStoreFailed), want: "openai/qualification_error"},
 		{name: "unknown", err: errors.New("plain error"), want: "openai/qualification_error"},
@@ -124,12 +123,11 @@ func TestRecordRoutingPlanPublishesWeightsAndBreakerFacts(t *testing.T) {
 	metrics := &routingMetricsSpy{}
 	lifecycle := &RequestLifecycle{metrics: metrics}
 	lifecycle.recordRoutingPlan(RoutingDecisionTraceInput{
-		RouteID:  31,
-		Mode:     "balanced",
 		PoolSize: 2,
 		Plan: CandidatePlan{
 			Candidates: []Candidate{{
 				Route: routing.ChatRouteCandidate{
+					ModelDBID:  31,
 					ProviderID: 23,
 					Channel:    routingChannel(17),
 				},

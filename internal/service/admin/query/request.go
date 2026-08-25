@@ -23,7 +23,6 @@ type RequestStore interface {
 	GetLedgerBillingExceptionByRequest(ctx context.Context, requestRecordID int64) (sqlc.LedgerBillingException, error)
 	GetCostSnapshotByRequest(ctx context.Context, requestRecordID int64) (sqlc.CostSnapshot, error)
 	GetPriceSnapshotByRequest(ctx context.Context, requestRecordID int64) (sqlc.PriceSnapshot, error)
-	GetRouteByID(ctx context.Context, id int64) (sqlc.Route, error)
 }
 
 // RequestListParams 是分页/过滤/排序列出请求记录的入参；指针/空串/nil 表示该维度不过滤。
@@ -33,7 +32,6 @@ type RequestListParams struct {
 	RequestID     string
 	Status        string
 	Model         string
-	RouteID       *int64
 	ChannelID     *int64
 	AttemptID     *int64
 	ScoringSample string
@@ -135,11 +133,7 @@ type RequestListItem struct {
 	APIKeyPrefix    *string
 	APIKeyPlaintext *string
 
-	// 线路（请求级快照 route_id → routes.name；历史行回落当前 Key 绑定）/ 倍率 / 策略 / 最终命中渠道 / 经过的渠道链。
-	RouteName           *string
-	RouteID             *int64
-	RoutePriceRatio     *string
-	RouteMode           *string
+	SalePriceRatio      *string
 	FinalChannelName    *string
 	ChannelChain        string
 	ScoringAttemptID    *int64
@@ -223,15 +217,13 @@ type RequestDetail struct {
 	GatewayTTFTMs       *int64
 	TPS                 *float64
 	// 批二富化：线路快照 id / 归一推理强度 + 原始预算 / 客户端 IP。
-	RouteID               *int64
 	ReasoningEffort       *string
 	ReasoningBudgetTokens *int32
 	ClientIP              *string
 	// 费用明细快照：平台成本单价+金额 / 用户售价单价 / 线路倍率+策略（供详情费用明细「计算过程」）。
 	CostSnapshot     *CostSnapshotView
 	PriceSnapshot    *PriceSnapshotView
-	RoutePriceRatio  *string
-	RouteMode        *string
+	SalePriceRatio   *string
 	Attempts         []Attempt
 	Usage            *Usage
 	LedgerEntries    []LedgerEntry
@@ -335,7 +327,6 @@ func (s *RequestService) List(ctx context.Context, params RequestListParams) ([]
 		RequestID:     textNarg(params.RequestID),
 		Status:        textNarg(params.Status),
 		Model:         textNarg(params.Model),
-		RouteID:       int8Narg(params.RouteID),
 		ChannelID:     int8Narg(params.ChannelID),
 		AttemptID:     int8Narg(params.AttemptID),
 		ScoringSample: textNarg(params.ScoringSample),
@@ -361,7 +352,6 @@ func (s *RequestService) List(ctx context.Context, params RequestListParams) ([]
 			RequestID:     listParams.RequestID,
 			Status:        listParams.Status,
 			Model:         listParams.Model,
-			RouteID:       listParams.RouteID,
 			ChannelID:     listParams.ChannelID,
 			AttemptID:     listParams.AttemptID,
 			ScoringSample: listParams.ScoringSample,
@@ -397,7 +387,6 @@ func (s *RequestService) Get(ctx context.Context, requestID string, includeInter
 
 	detail := RequestDetail{
 		RequestSummary:        summaryFromRecord(record),
-		RouteID:               int8Ptr(record.RouteID),
 		ReasoningEffort:       textPtr(record.ReasoningEffort),
 		ReasoningBudgetTokens: int4Ptr(record.ReasoningBudgetTokens),
 		ClientIP:              textPtr(record.ClientIp),
@@ -453,25 +442,12 @@ func (s *RequestService) Get(ctx context.Context, requestID string, includeInter
 	case err == nil:
 		v := toPriceSnapshotView(priceRow)
 		detail.PriceSnapshot = &v
-		// 线路倍率取结算当时的快照（供费用汇总倒推基准价 = 售价 ÷ 倍率）；历史无快照行为 NULL，展示端回落「—」。
-		// 不再实时读 routes.price_ratio，避免管理员改倍率污染历史请求的倍率与基准价展示。
-		detail.RoutePriceRatio = opsutil.NumericStringPtr(priceRow.PriceRatio)
+		// 售价倍率取结算当时的快照（供费用汇总倒推基准价 = 售价 ÷ 倍率）。
+		// 模型配了绝对售价时快照里没有倍率，展示端回落「—」：那条路径下售价不是算出来的。
+		detail.SalePriceRatio = opsutil.NumericStringPtr(priceRow.PriceRatio)
 	case errors.Is(err, pgx.ErrNoRows):
 	default:
 		return RequestDetail{}, storeFailed(err, "get price snapshot")
-	}
-
-	// 线路策略（route mode）仍取当前线路配置（仅展示标签，非计费口径）；线路已删则忽略。
-	if record.RouteID.Valid {
-		routeRow, err := s.store.GetRouteByID(ctx, record.RouteID.Int64)
-		switch {
-		case err == nil:
-			mode := routeRow.Mode
-			detail.RouteMode = &mode
-		case errors.Is(err, pgx.ErrNoRows):
-		default:
-			return RequestDetail{}, storeFailed(err, "get route")
-		}
 	}
 
 	entryRows, err := s.store.ListLedgerEntriesByRequest(ctx, pgtype.Int8{Int64: record.ID, Valid: true})
@@ -576,10 +552,7 @@ func toRequestListItem(r sqlc.ListRequestRecordsPageRow) RequestListItem {
 		APIKeyPrefix:    textPtr(r.ApiKeyPrefix),
 		APIKeyPlaintext: textPtr(r.ApiKeyPlaintext),
 
-		RouteName:           textPtr(r.RouteName),
-		RouteID:             int8Ptr(r.RouteID),
-		RoutePriceRatio:     opsutil.NumericStringPtr(r.RoutePriceRatio),
-		RouteMode:           textPtr(r.RouteMode),
+		SalePriceRatio:      opsutil.NumericStringPtr(r.SalePriceRatio),
 		FinalChannelName:    textPtr(r.FinalChannelName),
 		ChannelChain:        r.ChannelChain,
 		ScoringDimensions:   r.ScoringDimensions,

@@ -2,7 +2,7 @@
 //
 // admin 表面只服务平台管理员，登录使用固定用户名口令换取 Redis 会话 token，与客户 Gateway（/v1）
 // 认证严格隔离。各业务模块的 handler / DTO / service 接口按模块拆到子包（overview/provider/channel/
-// model/route/capability/user/requests/ledger/system，镜像 internal/service/admin 的目录结构），
+// model/capability/user/requests/ledger/system，镜像 internal/service/admin 的目录结构），
 // 共用的响应/请求/分页/排序小工具在 adminapi/adminhttp 叶子包。本文件只做依赖聚合与路由编排。
 package adminapi
 
@@ -20,7 +20,6 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/overview"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/provider"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/requests"
-	"github.com/ThankCat/unio-gateway/internal/app/adminapi/route"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/system"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/user"
 	"github.com/ThankCat/unio-gateway/internal/platform/config"
@@ -56,14 +55,11 @@ type RouterDeps struct {
 	ChannelModelService          channel.ChannelModelService
 	ChannelModelInventoryService channel.ChannelModelInventoryService
 
-	// 渠道-模型成本价（绝对覆盖）+ 线路（渠道商品）。
+	// 渠道-模型成本价（绝对覆盖）。
 	ChannelPriceService channel.ChannelPriceService
-	RouteService        route.RouteService
-	RouteOpsService     route.RouteOpsService
 	RoutingTraceService RoutingTraceService
-	RouteRuntimeService route.RuntimeService
 
-	// DEC-026：模型基准售价（客户售价 = 模型基准价 × 线路倍率）。
+	// 模型基准售价：客户售价 = 模型绝对售价，或基准价 × 全局售价倍率。
 	ModelPriceService model.ModelPriceService
 
 	// DEC-027：渠道成本倍率（渠道真实成本 = 模型上游参考成本 × 价格倍率 × 充值倍率）。
@@ -182,11 +178,6 @@ func NewRouter(deps RouterDeps) http.Handler {
 				OpsService:     deps.ModelOpsService,
 				PriceService:   deps.ModelPriceService,
 				CatalogService: deps.CatalogService,
-			})
-			route.Register(r, route.Deps{
-				Service:        deps.RouteService,
-				OpsService:     deps.RouteOpsService,
-				RuntimeService: deps.RouteRuntimeService,
 			})
 			capability.Register(r, capability.Deps{
 				Service:     deps.CapabilityService,

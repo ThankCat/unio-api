@@ -41,7 +41,6 @@ local function validate_attempt_permit_lifecycle()
     { 'channel_state_generation', 14 },
     { 'provider_half_open_probe', 15 },
     { 'channel_half_open_probe', 16 },
-    { 'route_id', 17 },
     { 'concurrency_channel_id', 6 },
   }
   for _, identity in ipairs(identities) do

@@ -17,15 +17,14 @@ WITH windowed AS MATERIALIZED (
         r.id,
         r.stream,
         r.requested_model_id,
-        r.route_id,
         r.api_key_id,
         r.endpoint,
         r.request_id,
         r.client_ip
     FROM request_records r
-    WHERE r.user_id = $8
-      AND ($9::timestamptz IS NULL OR r.created_at >= $9::timestamptz)
-      AND ($10::timestamptz IS NULL OR r.created_at < $10::timestamptz)
+    WHERE r.user_id = $7
+      AND ($8::timestamptz IS NULL OR r.created_at >= $8::timestamptz)
+      AND ($9::timestamptz IS NULL OR r.created_at < $9::timestamptz)
 )
 SELECT
     w.api_key_id AS group_id,
@@ -57,40 +56,35 @@ JOIN LATERAL (
 ) ch ON ch.charge_usd > 0
 WHERE (
       COALESCE(cardinality($1::bigint[]), 0) = 0
-      OR COALESCE(w.route_id, ak.route_id) = ANY($1::bigint[])
+      OR w.api_key_id = ANY($1::bigint[])
   )
   AND (
-      COALESCE(cardinality($2::bigint[]), 0) = 0
-      OR w.api_key_id = ANY($2::bigint[])
+      COALESCE(cardinality($2::text[]), 0) = 0
+      OR w.requested_model_id = ANY($2::text[])
   )
   AND (
       COALESCE(cardinality($3::text[]), 0) = 0
-      OR w.requested_model_id = ANY($3::text[])
+      OR w.endpoint = ANY($3::text[])
   )
   AND (
       COALESCE(cardinality($4::text[]), 0) = 0
-      OR w.endpoint = ANY($4::text[])
+      OR (w.stream AND 'stream' = ANY($4::text[]))
+      OR ((NOT w.stream) AND 'sync' = ANY($4::text[]))
   )
   AND (
-      COALESCE(cardinality($5::text[]), 0) = 0
-      OR (w.stream AND 'stream' = ANY($5::text[]))
-      OR ((NOT w.stream) AND 'sync' = ANY($5::text[]))
-  )
-  AND (
-      $6::text IS NULL
-      OR btrim($6::text) = ''
-      OR w.requested_model_id ILIKE '%' || btrim($6::text) || '%'
-      OR COALESCE(m.display_name, '') ILIKE '%' || btrim($6::text) || '%'
-      OR w.request_id ILIKE '%' || btrim($6::text) || '%'
-      OR COALESCE(w.client_ip, '') ILIKE '%' || btrim($6::text) || '%'
+      $5::text IS NULL
+      OR btrim($5::text) = ''
+      OR w.requested_model_id ILIKE '%' || btrim($5::text) || '%'
+      OR COALESCE(m.display_name, '') ILIKE '%' || btrim($5::text) || '%'
+      OR w.request_id ILIKE '%' || btrim($5::text) || '%'
+      OR COALESCE(w.client_ip, '') ILIKE '%' || btrim($5::text) || '%'
   )
 GROUP BY w.api_key_id, COALESCE(NULLIF(ak.name, ''), ak.key_prefix, '')
 ORDER BY charge_usd DESC, group_id ASC
-LIMIT $7
+LIMIT $6
 `
 
 type ListConsoleUsageByAPIKeyParams struct {
-	RouteIds    []int64
 	ApiKeyIds   []int64
 	ModelIds    []string
 	Endpoints   []string
@@ -113,7 +107,6 @@ type ListConsoleUsageByAPIKeyRow struct {
 // 明细排行：按 API 密钥分组，按消费降序。
 func (q *Queries) ListConsoleUsageByAPIKey(ctx context.Context, arg ListConsoleUsageByAPIKeyParams) ([]ListConsoleUsageByAPIKeyRow, error) {
 	rows, err := q.db.Query(ctx, listConsoleUsageByAPIKey,
-		arg.RouteIds,
 		arg.ApiKeyIds,
 		arg.ModelIds,
 		arg.Endpoints,
@@ -156,7 +149,6 @@ WITH windowed AS MATERIALIZED (
         r.stream,
         r.requested_model_id,
         r.ingress_protocol,
-        r.route_id,
         r.api_key_id,
         r.endpoint,
         r.request_id,
@@ -198,32 +190,28 @@ billed AS MATERIALIZED (
     ) ch ON ch.charge_usd > 0
     WHERE (
           COALESCE(cardinality($5::bigint[]), 0) = 0
-          OR COALESCE(w.route_id, ak.route_id) = ANY($5::bigint[])
+          OR w.api_key_id = ANY($5::bigint[])
       )
       AND (
-          COALESCE(cardinality($6::bigint[]), 0) = 0
-          OR w.api_key_id = ANY($6::bigint[])
+          COALESCE(cardinality($6::text[]), 0) = 0
+          OR w.requested_model_id = ANY($6::text[])
       )
       AND (
           COALESCE(cardinality($7::text[]), 0) = 0
-          OR w.requested_model_id = ANY($7::text[])
+          OR w.endpoint = ANY($7::text[])
       )
       AND (
           COALESCE(cardinality($8::text[]), 0) = 0
-          OR w.endpoint = ANY($8::text[])
+          OR (w.stream AND 'stream' = ANY($8::text[]))
+          OR ((NOT w.stream) AND 'sync' = ANY($8::text[]))
       )
       AND (
-          COALESCE(cardinality($9::text[]), 0) = 0
-          OR (w.stream AND 'stream' = ANY($9::text[]))
-          OR ((NOT w.stream) AND 'sync' = ANY($9::text[]))
-      )
-      AND (
-          $10::text IS NULL
-          OR btrim($10::text) = ''
-          OR w.requested_model_id ILIKE '%' || btrim($10::text) || '%'
-          OR COALESCE(m.display_name, '') ILIKE '%' || btrim($10::text) || '%'
-          OR w.request_id ILIKE '%' || btrim($10::text) || '%'
-          OR COALESCE(w.client_ip, '') ILIKE '%' || btrim($10::text) || '%'
+          $9::text IS NULL
+          OR btrim($9::text) = ''
+          OR w.requested_model_id ILIKE '%' || btrim($9::text) || '%'
+          OR COALESCE(m.display_name, '') ILIKE '%' || btrim($9::text) || '%'
+          OR w.request_id ILIKE '%' || btrim($9::text) || '%'
+          OR COALESCE(w.client_ip, '') ILIKE '%' || btrim($9::text) || '%'
       )
 ),
 totals AS (
@@ -266,7 +254,6 @@ type ListConsoleUsageByModelParams struct {
 	UserID      int64
 	FromTime    pgtype.Timestamptz
 	ToTime      pgtype.Timestamptz
-	RouteIds    []int64
 	ApiKeyIds   []int64
 	ModelIds    []string
 	Endpoints   []string
@@ -292,7 +279,6 @@ func (q *Queries) ListConsoleUsageByModel(ctx context.Context, arg ListConsoleUs
 		arg.UserID,
 		arg.FromTime,
 		arg.ToTime,
-		arg.RouteIds,
 		arg.ApiKeyIds,
 		arg.ModelIds,
 		arg.Endpoints,
@@ -315,146 +301,6 @@ func (q *Queries) ListConsoleUsageByModel(ctx context.Context, arg ListConsoleUs
 			&i.IngressProtocol,
 			&i.InputPricePer1m,
 			&i.OutputPricePer1m,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listConsoleUsageByRoute = `-- name: ListConsoleUsageByRoute :many
-WITH windowed AS MATERIALIZED (
-    SELECT
-        r.id,
-        r.stream,
-        r.requested_model_id,
-        r.route_id,
-        r.api_key_id,
-        r.endpoint,
-        r.request_id,
-        r.client_ip
-    FROM request_records r
-    WHERE r.user_id = $8
-      AND ($9::timestamptz IS NULL OR r.created_at >= $9::timestamptz)
-      AND ($10::timestamptz IS NULL OR r.created_at < $10::timestamptz)
-)
-SELECT
-    COALESCE(w.route_id, ak.route_id, 0)::bigint AS group_id,
-    COALESCE(rt.name, '') AS group_name,
-    COUNT(*)::bigint AS request_count,
-    SUM(
-        COALESCE(ur.uncached_input_tokens, 0)
-        + COALESCE(ur.cache_read_input_tokens, 0)
-        + COALESCE(ur.cache_write_5m_input_tokens, 0)
-        + COALESCE(ur.cache_write_1h_input_tokens, 0)
-        + COALESCE(ur.cache_write_30m_input_tokens, 0)
-        + COALESCE(ur.output_tokens_total, 0)
-    )::bigint AS token_count,
-    SUM(ch.charge_usd)::numeric AS charge_usd
-FROM windowed w
-JOIN usage_records ur ON ur.request_record_id = w.id
-LEFT JOIN api_keys ak ON ak.id = w.api_key_id
-LEFT JOIN routes rt ON rt.id = COALESCE(w.route_id, ak.route_id)
-LEFT JOIN models m ON m.model_id = w.requested_model_id
-JOIN LATERAL (
-    SELECT SUM(
-        CASE
-            WHEN le.entry_type IN ('debit', 'adjustment_debit') THEN le.amount
-            WHEN le.entry_type IN ('credit', 'refund', 'adjustment_credit') THEN -le.amount
-            ELSE 0
-        END
-    ) AS charge_usd
-    FROM ledger_entries le
-    WHERE le.request_record_id = w.id AND le.currency = 'USD'
-) ch ON ch.charge_usd > 0
-WHERE (
-      COALESCE(cardinality($1::bigint[]), 0) = 0
-      OR COALESCE(w.route_id, ak.route_id) = ANY($1::bigint[])
-  )
-  AND (
-      COALESCE(cardinality($2::bigint[]), 0) = 0
-      OR w.api_key_id = ANY($2::bigint[])
-  )
-  AND (
-      COALESCE(cardinality($3::text[]), 0) = 0
-      OR w.requested_model_id = ANY($3::text[])
-  )
-  AND (
-      COALESCE(cardinality($4::text[]), 0) = 0
-      OR w.endpoint = ANY($4::text[])
-  )
-  AND (
-      COALESCE(cardinality($5::text[]), 0) = 0
-      OR (w.stream AND 'stream' = ANY($5::text[]))
-      OR ((NOT w.stream) AND 'sync' = ANY($5::text[]))
-  )
-  AND (
-      $6::text IS NULL
-      OR btrim($6::text) = ''
-      OR w.requested_model_id ILIKE '%' || btrim($6::text) || '%'
-      OR COALESCE(m.display_name, '') ILIKE '%' || btrim($6::text) || '%'
-      OR w.request_id ILIKE '%' || btrim($6::text) || '%'
-      OR COALESCE(w.client_ip, '') ILIKE '%' || btrim($6::text) || '%'
-  )
-GROUP BY COALESCE(w.route_id, ak.route_id, 0), COALESCE(rt.name, '')
-ORDER BY charge_usd DESC, group_id ASC
-LIMIT $7
-`
-
-type ListConsoleUsageByRouteParams struct {
-	RouteIds    []int64
-	ApiKeyIds   []int64
-	ModelIds    []string
-	Endpoints   []string
-	StreamTypes []string
-	Q           pgtype.Text
-	RowLimit    int32
-	UserID      int64
-	FromTime    pgtype.Timestamptz
-	ToTime      pgtype.Timestamptz
-}
-
-type ListConsoleUsageByRouteRow struct {
-	GroupID      int64
-	GroupName    string
-	RequestCount int64
-	TokenCount   int64
-	ChargeUsd    pgtype.Numeric
-}
-
-// 明细排行：按线路分组（请求未落线路时回退到密钥所属线路），按消费降序。
-// 请求和密钥都没有线路时归到 id 0，由 service 层显示为「未指定线路」；
-// 不加这层兜底 sqlc 会把 group_id 推断成非空 bigint，遇到 NULL 会扫描失败。
-func (q *Queries) ListConsoleUsageByRoute(ctx context.Context, arg ListConsoleUsageByRouteParams) ([]ListConsoleUsageByRouteRow, error) {
-	rows, err := q.db.Query(ctx, listConsoleUsageByRoute,
-		arg.RouteIds,
-		arg.ApiKeyIds,
-		arg.ModelIds,
-		arg.Endpoints,
-		arg.StreamTypes,
-		arg.Q,
-		arg.RowLimit,
-		arg.UserID,
-		arg.FromTime,
-		arg.ToTime,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListConsoleUsageByRouteRow
-	for rows.Next() {
-		var i ListConsoleUsageByRouteRow
-		if err := rows.Scan(
-			&i.GroupID,
-			&i.GroupName,
-			&i.RequestCount,
-			&i.TokenCount,
-			&i.ChargeUsd,
 		); err != nil {
 			return nil, err
 		}
@@ -524,7 +370,6 @@ WITH windowed AS MATERIALIZED (
         r.started_at,
         r.completed_at,
         r.requested_model_id,
-        r.route_id,
         r.api_key_id,
         r.endpoint,
         r.request_id,
@@ -617,32 +462,28 @@ billed AS MATERIALIZED (
     ) ch ON ch.charge_usd > 0
     WHERE (
           COALESCE(cardinality($6::bigint[]), 0) = 0
-          OR COALESCE(w.route_id, ak.route_id) = ANY($6::bigint[])
+          OR w.api_key_id = ANY($6::bigint[])
       )
       AND (
-          COALESCE(cardinality($7::bigint[]), 0) = 0
-          OR w.api_key_id = ANY($7::bigint[])
+          COALESCE(cardinality($7::text[]), 0) = 0
+          OR w.requested_model_id = ANY($7::text[])
       )
       AND (
           COALESCE(cardinality($8::text[]), 0) = 0
-          OR w.requested_model_id = ANY($8::text[])
+          OR w.endpoint = ANY($8::text[])
       )
       AND (
           COALESCE(cardinality($9::text[]), 0) = 0
-          OR w.endpoint = ANY($9::text[])
+          OR (w.stream AND 'stream' = ANY($9::text[]))
+          OR ((NOT w.stream) AND 'sync' = ANY($9::text[]))
       )
       AND (
-          COALESCE(cardinality($10::text[]), 0) = 0
-          OR (w.stream AND 'stream' = ANY($10::text[]))
-          OR ((NOT w.stream) AND 'sync' = ANY($10::text[]))
-      )
-      AND (
-          $11::text IS NULL
-          OR btrim($11::text) = ''
-          OR w.requested_model_id ILIKE '%' || btrim($11::text) || '%'
-          OR COALESCE(m.display_name, '') ILIKE '%' || btrim($11::text) || '%'
-          OR w.request_id ILIKE '%' || btrim($11::text) || '%'
-          OR COALESCE(w.client_ip, '') ILIKE '%' || btrim($11::text) || '%'
+          $10::text IS NULL
+          OR btrim($10::text) = ''
+          OR w.requested_model_id ILIKE '%' || btrim($10::text) || '%'
+          OR COALESCE(m.display_name, '') ILIKE '%' || btrim($10::text) || '%'
+          OR w.request_id ILIKE '%' || btrim($10::text) || '%'
+          OR COALESCE(w.client_ip, '') ILIKE '%' || btrim($10::text) || '%'
       )
 ),
 grouped AS (
@@ -713,7 +554,6 @@ type ListConsoleUsageTimeseriesParams struct {
 	FromTime    pgtype.Timestamptz
 	ToTime      pgtype.Timestamptz
 	Bucket      string
-	RouteIds    []int64
 	ApiKeyIds   []int64
 	ModelIds    []string
 	Endpoints   []string
@@ -756,7 +596,6 @@ func (q *Queries) ListConsoleUsageTimeseries(ctx context.Context, arg ListConsol
 		arg.FromTime,
 		arg.ToTime,
 		arg.Bucket,
-		arg.RouteIds,
 		arg.ApiKeyIds,
 		arg.ModelIds,
 		arg.Endpoints,
@@ -803,7 +642,6 @@ WITH windowed AS MATERIALIZED (
         r.created_at,
         r.stream,
         r.requested_model_id,
-        r.route_id,
         r.api_key_id,
         r.endpoint,
         r.request_id,
@@ -823,16 +661,10 @@ billed AS MATERIALIZED (
         ) AS bucket_start,
         CASE $6::text
             WHEN 'api_key' THEN COALESCE(w.api_key_id::text, '')
-            WHEN 'route' THEN COALESCE(COALESCE(w.route_id, ak.route_id)::text, '')
             ELSE w.requested_model_id
         END AS group_id,
         CASE $6::text
             WHEN 'api_key' THEN COALESCE(NULLIF(ak.name, ''), w.api_key_id::text, '')
-            WHEN 'route' THEN COALESCE(
-                NULLIF(rt.name, ''),
-                COALESCE(w.route_id, ak.route_id)::text,
-                ''
-            )
             ELSE COALESCE(NULLIF(m.display_name, ''), w.requested_model_id)
         END AS group_name,
         ch.charge_usd,
@@ -848,7 +680,6 @@ billed AS MATERIALIZED (
     JOIN usage_records ur ON ur.request_record_id = w.id
     LEFT JOIN api_keys ak ON ak.id = w.api_key_id
     LEFT JOIN models m ON m.model_id = w.requested_model_id
-    LEFT JOIN routes rt ON rt.id = COALESCE(w.route_id, ak.route_id)
     JOIN LATERAL (
         SELECT SUM(
             CASE
@@ -862,24 +693,20 @@ billed AS MATERIALIZED (
     ) ch ON ch.charge_usd > 0
     WHERE (
           COALESCE(cardinality($7::bigint[]), 0) = 0
-          OR COALESCE(w.route_id, ak.route_id) = ANY($7::bigint[])
+          OR w.api_key_id = ANY($7::bigint[])
       )
       AND (
-          COALESCE(cardinality($8::bigint[]), 0) = 0
-          OR w.api_key_id = ANY($8::bigint[])
+          COALESCE(cardinality($8::text[]), 0) = 0
+          OR w.requested_model_id = ANY($8::text[])
       )
       AND (
           COALESCE(cardinality($9::text[]), 0) = 0
-          OR w.requested_model_id = ANY($9::text[])
+          OR w.endpoint = ANY($9::text[])
       )
       AND (
           COALESCE(cardinality($10::text[]), 0) = 0
-          OR w.endpoint = ANY($10::text[])
-      )
-      AND (
-          COALESCE(cardinality($11::text[]), 0) = 0
-          OR (w.stream AND 'stream' = ANY($11::text[]))
-          OR ((NOT w.stream) AND 'sync' = ANY($11::text[]))
+          OR (w.stream AND 'stream' = ANY($10::text[]))
+          OR ((NOT w.stream) AND 'sync' = ANY($10::text[]))
       )
 ),
 ranked AS (
@@ -887,7 +714,7 @@ ranked AS (
     FROM billed b
     GROUP BY b.group_id
     ORDER BY SUM(b.charge_usd) DESC, b.group_id ASC
-    LIMIT $12
+    LIMIT $11
 ),
 folded AS (
     SELECT
@@ -919,7 +746,6 @@ type ListConsoleUsageTrendByGroupParams struct {
 	Tz          string
 	Bucket      string
 	Dimension   string
-	RouteIds    []int64
 	ApiKeyIds   []int64
 	ModelIds    []string
 	Endpoints   []string
@@ -937,7 +763,7 @@ type ListConsoleUsageTrendByGroupRow struct {
 }
 
 // 按「时间桶 × 分组」的二维聚合，给趋势图做堆叠。
-// dimension 取 model / api_key / route；窗口内消费排前 top_n 的分组各占一段，
+// dimension 取 model / api_key；窗口内消费排前 top_n 的分组各占一段，
 // 其余合并成 __other__ —— 趋势图上十几种颜色没法读，合并的阈值放在 SQL 里，
 // 免得前端把上百个分组的整段序列都拉过去再丢掉。
 // 空桶不在这里补：分组维度下补空桶会产生 桶数 × 分组数 行，交给 service 层按桶对齐。
@@ -949,7 +775,6 @@ func (q *Queries) ListConsoleUsageTrendByGroup(ctx context.Context, arg ListCons
 		arg.Tz,
 		arg.Bucket,
 		arg.Dimension,
-		arg.RouteIds,
 		arg.ApiKeyIds,
 		arg.ModelIds,
 		arg.Endpoints,
@@ -987,15 +812,14 @@ WITH windowed AS MATERIALIZED (
         r.id,
         r.stream,
         r.requested_model_id,
-        r.route_id,
         r.api_key_id,
         r.endpoint,
         r.request_id,
         r.client_ip
     FROM request_records r
-    WHERE r.user_id = $7
-      AND ($8::timestamptz IS NULL OR r.created_at >= $8::timestamptz)
-      AND ($9::timestamptz IS NULL OR r.created_at < $9::timestamptz)
+    WHERE r.user_id = $6
+      AND ($7::timestamptz IS NULL OR r.created_at >= $7::timestamptz)
+      AND ($8::timestamptz IS NULL OR r.created_at < $8::timestamptz)
 )
 SELECT
     COUNT(*)::bigint AS request_count,
@@ -1105,37 +929,32 @@ JOIN LATERAL (
 ) ch ON ch.charge_usd > 0
 WHERE (
       COALESCE(cardinality($1::bigint[]), 0) = 0
-      OR COALESCE(w.route_id, ak.route_id) = ANY($1::bigint[])
+      OR w.api_key_id = ANY($1::bigint[])
   )
   AND (
-      COALESCE(cardinality($2::bigint[]), 0) = 0
-      OR w.api_key_id = ANY($2::bigint[])
+      COALESCE(cardinality($2::text[]), 0) = 0
+      OR w.requested_model_id = ANY($2::text[])
   )
   AND (
       COALESCE(cardinality($3::text[]), 0) = 0
-      OR w.requested_model_id = ANY($3::text[])
+      OR w.endpoint = ANY($3::text[])
   )
   AND (
       COALESCE(cardinality($4::text[]), 0) = 0
-      OR w.endpoint = ANY($4::text[])
+      OR (w.stream AND 'stream' = ANY($4::text[]))
+      OR ((NOT w.stream) AND 'sync' = ANY($4::text[]))
   )
   AND (
-      COALESCE(cardinality($5::text[]), 0) = 0
-      OR (w.stream AND 'stream' = ANY($5::text[]))
-      OR ((NOT w.stream) AND 'sync' = ANY($5::text[]))
-  )
-  AND (
-      $6::text IS NULL
-      OR btrim($6::text) = ''
-      OR w.requested_model_id ILIKE '%' || btrim($6::text) || '%'
-      OR COALESCE(m.display_name, '') ILIKE '%' || btrim($6::text) || '%'
-      OR w.request_id ILIKE '%' || btrim($6::text) || '%'
-      OR COALESCE(w.client_ip, '') ILIKE '%' || btrim($6::text) || '%'
+      $5::text IS NULL
+      OR btrim($5::text) = ''
+      OR w.requested_model_id ILIKE '%' || btrim($5::text) || '%'
+      OR COALESCE(m.display_name, '') ILIKE '%' || btrim($5::text) || '%'
+      OR w.request_id ILIKE '%' || btrim($5::text) || '%'
+      OR COALESCE(w.client_ip, '') ILIKE '%' || btrim($5::text) || '%'
   )
 `
 
 type SummarizeConsoleUsageWindowParams struct {
-	RouteIds    []int64
 	ApiKeyIds   []int64
 	ModelIds    []string
 	Endpoints   []string
@@ -1166,7 +985,6 @@ type SummarizeConsoleUsageWindowRow struct {
 // 只算用量与费用，不含耗时分位数：耗时归请求中心，这里不重复付出 percentile 的代价。
 func (q *Queries) SummarizeConsoleUsageWindow(ctx context.Context, arg SummarizeConsoleUsageWindowParams) (SummarizeConsoleUsageWindowRow, error) {
 	row := q.db.QueryRow(ctx, summarizeConsoleUsageWindow,
-		arg.RouteIds,
 		arg.ApiKeyIds,
 		arg.ModelIds,
 		arg.Endpoints,

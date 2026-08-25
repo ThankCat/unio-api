@@ -2,6 +2,7 @@ package sqlc_test
 
 import (
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -45,8 +46,8 @@ func TestListEnabledChannelAdaptersReturnsEnabledBindings(t *testing.T) {
 	if got == nil {
 		t.Fatalf("expected enabled channel %d in result", enabledChannelID)
 	}
-	if got.Protocol != "openai" {
-		t.Fatalf("expected protocol %q, got %q", "openai", got.Protocol)
+	if !slices.Equal(got.Protocols, []string{"openai"}) {
+		t.Fatalf("expected protocol %q, got %q", "openai", got.Protocols)
 	}
 	if got.AdapterKey != "openai" {
 		t.Fatalf("expected adapter key %q, got %q", "openai", got.AdapterKey)
@@ -56,9 +57,9 @@ func TestListEnabledChannelAdaptersReturnsEnabledBindings(t *testing.T) {
 	}
 }
 
-// TestFindRouteCandidatesFiltersByIngressProtocol 验证同模型在 openai 与 anthropic 两个 channel 下，
+// TestFindModelCandidatesFiltersByIngressProtocol 验证同模型在 openai 与 anthropic 两个 channel 下，
 // routing 只返回与 ingress protocol 同协议的 channel（OpenAI ingress 不命中 Anthropic channel，反之亦然）。
-func TestFindRouteCandidatesFiltersByIngressProtocol(t *testing.T) {
+func TestFindModelCandidatesFiltersByIngressProtocol(t *testing.T) {
 	ctx, tx, queries, cleanup := newModelChannelTestTx(t)
 	defer cleanup()
 
@@ -74,18 +75,15 @@ func TestFindRouteCandidatesFiltersByIngressProtocol(t *testing.T) {
 	insertChannelModel(t, ctx, tx, openaiChannelID, modelID, "proto-openai-upstream", "enabled")
 	insertChannelModel(t, ctx, tx, anthropicChannelID, modelID, "proto-anthropic-upstream", "enabled")
 
-	// 阶段 15：FindRouteCandidates 只返回「已定价」渠道，给两条渠道各配一条 enabled 渠道-模型价。
+	// 阶段 15：FindModelCandidates 只返回「已定价」渠道，给两条渠道各配一条 enabled 渠道-模型价。
 	now := time.Now().UTC()
 	createChannelPriceForTest(t, ctx, queries, openaiChannelID, modelID, now)
 	createChannelPriceForTest(t, ctx, queries, anthropicChannelID, modelID, now)
 	createModelPriceForTest(t, ctx, queries, modelID, now)
-	routeID := insertRouteWithChannels(t, ctx, tx, openaiChannelID, anthropicChannelID)
 
-	openaiCandidates, err := queries.FindRouteCandidates(ctx, sqlc.FindRouteCandidatesParams{
+	openaiCandidates, err := queries.FindModelCandidates(ctx, sqlc.FindModelCandidatesParams{
 		RequestedModelID: requestedModel,
 		IngressProtocol:  "openai",
-		UserID:           1,
-		RouteID:          routeID,
 		AtTime:           timestamptz(now),
 	})
 	if err != nil {
@@ -101,11 +99,9 @@ func TestFindRouteCandidatesFiltersByIngressProtocol(t *testing.T) {
 		t.Fatalf("expected adapter key %q, got %q", "openai", openaiCandidates[0].AdapterKey)
 	}
 
-	anthropicCandidates, err := queries.FindRouteCandidates(ctx, sqlc.FindRouteCandidatesParams{
+	anthropicCandidates, err := queries.FindModelCandidates(ctx, sqlc.FindModelCandidatesParams{
 		RequestedModelID: requestedModel,
 		IngressProtocol:  "anthropic",
-		UserID:           1,
-		RouteID:          routeID,
 		AtTime:           timestamptz(now),
 	})
 	if err != nil {

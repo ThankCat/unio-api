@@ -180,9 +180,6 @@ type ApiKeyRow struct {
 	KeyPlaintext    *string
 	UserID          int64
 	Status          string
-	RouteID         *int64
-	RouteName       string
-	RoutePriceRatio string
 	SpendLimit      *string
 	SpentTotal      string
 	RequestTotal    int64
@@ -237,8 +234,6 @@ func (s *Service) ApiKeysTable(ctx context.Context, p ApiKeysTableParams) ([]Api
 	now := time.Now()
 	out := make([]ApiKeyRow, 0, len(rows))
 	for _, k := range rows {
-		// route_id 在 DB 层 NOT NULL（线路必填），恒有值；取地址以 *int64 对外表达。
-		boundRouteID := k.RouteID
 		out = append(out, ApiKeyRow{
 			ID:              k.ID,
 			Name:            k.Name,
@@ -246,9 +241,6 @@ func (s *Service) ApiKeysTable(ctx context.Context, p ApiKeysTableParams) ([]Api
 			KeyPlaintext:    textPtr(k.KeyPlaintext),
 			UserID:          k.UserID,
 			Status:          keyStatus(k.DisabledAt, k.RevokedAt, k.ExpiresAt, now),
-			RouteID:         &boundRouteID,
-			RouteName:       opsutil.TextValue(k.RouteName),
-			RoutePriceRatio: opsutil.NumericString(k.RoutePriceRatio),
 			SpendLimit:      numericPtr(k.SpendLimit),
 			SpentTotal:      opsutil.NumericString(k.SpentTotal),
 			RequestTotal:    k.RequestTotal,

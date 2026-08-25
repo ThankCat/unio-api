@@ -125,8 +125,6 @@ func (r *StickyRouter) inc(event string) {
 type StickyResolveParams struct {
 	// Protocol 是 ingress 协议族（routing.ProtocolOpenAI / ProtocolAnthropic），进入 Redis 键。
 	Protocol string
-	// RouteID 是本次请求命中的线路 ID；nil 时不粘（线路必填，理论恒有值）。
-	RouteID *int64
 	// APIKeyID 进入 Redis 键：不同客户 Key 即使会话键碰撞也互不影响。
 	APIKeyID int64
 	// ModelID 进入 Redis 键（§10.1）：同一会话跨模型不得共享绑定，否则换模型会继承
@@ -148,7 +146,7 @@ func (r *StickyRouter) Resolve(ctx context.Context, params StickyResolveParams) 
 	if r == nil {
 		return nil
 	}
-	if params.SessionKey == "" || params.RouteID == nil || params.Protocol == "" ||
+	if params.SessionKey == "" || params.Protocol == "" ||
 		params.ModelID <= 0 || params.Mode == "fixed" {
 		session := &StickySession{}
 		session.setAction(ctx, StickyActionDisabled, "")
@@ -158,7 +156,7 @@ func (r *StickyRouter) Resolve(ctx context.Context, params StickyResolveParams) 
 	sessionHash := hashStickySessionKey(params.SessionKey)
 	session := &StickySession{
 		router:      r,
-		key:         stickyRedisKeyFromHash(params.Protocol, *params.RouteID, params.APIKeyID, params.ModelID, sessionHash),
+		key:         stickyRedisKeyFromHash(params.Protocol, params.APIKeyID, params.ModelID, sessionHash),
 		sessionHash: sessionHash,
 		source:      params.Source,
 	}
@@ -475,14 +473,14 @@ func (s *StickySession) PreserveOnTemporaryBypass(ctx context.Context, channelID
 // stickyRedisKey 构造绑定键：sticky:{protocol}:{route_id}:{api_key_id}:{model_id}:{session_hash}。
 // sessionKey 是客户端可控任意串，入键前定长哈希：防长度/基数膨胀与键注入，也避免把原始会话
 // 标识写进 Redis key 或日志；原值仍原样转发上游。
-func stickyRedisKey(protocol string, routeID, apiKeyID, modelID int64, sessionKey string) string {
-	return stickyRedisKeyFromHash(protocol, routeID, apiKeyID, modelID, hashStickySessionKey(sessionKey))
+func stickyRedisKey(protocol string, apiKeyID, modelID int64, sessionKey string) string {
+	return stickyRedisKeyFromHash(protocol, apiKeyID, modelID, hashStickySessionKey(sessionKey))
 }
 
-func stickyRedisKeyFromHash(protocol string, routeID, apiKeyID, modelID int64, sessionHash string) string {
+func stickyRedisKeyFromHash(protocol string, apiKeyID, modelID int64, sessionHash string) string {
 	return fmt.Sprintf(
-		"sticky:%s:%d:%d:%d:%s",
-		protocol, routeID, apiKeyID, modelID, sessionHash,
+		"sticky:%s:%d:%d:%s",
+		protocol, apiKeyID, modelID, sessionHash,
 	)
 }
 

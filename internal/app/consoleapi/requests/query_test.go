@@ -14,8 +14,6 @@ func TestParseListQueryDefaultsAndFilters(t *testing.T) {
 	values.Set("page", "2")
 	values.Set("page_size", "10")
 	values.Set("q", " claude ")
-	values.Add("route_id", "3")
-	values.Add("route_id", "5")
 	values.Set("api_key_id", "9")
 	values.Set("endpoint", "/chat/completions")
 	values.Set("stream", "stream")
@@ -32,9 +30,6 @@ func TestParseListQueryDefaultsAndFilters(t *testing.T) {
 	}
 	if parsed.params.Q != "claude" || parsed.params.SortField != "model" || !parsed.params.SortDesc {
 		t.Fatalf("search/sort = %+v", parsed.params)
-	}
-	if len(parsed.params.RouteIDs) != 2 || parsed.params.RouteIDs[0] != 3 || parsed.params.RouteIDs[1] != 5 {
-		t.Fatalf("route ids = %#v", parsed.params.RouteIDs)
 	}
 	if len(parsed.params.Endpoints) != 1 || parsed.params.Endpoints[0] != "/chat/completions" {
 		t.Fatalf("endpoints = %#v", parsed.params.Endpoints)
@@ -62,7 +57,6 @@ func TestParseListQueryRejectsInvalidValues(t *testing.T) {
 		"page=0",
 		"page_size=abc",
 		"from=yesterday",
-		"route_id=abc",
 		"endpoint=/v1/models",
 		"stream=true",
 		"sort=unknown",

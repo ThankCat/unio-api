@@ -14,7 +14,6 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/overview"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/provider"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/requests"
-	"github.com/ThankCat/unio-gateway/internal/app/adminapi/route"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/system"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/user"
 	"github.com/ThankCat/unio-gateway/internal/platform/config"
@@ -51,10 +50,7 @@ type adminHTTPDeps struct {
 	ChannelCostMultiplierService channel.ChannelCostMultiplierService
 	ChannelRechargeFactorService channel.ChannelRechargeFactorService
 
-	RouteService        route.RouteService
-	RouteOpsService     route.RouteOpsService
 	RoutingTraceService adminapi.RoutingTraceService
-	RouteRuntimeService route.RuntimeService
 
 	RequestQueryService requests.RequestQueryService
 	LedgerQueryService  ledger.LedgerQueryService
@@ -114,10 +110,7 @@ func NewAdminHTTPHandler(deps adminHTTPDeps) http.Handler {
 		ChannelCostMultiplierService: deps.ChannelCostMultiplierService,
 		ChannelRechargeFactorService: deps.ChannelRechargeFactorService,
 
-		RouteService:        deps.RouteService,
-		RouteOpsService:     deps.RouteOpsService,
 		RoutingTraceService: deps.RoutingTraceService,
-		RouteRuntimeService: deps.RouteRuntimeService,
 		RequestQueryService: deps.RequestQueryService,
 		LedgerQueryService:  deps.LedgerQueryService,
 

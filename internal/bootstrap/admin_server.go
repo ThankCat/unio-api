@@ -45,14 +45,10 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/service/admin/providerbalance"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/providerops"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/query"
-	adminroute "github.com/ThankCat/unio-gateway/internal/service/admin/route"
-	"github.com/ThankCat/unio-gateway/internal/service/admin/routeops"
-	"github.com/ThankCat/unio-gateway/internal/service/admin/routeruntime"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/routingtrace"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/runtimediagnostics"
 	"github.com/ThankCat/unio-gateway/internal/service/appsettings"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/readiness"
-	"github.com/ThankCat/unio-gateway/internal/service/gateway/runtimefacts"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -217,10 +213,7 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 	// DEC-027 渠道成本倍率：渠道价格倍率 / 渠道充值倍率，均复用同一 sqlc Queries。
 	channelCostMultiplierService := channelcostmultiplier.NewService(queries)
 	channelRechargeFactorService := channelrechargefactor.NewService(queries)
-	routeService := adminroute.NewService(deps.DB, queries)
-	routeOpsService := routeops.NewService(queries)
 	routingTraceService := routingtrace.NewService(queries)
-	routeRuntimeService := routeruntime.NewService(queries, runtimefacts.NewReader(queries), sharedBreakerStore)
 
 	// M6 只读查询台：请求记录 / 账本，只读 service 共用同一 sqlc Queries。
 	requestQueryService := query.NewRequestService(queries)
@@ -302,10 +295,7 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		ChannelCostMultiplierService: channelCostMultiplierService,
 		ChannelRechargeFactorService: channelRechargeFactorService,
 
-		RouteService:        routeService,
-		RouteOpsService:     routeOpsService,
 		RoutingTraceService: routingTraceService,
-		RouteRuntimeService: routeRuntimeService,
 		RequestQueryService: requestQueryService,
 		LedgerQueryService:  ledgerQueryService,
 

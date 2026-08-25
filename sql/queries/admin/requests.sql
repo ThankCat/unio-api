@@ -1,11 +1,10 @@
 -- name: ListRequestRecordsPage :many
 -- ListRequestRecordsPage 供 admin 请求记录列表（富化版）按过滤条件分页倒序列出。
 -- 关联（均 1:1 或标量子查询，不放大行数）：usage_records（token）、cost_snapshots（平台成本 + 分项）、
--- ledger_entries 净扣费（用户实际扣费）、api_keys→routes（线路名，当前绑定，快照见批二）、
+-- ledger_entries 净扣费（用户实际扣费）、
 -- final channel 名、经过的渠道链（attempts 按序 string_agg）、routing_decision_traces（sticky 摘要）。
 -- 列表故意不 SELECT internal_error_detail（SQL 层脱敏，详情上游源站按 ?include_internal 返回）。
 -- latency/ttft/tps 由 Go 侧用时间戳 + output_tokens 计算，不在此列。
--- 线路名优先用请求级快照 route_id（Key 换绑不影响历史）；历史行 route_id 为 NULL 时回落到 Key 当前绑定。
 -- 模型元信息（显示名 / owned_by）按请求模型 id 关联；请求模型不在库时为 NULL。
 -- 先在 request_records 上完成过滤、精确计数与分页，再只对当前页执行富字段 JOIN/子查询；
 -- 避免 COUNT(*) OVER() 迫使数据库为全部匹配请求构造完整富化结果。
@@ -19,7 +18,6 @@ WITH filtered_page AS (
       AND (sqlc.narg('request_id')::text IS NULL OR r.request_id = sqlc.narg('request_id')::text)
       AND (sqlc.narg('status')::text IS NULL OR r.status = sqlc.narg('status')::text)
       AND (sqlc.narg('model')::text IS NULL OR r.requested_model_id ILIKE '%' || sqlc.narg('model')::text || '%')
-      AND (sqlc.narg('route_id')::bigint IS NULL OR r.route_id = sqlc.narg('route_id')::bigint)
       AND (
           (sqlc.narg('channel_id')::bigint IS NULL AND sqlc.narg('attempt_id')::bigint IS NULL AND sqlc.narg('scoring_sample')::text IS NULL)
           OR EXISTS (
@@ -134,13 +132,11 @@ SELECT
     r.reasoning_effort,
     r.reasoning_budget_tokens,
     r.client_ip,
-    rt.name AS route_name,
     -- 倍率取结算当时的快照（price_snapshots.price_ratio），历史无快照行为 NULL，展示端回落「—」；
     -- 不再实时读 rt.price_ratio，避免管理员改倍率污染历史请求的倍率与倒推基准价展示。
-    ps.price_ratio AS route_price_ratio,
+    ps.price_ratio AS sale_price_ratio,
     -- 售价侧长上下文是否已应用（费用列标识）；无 price 快照时回落成本侧标记。
     COALESCE(ps.long_context_applied, cs.long_context_applied, false) AS long_context_applied,
-    rt.mode AS route_mode,
     m.display_name AS model_display_name,
     m.owned_by AS model_owned_by,
     fc.name AS final_channel_name,
@@ -150,7 +146,6 @@ SELECT
         JOIN channels ch ON ch.id = a.channel_id
         WHERE a.request_record_id = r.id
     ), '')::text AS channel_chain,
-    r.route_id,
     COALESCE(scoring_attempt.id, 0)::bigint AS scoring_attempt_id,
     COALESCE(scoring_attempt.dimensions, ARRAY[]::text[])::text[] AS scoring_dimensions,
     COALESCE(scoring_attempt.error_scoring_failure, false)::boolean AS scoring_error_failure,
@@ -179,7 +174,6 @@ LEFT JOIN usage_records ur ON ur.request_record_id = r.id
 LEFT JOIN cost_snapshots cs ON cs.request_record_id = r.id
 LEFT JOIN price_snapshots ps ON ps.request_record_id = r.id
 LEFT JOIN api_keys ak ON ak.id = r.api_key_id
-LEFT JOIN routes rt ON rt.id = COALESCE(r.route_id, ak.route_id)
 LEFT JOIN models m ON m.model_id = r.requested_model_id
 LEFT JOIN channels fc ON fc.id = r.final_channel_id
 LEFT JOIN routing_decision_traces rdt ON rdt.request_record_id = r.id
@@ -235,7 +229,6 @@ WHERE (sqlc.narg('user_id')::bigint IS NULL OR user_id = sqlc.narg('user_id')::b
   AND (sqlc.narg('request_id')::text IS NULL OR request_id = sqlc.narg('request_id')::text)
   AND (sqlc.narg('status')::text IS NULL OR status = sqlc.narg('status')::text)
   AND (sqlc.narg('model')::text IS NULL OR requested_model_id ILIKE '%' || sqlc.narg('model')::text || '%')
-  AND (sqlc.narg('route_id')::bigint IS NULL OR route_id = sqlc.narg('route_id')::bigint)
   AND (
       (sqlc.narg('channel_id')::bigint IS NULL AND sqlc.narg('attempt_id')::bigint IS NULL AND sqlc.narg('scoring_sample')::text IS NULL)
       OR EXISTS (
@@ -283,7 +276,6 @@ SELECT
     completed_at,
     created_at,
     updated_at,
-    route_id,
     reasoning_effort,
     reasoning_budget_tokens,
     client_ip,

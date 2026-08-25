@@ -98,7 +98,7 @@ VALUES (
     $9,
     'manual'
 )
-RETURNING id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at
+RETURNING id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at, disabled_reason, disabled_at, family
 `
 
 type CreateModelParams struct {
@@ -142,6 +142,9 @@ func (q *Queries) CreateModel(ctx context.Context, arg CreateModelParams) (Model
 		&i.Source,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DisabledReason,
+		&i.DisabledAt,
+		&i.Family,
 	)
 	return i, err
 }
@@ -208,7 +211,7 @@ VALUES (
     $9,
     'catalog'
 )
-RETURNING id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at
+RETURNING id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at, disabled_reason, disabled_at, family
 `
 
 type CreateModelFromCatalogParams struct {
@@ -253,6 +256,9 @@ func (q *Queries) CreateModelFromCatalog(ctx context.Context, arg CreateModelFro
 		&i.Source,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DisabledReason,
+		&i.DisabledAt,
+		&i.Family,
 	)
 	return i, err
 }
@@ -296,6 +302,13 @@ INSERT INTO model_prices (
     cache_write_30m_input_price,
     output_price,
     reasoning_output_price,
+    sale_uncached_input_price,
+    sale_cache_read_input_price,
+    sale_cache_write_5m_input_price,
+    sale_cache_write_1h_input_price,
+    sale_cache_write_30m_input_price,
+    sale_output_price,
+    sale_reasoning_output_price,
     status,
     effective_from,
     effective_to,
@@ -315,16 +328,23 @@ SELECT
     $12,
     $13,
     $14,
-    $4,
-    $2,
-    $7,
     $15,
     $16,
     $17,
-    $18
+    $18,
+    $19,
+    $20,
+    $21,
+    $4,
+    $2,
+    $7,
+    $22,
+    $23,
+    $24,
+    $25
 FROM locked_model
 CROSS JOIN replacement_barrier
-RETURNING id, model_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, status, effective_from, effective_to, created_at, updated_at, cache_write_30m_input_price, long_context_enabled, long_context_threshold, long_context_input_multiplier, long_context_output_multiplier
+RETURNING id, model_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, status, effective_from, effective_to, created_at, updated_at, cache_write_30m_input_price, long_context_enabled, long_context_threshold, long_context_input_multiplier, long_context_output_multiplier, sale_uncached_input_price, sale_cache_read_input_price, sale_cache_write_5m_input_price, sale_cache_write_1h_input_price, sale_cache_write_30m_input_price, sale_output_price, sale_reasoning_output_price
 ), created_fast AS (
 INSERT INTO model_price_service_tiers (
     model_price_id,
@@ -336,27 +356,41 @@ INSERT INTO model_price_service_tiers (
     cache_write_30m_input_price,
     output_price,
     reasoning_output_price,
+    sale_uncached_input_price,
+    sale_cache_read_input_price,
+    sale_cache_write_5m_input_price,
+    sale_cache_write_1h_input_price,
+    sale_cache_write_30m_input_price,
+    sale_output_price,
+    sale_reasoning_output_price,
     reference_source,
     reference_checked_at
 )
 SELECT
     created_price.id,
     'fast',
-    $19,
-    $20,
-    $21,
-    $22,
-    $23,
-    $24,
-    $25,
     $26,
-    $27
+    $27,
+    $28,
+    $29,
+    $30,
+    $31,
+    $32,
+    $33,
+    $34,
+    $35,
+    $36,
+    $37,
+    $38,
+    $39,
+    $40,
+    $41
 FROM created_price
-WHERE $28::boolean
-RETURNING id, model_price_id, service_tier, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, cache_write_30m_input_price, output_price, reasoning_output_price, reference_source, reference_checked_at, created_at
+WHERE $42::boolean
+RETURNING id, model_price_id, service_tier, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, cache_write_30m_input_price, output_price, reasoning_output_price, reference_source, reference_checked_at, created_at, sale_uncached_input_price, sale_cache_read_input_price, sale_cache_write_5m_input_price, sale_cache_write_1h_input_price, sale_cache_write_30m_input_price, sale_output_price, sale_reasoning_output_price
 )
 SELECT
-    created_price.id, created_price.model_id, created_price.currency, created_price.pricing_unit, created_price.uncached_input_price, created_price.cache_read_input_price, created_price.cache_write_5m_input_price, created_price.cache_write_1h_input_price, created_price.output_price, created_price.reasoning_output_price, created_price.status, created_price.effective_from, created_price.effective_to, created_price.created_at, created_price.updated_at, created_price.cache_write_30m_input_price, created_price.long_context_enabled, created_price.long_context_threshold, created_price.long_context_input_multiplier, created_price.long_context_output_multiplier,
+    created_price.id, created_price.model_id, created_price.currency, created_price.pricing_unit, created_price.uncached_input_price, created_price.cache_read_input_price, created_price.cache_write_5m_input_price, created_price.cache_write_1h_input_price, created_price.output_price, created_price.reasoning_output_price, created_price.status, created_price.effective_from, created_price.effective_to, created_price.created_at, created_price.updated_at, created_price.cache_write_30m_input_price, created_price.long_context_enabled, created_price.long_context_threshold, created_price.long_context_input_multiplier, created_price.long_context_output_multiplier, created_price.sale_uncached_input_price, created_price.sale_cache_read_input_price, created_price.sale_cache_write_5m_input_price, created_price.sale_cache_write_1h_input_price, created_price.sale_cache_write_30m_input_price, created_price.sale_output_price, created_price.sale_reasoning_output_price,
     COALESCE(created_fast.id, 0)::bigint AS fast_service_tier_id,
     created_fast.uncached_input_price AS fast_uncached_input_price,
     created_fast.cache_read_input_price AS fast_cache_read_input_price,
@@ -365,6 +399,13 @@ SELECT
     created_fast.cache_write_30m_input_price AS fast_cache_write_30m_input_price,
     created_fast.output_price AS fast_output_price,
     created_fast.reasoning_output_price AS fast_reasoning_output_price,
+    created_fast.sale_uncached_input_price AS fast_sale_uncached_input_price,
+    created_fast.sale_cache_read_input_price AS fast_sale_cache_read_input_price,
+    created_fast.sale_cache_write_5m_input_price AS fast_sale_cache_write_5m_input_price,
+    created_fast.sale_cache_write_1h_input_price AS fast_sale_cache_write_1h_input_price,
+    created_fast.sale_cache_write_30m_input_price AS fast_sale_cache_write_30m_input_price,
+    created_fast.sale_output_price AS fast_sale_output_price,
+    created_fast.sale_reasoning_output_price AS fast_sale_reasoning_output_price,
     created_fast.reference_source AS fast_reference_source,
     created_fast.reference_checked_at AS fast_reference_checked_at
 FROM created_price
@@ -372,67 +413,95 @@ LEFT JOIN created_fast ON created_fast.model_price_id = created_price.id
 `
 
 type CreateModelPriceParams struct {
-	ModelID                     int64
-	EffectiveFrom               pgtype.Timestamptz
-	ReplaceOverlappingEnabled   bool
-	Status                      string
-	Currency                    string
-	PricingUnit                 string
-	EffectiveTo                 pgtype.Timestamptz
-	UncachedInputPrice          pgtype.Numeric
-	CacheReadInputPrice         pgtype.Numeric
-	CacheWrite5mInputPrice      pgtype.Numeric
-	CacheWrite1hInputPrice      pgtype.Numeric
-	CacheWrite30mInputPrice     pgtype.Numeric
-	OutputPrice                 pgtype.Numeric
-	ReasoningOutputPrice        pgtype.Numeric
-	LongContextEnabled          bool
-	LongContextThreshold        pgtype.Int8
-	LongContextInputMultiplier  pgtype.Numeric
-	LongContextOutputMultiplier pgtype.Numeric
-	FastUncachedInputPrice      pgtype.Numeric
-	FastCacheReadInputPrice     pgtype.Numeric
-	FastCacheWrite5mInputPrice  pgtype.Numeric
-	FastCacheWrite1hInputPrice  pgtype.Numeric
-	FastCacheWrite30mInputPrice pgtype.Numeric
-	FastOutputPrice             pgtype.Numeric
-	FastReasoningOutputPrice    pgtype.Numeric
-	FastReferenceSource         pgtype.Text
-	FastReferenceCheckedAt      pgtype.Date
-	FastConfigured              bool
+	ModelID                         int64
+	EffectiveFrom                   pgtype.Timestamptz
+	ReplaceOverlappingEnabled       bool
+	Status                          string
+	Currency                        string
+	PricingUnit                     string
+	EffectiveTo                     pgtype.Timestamptz
+	UncachedInputPrice              pgtype.Numeric
+	CacheReadInputPrice             pgtype.Numeric
+	CacheWrite5mInputPrice          pgtype.Numeric
+	CacheWrite1hInputPrice          pgtype.Numeric
+	CacheWrite30mInputPrice         pgtype.Numeric
+	OutputPrice                     pgtype.Numeric
+	ReasoningOutputPrice            pgtype.Numeric
+	SaleUncachedInputPrice          pgtype.Numeric
+	SaleCacheReadInputPrice         pgtype.Numeric
+	SaleCacheWrite5mInputPrice      pgtype.Numeric
+	SaleCacheWrite1hInputPrice      pgtype.Numeric
+	SaleCacheWrite30mInputPrice     pgtype.Numeric
+	SaleOutputPrice                 pgtype.Numeric
+	SaleReasoningOutputPrice        pgtype.Numeric
+	LongContextEnabled              bool
+	LongContextThreshold            pgtype.Int8
+	LongContextInputMultiplier      pgtype.Numeric
+	LongContextOutputMultiplier     pgtype.Numeric
+	FastUncachedInputPrice          pgtype.Numeric
+	FastCacheReadInputPrice         pgtype.Numeric
+	FastCacheWrite5mInputPrice      pgtype.Numeric
+	FastCacheWrite1hInputPrice      pgtype.Numeric
+	FastCacheWrite30mInputPrice     pgtype.Numeric
+	FastOutputPrice                 pgtype.Numeric
+	FastReasoningOutputPrice        pgtype.Numeric
+	FastSaleUncachedInputPrice      pgtype.Numeric
+	FastSaleCacheReadInputPrice     pgtype.Numeric
+	FastSaleCacheWrite5mInputPrice  pgtype.Numeric
+	FastSaleCacheWrite1hInputPrice  pgtype.Numeric
+	FastSaleCacheWrite30mInputPrice pgtype.Numeric
+	FastSaleOutputPrice             pgtype.Numeric
+	FastSaleReasoningOutputPrice    pgtype.Numeric
+	FastReferenceSource             pgtype.Text
+	FastReferenceCheckedAt          pgtype.Date
+	FastConfigured                  bool
 }
 
 type CreateModelPriceRow struct {
-	ID                          int64
-	ModelID                     int64
-	Currency                    string
-	PricingUnit                 string
-	UncachedInputPrice          pgtype.Numeric
-	CacheReadInputPrice         pgtype.Numeric
-	CacheWrite5mInputPrice      pgtype.Numeric
-	CacheWrite1hInputPrice      pgtype.Numeric
-	OutputPrice                 pgtype.Numeric
-	ReasoningOutputPrice        pgtype.Numeric
-	Status                      string
-	EffectiveFrom               pgtype.Timestamptz
-	EffectiveTo                 pgtype.Timestamptz
-	CreatedAt                   pgtype.Timestamptz
-	UpdatedAt                   pgtype.Timestamptz
-	CacheWrite30mInputPrice     pgtype.Numeric
-	LongContextEnabled          bool
-	LongContextThreshold        pgtype.Int8
-	LongContextInputMultiplier  pgtype.Numeric
-	LongContextOutputMultiplier pgtype.Numeric
-	FastServiceTierID           int64
-	FastUncachedInputPrice      pgtype.Numeric
-	FastCacheReadInputPrice     pgtype.Numeric
-	FastCacheWrite5mInputPrice  pgtype.Numeric
-	FastCacheWrite1hInputPrice  pgtype.Numeric
-	FastCacheWrite30mInputPrice pgtype.Numeric
-	FastOutputPrice             pgtype.Numeric
-	FastReasoningOutputPrice    pgtype.Numeric
-	FastReferenceSource         pgtype.Text
-	FastReferenceCheckedAt      pgtype.Date
+	ID                              int64
+	ModelID                         int64
+	Currency                        string
+	PricingUnit                     string
+	UncachedInputPrice              pgtype.Numeric
+	CacheReadInputPrice             pgtype.Numeric
+	CacheWrite5mInputPrice          pgtype.Numeric
+	CacheWrite1hInputPrice          pgtype.Numeric
+	OutputPrice                     pgtype.Numeric
+	ReasoningOutputPrice            pgtype.Numeric
+	Status                          string
+	EffectiveFrom                   pgtype.Timestamptz
+	EffectiveTo                     pgtype.Timestamptz
+	CreatedAt                       pgtype.Timestamptz
+	UpdatedAt                       pgtype.Timestamptz
+	CacheWrite30mInputPrice         pgtype.Numeric
+	LongContextEnabled              bool
+	LongContextThreshold            pgtype.Int8
+	LongContextInputMultiplier      pgtype.Numeric
+	LongContextOutputMultiplier     pgtype.Numeric
+	SaleUncachedInputPrice          pgtype.Numeric
+	SaleCacheReadInputPrice         pgtype.Numeric
+	SaleCacheWrite5mInputPrice      pgtype.Numeric
+	SaleCacheWrite1hInputPrice      pgtype.Numeric
+	SaleCacheWrite30mInputPrice     pgtype.Numeric
+	SaleOutputPrice                 pgtype.Numeric
+	SaleReasoningOutputPrice        pgtype.Numeric
+	FastServiceTierID               int64
+	FastUncachedInputPrice          pgtype.Numeric
+	FastCacheReadInputPrice         pgtype.Numeric
+	FastCacheWrite5mInputPrice      pgtype.Numeric
+	FastCacheWrite1hInputPrice      pgtype.Numeric
+	FastCacheWrite30mInputPrice     pgtype.Numeric
+	FastOutputPrice                 pgtype.Numeric
+	FastReasoningOutputPrice        pgtype.Numeric
+	FastSaleUncachedInputPrice      pgtype.Numeric
+	FastSaleCacheReadInputPrice     pgtype.Numeric
+	FastSaleCacheWrite5mInputPrice  pgtype.Numeric
+	FastSaleCacheWrite1hInputPrice  pgtype.Numeric
+	FastSaleCacheWrite30mInputPrice pgtype.Numeric
+	FastSaleOutputPrice             pgtype.Numeric
+	FastSaleReasoningOutputPrice    pgtype.Numeric
+	FastReferenceSource             pgtype.Text
+	FastReferenceCheckedAt          pgtype.Date
 }
 
 // CreateModelPrice 创建 Standard 基准售价与可选 Fast 精确价格子记录，单条语句保证原子性。
@@ -454,6 +523,13 @@ func (q *Queries) CreateModelPrice(ctx context.Context, arg CreateModelPricePara
 		arg.CacheWrite30mInputPrice,
 		arg.OutputPrice,
 		arg.ReasoningOutputPrice,
+		arg.SaleUncachedInputPrice,
+		arg.SaleCacheReadInputPrice,
+		arg.SaleCacheWrite5mInputPrice,
+		arg.SaleCacheWrite1hInputPrice,
+		arg.SaleCacheWrite30mInputPrice,
+		arg.SaleOutputPrice,
+		arg.SaleReasoningOutputPrice,
 		arg.LongContextEnabled,
 		arg.LongContextThreshold,
 		arg.LongContextInputMultiplier,
@@ -465,6 +541,13 @@ func (q *Queries) CreateModelPrice(ctx context.Context, arg CreateModelPricePara
 		arg.FastCacheWrite30mInputPrice,
 		arg.FastOutputPrice,
 		arg.FastReasoningOutputPrice,
+		arg.FastSaleUncachedInputPrice,
+		arg.FastSaleCacheReadInputPrice,
+		arg.FastSaleCacheWrite5mInputPrice,
+		arg.FastSaleCacheWrite1hInputPrice,
+		arg.FastSaleCacheWrite30mInputPrice,
+		arg.FastSaleOutputPrice,
+		arg.FastSaleReasoningOutputPrice,
 		arg.FastReferenceSource,
 		arg.FastReferenceCheckedAt,
 		arg.FastConfigured,
@@ -491,6 +574,13 @@ func (q *Queries) CreateModelPrice(ctx context.Context, arg CreateModelPricePara
 		&i.LongContextThreshold,
 		&i.LongContextInputMultiplier,
 		&i.LongContextOutputMultiplier,
+		&i.SaleUncachedInputPrice,
+		&i.SaleCacheReadInputPrice,
+		&i.SaleCacheWrite5mInputPrice,
+		&i.SaleCacheWrite1hInputPrice,
+		&i.SaleCacheWrite30mInputPrice,
+		&i.SaleOutputPrice,
+		&i.SaleReasoningOutputPrice,
 		&i.FastServiceTierID,
 		&i.FastUncachedInputPrice,
 		&i.FastCacheReadInputPrice,
@@ -499,6 +589,13 @@ func (q *Queries) CreateModelPrice(ctx context.Context, arg CreateModelPricePara
 		&i.FastCacheWrite30mInputPrice,
 		&i.FastOutputPrice,
 		&i.FastReasoningOutputPrice,
+		&i.FastSaleUncachedInputPrice,
+		&i.FastSaleCacheReadInputPrice,
+		&i.FastSaleCacheWrite5mInputPrice,
+		&i.FastSaleCacheWrite1hInputPrice,
+		&i.FastSaleCacheWrite30mInputPrice,
+		&i.FastSaleOutputPrice,
+		&i.FastSaleReasoningOutputPrice,
 		&i.FastReferenceSource,
 		&i.FastReferenceCheckedAt,
 	)
@@ -695,7 +792,7 @@ func (q *Queries) GetModelCatalogState(ctx context.Context, modelID int64) (GetM
 }
 
 const getModelPrice = `-- name: GetModelPrice :one
-SELECT id, model_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, status, effective_from, effective_to, created_at, updated_at, cache_write_30m_input_price, long_context_enabled, long_context_threshold, long_context_input_multiplier, long_context_output_multiplier FROM model_prices WHERE id = $1 LIMIT 1
+SELECT id, model_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, status, effective_from, effective_to, created_at, updated_at, cache_write_30m_input_price, long_context_enabled, long_context_threshold, long_context_input_multiplier, long_context_output_multiplier, sale_uncached_input_price, sale_cache_read_input_price, sale_cache_write_5m_input_price, sale_cache_write_1h_input_price, sale_cache_write_30m_input_price, sale_output_price, sale_reasoning_output_price FROM model_prices WHERE id = $1 LIMIT 1
 `
 
 // GetModelPrice 按主键读取单条模型基准售价。
@@ -723,6 +820,13 @@ func (q *Queries) GetModelPrice(ctx context.Context, id int64) (ModelPrice, erro
 		&i.LongContextThreshold,
 		&i.LongContextInputMultiplier,
 		&i.LongContextOutputMultiplier,
+		&i.SaleUncachedInputPrice,
+		&i.SaleCacheReadInputPrice,
+		&i.SaleCacheWrite5mInputPrice,
+		&i.SaleCacheWrite1hInputPrice,
+		&i.SaleCacheWrite30mInputPrice,
+		&i.SaleOutputPrice,
+		&i.SaleReasoningOutputPrice,
 	)
 	return i, err
 }
@@ -1224,7 +1328,7 @@ func (q *Queries) ListModelsPage(ctx context.Context, arg ListModelsPageParams) 
 }
 
 const lookupModelByID = `-- name: LookupModelByID :one
-SELECT id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at
+SELECT id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at, disabled_reason, disabled_at, family
 FROM models
 WHERE id = $1
 `
@@ -1247,12 +1351,15 @@ func (q *Queries) LookupModelByID(ctx context.Context, id int64) (Model, error) 
 		&i.Source,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DisabledReason,
+		&i.DisabledAt,
+		&i.Family,
 	)
 	return i, err
 }
 
 const lookupModelByModelID = `-- name: LookupModelByModelID :one
-SELECT id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at
+SELECT id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at, disabled_reason, disabled_at, family
 FROM models
 WHERE model_id = $1
 `
@@ -1275,6 +1382,9 @@ func (q *Queries) LookupModelByModelID(ctx context.Context, modelID string) (Mod
 		&i.Source,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DisabledReason,
+		&i.DisabledAt,
+		&i.Family,
 	)
 	return i, err
 }
@@ -2053,7 +2163,7 @@ SET display_name = $1,
     release_date = $7,
     updated_at = now()
 WHERE id = $8
-RETURNING id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at
+RETURNING id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at, disabled_reason, disabled_at, family
 `
 
 type RefreshAdoptedModelFromCatalogParams struct {
@@ -2095,6 +2205,9 @@ func (q *Queries) RefreshAdoptedModelFromCatalog(ctx context.Context, arg Refres
 		&i.Source,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DisabledReason,
+		&i.DisabledAt,
+		&i.Family,
 	)
 	return i, err
 }
@@ -2165,7 +2278,7 @@ SET display_name = $1,
     release_date = $8,
     updated_at = now()
 WHERE id = $9
-RETURNING id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at
+RETURNING id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at, disabled_reason, disabled_at, family
 `
 
 type UpdateModelParams struct {
@@ -2209,6 +2322,9 @@ func (q *Queries) UpdateModel(ctx context.Context, arg UpdateModelParams) (Model
 		&i.Source,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DisabledReason,
+		&i.DisabledAt,
+		&i.Family,
 	)
 	return i, err
 }
@@ -2239,7 +2355,7 @@ SET effective_to = $1,
     status = $2,
     updated_at = now()
 WHERE id = $3
-RETURNING id, model_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, status, effective_from, effective_to, created_at, updated_at, cache_write_30m_input_price, long_context_enabled, long_context_threshold, long_context_input_multiplier, long_context_output_multiplier
+RETURNING id, model_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, status, effective_from, effective_to, created_at, updated_at, cache_write_30m_input_price, long_context_enabled, long_context_threshold, long_context_input_multiplier, long_context_output_multiplier, sale_uncached_input_price, sale_cache_read_input_price, sale_cache_write_5m_input_price, sale_cache_write_1h_input_price, sale_cache_write_30m_input_price, sale_output_price, sale_reasoning_output_price
 `
 
 type UpdateModelPriceWindowParams struct {
@@ -2273,6 +2389,13 @@ func (q *Queries) UpdateModelPriceWindow(ctx context.Context, arg UpdateModelPri
 		&i.LongContextThreshold,
 		&i.LongContextInputMultiplier,
 		&i.LongContextOutputMultiplier,
+		&i.SaleUncachedInputPrice,
+		&i.SaleCacheReadInputPrice,
+		&i.SaleCacheWrite5mInputPrice,
+		&i.SaleCacheWrite1hInputPrice,
+		&i.SaleCacheWrite30mInputPrice,
+		&i.SaleOutputPrice,
+		&i.SaleReasoningOutputPrice,
 	)
 	return i, err
 }

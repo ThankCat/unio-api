@@ -24,7 +24,6 @@ type Store interface {
 	ChannelOpsErrors(ctx context.Context, arg sqlc.ChannelOpsErrorsParams) ([]sqlc.ChannelOpsErrorsRow, error)
 	ChannelOpsErrorsCount(ctx context.Context, arg sqlc.ChannelOpsErrorsCountParams) (int64, error)
 	ChannelOpsModels(ctx context.Context, arg sqlc.ChannelOpsModelsParams) ([]sqlc.ChannelOpsModelsRow, error)
-	ChannelOpsRoutes(ctx context.Context, channelID int64) ([]sqlc.ChannelOpsRoutesRow, error)
 }
 
 // Service 提供渠道运维只读聚合。
@@ -43,7 +42,7 @@ type Row struct {
 	Name                string
 	Status              string
 	CreatedAt           time.Time
-	Protocol            string
+	Protocols           []string
 	AdapterKey          string
 	Origin              string
 	Priority            int32
@@ -57,7 +56,6 @@ type Row struct {
 	TimeoutTotal        int64
 	Latency             opsutil.LatencyStats
 	BoundModels         int64
-	BoundRoutes         int64
 	RecentErrorCode     string
 	// 渠道级限流上限（P2-8）：nil=继承渠道默认限流，0=不限，>0=具体上限。
 	// 渠道在途并发上限（DEC-029）：nil=继承并发默认 channel_limit，0=不限，>0=具体上限。
@@ -119,15 +117,6 @@ type ModelRow struct {
 	HasPrice         bool
 }
 
-// RouteRow 是抽屉线路 Tab 行。
-type RouteRow struct {
-	ID         int64
-	Name       string
-	Mode       string
-	Status     string
-	PriceRatio string
-}
-
 // TableParams 是主表查询入参。
 type TableParams struct {
 	From       time.Time
@@ -173,7 +162,7 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 			Name:                r.Name,
 			Status:              r.Status,
 			CreatedAt:           r.CreatedAt.Time,
-			Protocol:            r.Protocol,
+			Protocols:           r.Protocols,
 			AdapterKey:          r.AdapterKey,
 			Origin:              r.Origin,
 			Priority:            r.Priority,
@@ -189,7 +178,6 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 				r.LatencySample, r.AttemptSucceeded,
 			),
 			BoundModels:             r.BoundModels,
-			BoundRoutes:             r.BoundRoutes,
 			RecentErrorCode:         textValue(r.RecentErrorCode),
 			ConcurrencyLimit:        int4Value(r.ConcurrencyLimit),
 			LastTestedAt:            timeValue(r.LastTestedAt),
@@ -312,25 +300,6 @@ func (s *Service) Models(ctx context.Context, channelID int64, from, to time.Tim
 			row.SuccessRate = float64(r.AttemptSucceeded) / float64(r.AttemptTotal)
 		}
 		out = append(out, row)
-	}
-	return out, nil
-}
-
-// Routes 返回引用该渠道的显式线路池。
-func (s *Service) Routes(ctx context.Context, channelID int64) ([]RouteRow, error) {
-	rows, err := s.store.ChannelOpsRoutes(ctx, channelID)
-	if err != nil {
-		return nil, storeFailed(err, "channel ops routes")
-	}
-	out := make([]RouteRow, 0, len(rows))
-	for _, r := range rows {
-		out = append(out, RouteRow{
-			ID:         r.ID,
-			Name:       r.Name,
-			Mode:       r.Mode,
-			Status:     r.Status,
-			PriceRatio: opsutil.NumericString(r.PriceRatio),
-		})
 	}
 	return out, nil
 }

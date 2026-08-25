@@ -904,49 +904,6 @@ func (q *Queries) ProviderOpsPerformanceTimeseries(ctx context.Context, arg Prov
 	return items, nil
 }
 
-const providerOpsRouteCatalog = `-- name: ProviderOpsRouteCatalog :many
-SELECT DISTINCT rt.id, rt.name, rt.status, rt.mode
-FROM routes rt
-JOIN route_channels rc ON rc.route_id = rt.id
-JOIN channels c ON c.id = rc.channel_id
-WHERE c.provider_id = $1
-ORDER BY rt.name, rt.id
-LIMIT 500
-`
-
-type ProviderOpsRouteCatalogRow struct {
-	ID     int64
-	Name   string
-	Status string
-	Mode   string
-}
-
-// ProviderOpsRouteCatalog 引用本服务商渠道的线路清单（列表 Tip）。
-func (q *Queries) ProviderOpsRouteCatalog(ctx context.Context, providerID int64) ([]ProviderOpsRouteCatalogRow, error) {
-	rows, err := q.db.Query(ctx, providerOpsRouteCatalog, providerID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ProviderOpsRouteCatalogRow
-	for rows.Next() {
-		var i ProviderOpsRouteCatalogRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.Name,
-			&i.Status,
-			&i.Mode,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const providersOpsTable = `-- name: ProvidersOpsTable :many
 
 SELECT
@@ -971,14 +928,7 @@ SELECT
         FROM channel_models cm
         JOIN channels c ON c.id = cm.channel_id
         WHERE c.provider_id = p.id AND cm.status = 'enabled'
-    ) AS models_count,
-    (
-        SELECT COUNT(DISTINCT rt.id)
-        FROM routes rt
-        JOIN route_channels rc ON rc.route_id = rt.id
-        JOIN channels c ON c.id = rc.channel_id
-        WHERE c.provider_id = p.id
-    ) AS routes_count
+    ) AS models_count
 FROM providers p
 LEFT JOIN provider_balances pb ON pb.provider_id = p.id AND pb.currency = 'USD'
 WHERE ($1::text IS NULL OR p.status = $1::text)
@@ -1011,20 +961,6 @@ ORDER BY
         JOIN channels c ON c.id = cm.channel_id
         WHERE c.provider_id = p.id AND cm.status = 'enabled'
     ) END ASC NULLS LAST,
-  CASE WHEN $4::text = 'routes' AND COALESCE($5::bool, false) THEN (
-        SELECT COUNT(DISTINCT rt.id)
-        FROM routes rt
-        JOIN route_channels rc ON rc.route_id = rt.id
-        JOIN channels c ON c.id = rc.channel_id
-        WHERE c.provider_id = p.id
-    ) END DESC NULLS LAST,
-  CASE WHEN $4::text = 'routes' AND NOT COALESCE($5::bool, false) THEN (
-        SELECT COUNT(DISTINCT rt.id)
-        FROM routes rt
-        JOIN route_channels rc ON rc.route_id = rt.id
-        JOIN channels c ON c.id = rc.channel_id
-        WHERE c.provider_id = p.id
-    ) END ASC NULLS LAST,
   CASE WHEN $4::text = 'status' AND COALESCE($5::bool, false) THEN p.status END DESC NULLS LAST,
   CASE WHEN $4::text = 'status' AND NOT COALESCE($5::bool, false) THEN p.status END ASC NULLS LAST,
   p.name
@@ -1054,7 +990,6 @@ type ProvidersOpsTableRow struct {
 	BalanceStatus  string
 	ChannelTotal   int64
 	ModelsCount    int64
-	RoutesCount    int64
 }
 
 // §3.2 服务商聚合视图只读运维聚合。轻聚合：无 12 卡，表 + 4 Tab 抽屉。
@@ -1091,7 +1026,6 @@ func (q *Queries) ProvidersOpsTable(ctx context.Context, arg ProvidersOpsTablePa
 			&i.BalanceStatus,
 			&i.ChannelTotal,
 			&i.ModelsCount,
-			&i.RoutesCount,
 		); err != nil {
 			return nil, err
 		}

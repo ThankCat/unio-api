@@ -33,12 +33,10 @@ type APIKeyPrincipal struct {
 	UserID    int64
 	KeyPrefix string
 
-	// RouteID 是 Key 绑定的线路 ID（线路必填，恒有值）；运行时据此解析线路，无默认回落。
-	RouteID *int64
-
-	// RPMLimit/RPDLimit/ConcurrencyLimit 是限流上限，取自 Key 绑定的线路，
-	// 按 (线路,用户) 计数）：nil 表示「继承线路默认限流」，0 表示「显式不限」，>0 表示具体上限
-	// （每分钟请求/每分钟 token/每日请求）。api_keys 自身的旧限流列已废弃、不再参与认证。
+	// RPMLimit/RPDLimit/ConcurrencyLimit 是限流上限，取自 Key 所属的用户，按用户计数：
+	// nil 表示「继承全局默认限流」，0 表示「显式不限」，>0 表示具体上限。
+	// 配额挂在用户上而非 Key 上：同一用户的多把 Key 共享同一份额度，
+	// 否则多开几把 Key 就能绕过限流。api_keys 自身的旧限流列已废弃、不再参与认证。
 	RPMLimit         *int64
 	RPDLimit         *int64
 	ConcurrencyLimit *int64
@@ -141,21 +139,17 @@ func (a *APIKeyAuthenticator) AuthenticateAPIKey(ctx context.Context, plaintext 
 		)
 	}
 
-	// route_id 在 DB 层 NOT NULL（线路必填），恒有值；取地址供下游统一以 *int64 消费。
-	// 限流上限取自绑定线路（DEC-027），计数在下游按 (线路,用户) 复合主体执行。
-	routeID := key.RouteID
 	return &APIKeyPrincipal{
 		APIKeyID:         key.ID,
 		UserID:           key.UserID,
 		KeyPrefix:        key.KeyPrefix,
-		RouteID:          &routeID,
-		RPMLimit:         int4Ptr(key.RouteRpmLimit),
-		RPDLimit:         int4Ptr(key.RouteRpdLimit),
-		ConcurrencyLimit: int4Ptr(key.RouteConcurrencyLimit),
+		RPMLimit:         int4Ptr(key.UserRpmLimit),
+		RPDLimit:         int4Ptr(key.UserRpdLimit),
+		ConcurrencyLimit: int4Ptr(key.UserConcurrencyLimit),
 	}, nil
 }
 
-// int4Ptr 把可空线路限流上限转成 *int64（nil=继承线路默认限流）。
+// int4Ptr 把可空用户限流上限转成 *int64（nil=继承全局默认限流）。
 func int4Ptr(v pgtype.Int4) *int64 {
 	if !v.Valid {
 		return nil

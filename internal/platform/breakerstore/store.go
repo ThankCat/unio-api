@@ -5,7 +5,6 @@ import (
 	"errors"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/redis/go-redis/v9"
 
@@ -231,7 +230,6 @@ type AcquireAttemptInput struct {
 
 	ProviderID int64
 	ChannelID  int64
-	RouteID    int64
 
 	OriginRevision         int64
 	ProviderStatusRevision int64
@@ -264,7 +262,6 @@ func (s *Store) AcquireAttempt(ctx context.Context, in AcquireAttemptInput) (adm
 	if s.localRuntimeInfrastructureFault(ctx) {
 		return AttemptAdmission{Mode: AdmissionDenied, Reason: ReasonBreakerStoreUnavailable}, nil
 	}
-	now := time.Now()
 	concKey := s.keys.channel(in.ChannelID) + ":conc"
 	keys := []string{
 		s.keys.provider(in.ProviderID),
@@ -280,11 +277,6 @@ func (s *Store) AcquireAttempt(ctx context.Context, in AcquireAttemptInput) (adm
 		s.keys.admissionRequest(in.RequestAdmissionID),
 		s.keys.runtimeInfrastructureFault(),
 		s.keys.runtimeReconciliationProof(),
-	}
-	if in.RouteID > 0 {
-		keys = append(keys, s.keys.routeChannelRPDBucket(in.RouteID, in.ChannelID, dayBucket(now)))
-	} else {
-		keys = append(keys, "")
 	}
 	enforceOrigin := 0
 	if in.EnforceProviderControl {
@@ -374,7 +366,6 @@ func (s *Store) permitFromAcquire(in AcquireAttemptInput, arr []interface{}) *At
 		IntegrityRevision:      in.IntegrityRevision,
 		ProviderID:             in.ProviderID,
 		ChannelID:              in.ChannelID,
-		RouteID:                in.RouteID,
 		OriginRevision:         in.OriginRevision,
 		ProviderStatusRevision: in.ProviderStatusRevision,
 		ChannelConfigRevision:  in.ChannelConfigRevision,
@@ -397,7 +388,6 @@ func (s *Store) permitFromAcquire(in AcquireAttemptInput, arr []interface{}) *At
 		p.TerminalTTLMs = toI64(arr[9])
 	}
 	if len(arr) >= 11 {
-		p.RouteChannelRPDBucket, _ = arr[10].(string)
 	}
 	return p
 }
@@ -409,7 +399,6 @@ func (s *Store) attemptLifecycleKeys(permit AttemptPermit) []string {
 		s.keys.provider(permit.ProviderID),
 		s.keys.channel(permit.ChannelID),
 		s.keys.channel(permit.ChannelID) + ":conc",
-		permit.RouteChannelRPDBucket,
 	}
 }
 
@@ -456,7 +445,6 @@ func attemptLifecycleArgs(permit AttemptPermit) []interface{} {
 		strconv.FormatInt(permit.ChannelStateGeneration, 10),
 		boolArg(permit.ProviderHalfOpenProbe),
 		boolArg(permit.ChannelHalfOpenProbe),
-		strconv.FormatInt(permit.RouteID, 10),
 	}
 }
 

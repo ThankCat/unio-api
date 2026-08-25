@@ -120,14 +120,7 @@ SELECT
         FROM channel_models cm
         JOIN channels c ON c.id = cm.channel_id
         WHERE c.provider_id = p.id AND cm.status = 'enabled'
-    ) AS models_count,
-    (
-        SELECT COUNT(DISTINCT rt.id)
-        FROM routes rt
-        JOIN route_channels rc ON rc.route_id = rt.id
-        JOIN channels c ON c.id = rc.channel_id
-        WHERE c.provider_id = p.id
-    ) AS routes_count
+    ) AS models_count
 FROM providers p
 LEFT JOIN provider_balances pb ON pb.provider_id = p.id AND pb.currency = 'USD'
 WHERE (sqlc.narg('status')::text IS NULL OR p.status = sqlc.narg('status')::text)
@@ -159,20 +152,6 @@ ORDER BY
         FROM channel_models cm
         JOIN channels c ON c.id = cm.channel_id
         WHERE c.provider_id = p.id AND cm.status = 'enabled'
-    ) END ASC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'routes' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (
-        SELECT COUNT(DISTINCT rt.id)
-        FROM routes rt
-        JOIN route_channels rc ON rc.route_id = rt.id
-        JOIN channels c ON c.id = rc.channel_id
-        WHERE c.provider_id = p.id
-    ) END DESC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'routes' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (
-        SELECT COUNT(DISTINCT rt.id)
-        FROM routes rt
-        JOIN route_channels rc ON rc.route_id = rt.id
-        JOIN channels c ON c.id = rc.channel_id
-        WHERE c.provider_id = p.id
     ) END ASC NULLS LAST,
   CASE WHEN sqlc.narg('sort_field')::text = 'status' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN p.status END DESC NULLS LAST,
   CASE WHEN sqlc.narg('sort_field')::text = 'status' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN p.status END ASC NULLS LAST,
@@ -366,16 +345,6 @@ JOIN channel_models cm ON cm.model_id = m.id AND cm.status = 'enabled'
 JOIN channels c ON c.id = cm.channel_id
 WHERE c.provider_id = sqlc.arg('provider_id')
 ORDER BY m.model_id
-LIMIT 500;
-
--- name: ProviderOpsRouteCatalog :many
--- ProviderOpsRouteCatalog 引用本服务商渠道的线路清单（列表 Tip）。
-SELECT DISTINCT rt.id, rt.name, rt.status, rt.mode
-FROM routes rt
-JOIN route_channels rc ON rc.route_id = rt.id
-JOIN channels c ON c.id = rc.channel_id
-WHERE c.provider_id = sqlc.arg('provider_id')
-ORDER BY rt.name, rt.id
 LIMIT 500;
 
 -- name: ProviderOpsChannels :many

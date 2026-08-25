@@ -47,7 +47,6 @@ func (s *Store) CreateRequest(ctx context.Context, params CreateRequestParams) (
 		StartedAt:           timestamptz(params.StartedAt),
 		CompletedAt:         pgtype.Timestamptz{Valid: false},
 		// 批二富化：线路快照 / 推理强度归一 / 客户端 IP（均可空）。
-		RouteID:               int8OrNull(params.RouteID),
 		ReasoningEffort:       textOrNull(params.ReasoningEffort),
 		ReasoningBudgetTokens: int4OrNull(params.ReasoningBudgetTokens),
 		ClientIp:              textOrNull(params.ClientIP),

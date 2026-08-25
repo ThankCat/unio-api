@@ -45,7 +45,7 @@ func (s *storeStub) AcquireRequestAdmission(_ context.Context, input breakerstor
 	return s.acquireResult, s.acquireErr
 }
 
-func (s *storeStub) RenewRequestAdmission(_ context.Context, _ string, _, _ int64, epoch string, revision int64) (breakerstore.RequestAdmissionLifecycleOutcome, error) {
+func (s *storeStub) RenewRequestAdmission(_ context.Context, _ string, _ int64, epoch string, revision int64) (breakerstore.RequestAdmissionLifecycleOutcome, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.renewCalls++
@@ -58,7 +58,7 @@ func (s *storeStub) RenewRequestAdmission(_ context.Context, _ string, _, _ int6
 	return outcome, s.renewErr
 }
 
-func (s *storeStub) FinishRequestAdmission(_ context.Context, _ string, _, _ int64, epoch string, revision int64) (breakerstore.RequestAdmissionLifecycleOutcome, error) {
+func (s *storeStub) FinishRequestAdmission(_ context.Context, _ string, _ int64, epoch string, revision int64) (breakerstore.RequestAdmissionLifecycleOutcome, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.finishCalls++
@@ -166,7 +166,7 @@ func readyFacts() *factsStub {
 	return &factsStub{
 		integrity: integrity,
 		admission: runtimefacts.AdmissionRevisions{
-			Integrity: integrity, RouteRateLimits: 3, Concurrency: 4,
+			Integrity: integrity, RequestRateLimits: 3, Concurrency: 4,
 		},
 		routing: runtimefacts.RoutingRevisions{Integrity: integrity, CircuitBreaker: 5, RoutingBalance: 6},
 	}
@@ -188,7 +188,7 @@ func TestSessionOwnsRenewBindAndUniqueFinish(t *testing.T) {
 	manager.newID = func() string { return "request-admission-1" }
 
 	result, err := manager.Acquire(context.Background(), Identity{
-		RouteID: 11, UserID: 22, Scope: "POST /v1/responses",
+		UserID: 41, Scope: "POST /v1/chat/completions",
 		RPMLimitOverride: &rpm, RPDLimitOverride: &rpd,
 	})
 	if err != nil || result.Outcome != breakerstore.RequestAllowed || result.Session == nil {
@@ -196,7 +196,7 @@ func TestSessionOwnsRenewBindAndUniqueFinish(t *testing.T) {
 	}
 	if got := store.acquireInput; got.Fingerprint == "" || got.RPMLimitOverride == nil || *got.RPMLimitOverride != 10 ||
 		got.RPDLimitOverride == nil || *got.RPDLimitOverride != 20 ||
-		got.RouteRateRevision != 3 || got.GlobalConcurrencyRevision != 4 {
+		got.RequestRateRevision != 3 || got.GlobalConcurrencyRevision != 4 {
 		t.Fatalf("unexpected acquire input: %+v", got)
 	}
 
@@ -248,7 +248,7 @@ func TestSessionOwnsRenewBindAndUniqueFinish(t *testing.T) {
 func TestManagerDeniedDoesNotCreateSession(t *testing.T) {
 	store := &storeStub{acquireResult: breakerstore.RequestAdmissionResult{Outcome: breakerstore.RequestLimited}}
 	manager := NewManager(store, readyFacts(), ManagerOptions{})
-	result, err := manager.Acquire(context.Background(), Identity{RouteID: 1, UserID: 2, Scope: "GET /v1/models"})
+	result, err := manager.Acquire(context.Background(), Identity{UserID: 2, Scope: "GET /v1/models"})
 	if err != nil || result.Outcome != breakerstore.RequestLimited || result.Session != nil {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
@@ -270,7 +270,7 @@ func TestSessionSnapshotInjectsFrozenAdmissionAndFreshRoutingRevisions(t *testin
 	}
 	facts := readyFacts()
 	manager := NewManager(store, facts, ManagerOptions{RenewInterval: time.Hour})
-	result, err := manager.Acquire(context.Background(), Identity{RouteID: 10, UserID: 20, Scope: "POST /v1/responses"})
+	result, err := manager.Acquire(context.Background(), Identity{UserID: 20, Scope: "POST /v1/responses"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +292,7 @@ func TestSessionSnapshotInjectsFrozenAdmissionAndFreshRoutingRevisions(t *testin
 		len(input.Candidates) != 1 || input.Candidates[0].ChannelID != 40 {
 		t.Fatalf("snapshot revisions were not injected correctly: %+v", input)
 	}
-	if snapshot.RouteRateRevision != 3 {
+	if snapshot.RequestRateRevision != 3 {
 		t.Fatalf("snapshot did not preserve route rate revision: %+v", snapshot)
 	}
 	if err := result.Session.Finalize(context.Background()); err != nil {
@@ -310,7 +310,6 @@ func TestSessionFinalizeFailsClosedWhenFreshIntegrityCannotBeRead(t *testing.T) 
 	facts := readyFacts()
 	manager := NewManager(store, facts, ManagerOptions{RenewInterval: time.Hour})
 	result, err := manager.Acquire(context.Background(), Identity{
-		RouteID: 31,
 		UserID:  32,
 		Scope:   "GET /v1/models",
 	})
@@ -353,7 +352,6 @@ func TestSessionFinalizeRetriesTransientIntegrityRead(t *testing.T) {
 	}
 	manager := NewManager(store, facts, ManagerOptions{RenewInterval: time.Hour})
 	result, err := manager.Acquire(context.Background(), Identity{
-		RouteID: 33,
 		UserID:  34,
 		Scope:   "GET /v1/models",
 	})
@@ -387,7 +385,6 @@ func TestSessionFinalizeRetriesSameTokenAfterStoreFailure(t *testing.T) {
 	}
 	manager := NewManager(store, readyFacts(), ManagerOptions{RenewInterval: time.Hour})
 	result, err := manager.Acquire(context.Background(), Identity{
-		RouteID: 35,
 		UserID:  36,
 		Scope:   "GET /v1/models",
 	})
@@ -423,7 +420,6 @@ func TestSessionFinalizeRecordsUnknownAfterStoreRetriesExhausted(t *testing.T) {
 		RenewInterval: time.Hour,
 	})
 	result, err := manager.Acquire(context.Background(), Identity{
-		RouteID: 37,
 		UserID:  38,
 		Scope:   "GET /v1/models",
 	})
@@ -455,7 +451,6 @@ func TestRequestAdmissionMetricsFollowTokenOwnership(t *testing.T) {
 		RenewInterval: time.Hour,
 	})
 	result, err := manager.Acquire(context.Background(), Identity{
-		RouteID: 41,
 		UserID:  42,
 		Scope:   "POST /v1/responses",
 	})
@@ -486,7 +481,7 @@ func TestDeniedRequestAdmissionMetricsNeverBecomeActive(t *testing.T) {
 		readyFacts(),
 		ManagerOptions{Metrics: metrics},
 	)
-	result, err := manager.Acquire(context.Background(), Identity{RouteID: 1, UserID: 2, Scope: "GET /v1/models"})
+	result, err := manager.Acquire(context.Background(), Identity{UserID: 2, Scope: "GET /v1/models"})
 	if err != nil || result.Session != nil {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}

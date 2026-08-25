@@ -59,7 +59,6 @@ func parseListQuery(r *http.Request) (parsedListQuery, *consoleservice.Error) {
 	}
 	return parsedListQuery{
 		params: consolerequests.ListParams{
-			RouteIDs:    filters.RouteIDs,
 			APIKeyIDs:   filters.APIKeyIDs,
 			Endpoints:   filters.Endpoints,
 			StreamTypes: filters.StreamTypes,
@@ -85,7 +84,6 @@ func parseSummaryQuery(r *http.Request) (consolerequests.SummaryParams, *console
 	if err != nil {
 		return consolerequests.SummaryParams{}, err
 	}
-	routeIDs, err := parseInt64Values(r, "route_id")
 	if err != nil {
 		return consolerequests.SummaryParams{}, err
 	}
@@ -106,7 +104,6 @@ func parseSummaryQuery(r *http.Request) (consolerequests.SummaryParams, *console
 		return consolerequests.SummaryParams{}, err
 	}
 	return consolerequests.SummaryParams{
-		RouteIDs:    routeIDs,
 		APIKeyIDs:   apiKeyIDs,
 		Endpoints:   endpoints,
 		StreamTypes: streamTypes,

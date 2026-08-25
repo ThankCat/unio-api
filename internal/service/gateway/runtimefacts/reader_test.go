@@ -55,17 +55,17 @@ func TestReaderIntegrityReturnsReadyEpochWithoutOtherControls(t *testing.T) {
 func TestReaderAdmissionReturnsReadySnapshot(t *testing.T) {
 	epoch := readyEpochJSON(t)
 	reader := runtimefacts.NewReader(queryStub{admission: sqlc.GetGatewayAdmissionControlRevisionsRow{
-		RuntimeStateEpochValue:         epoch,
-		RuntimeStateEpochRevision:      7,
-		RouteRateLimitDefaultsRevision: 3,
-		ConcurrencyDefaultsRevision:    4,
+		RuntimeStateEpochValue:           epoch,
+		RuntimeStateEpochRevision:        7,
+		RequestRateLimitDefaultsRevision: 3,
+		ConcurrencyDefaultsRevision:      4,
 	}})
 
 	got, err := reader.Admission(context.Background())
 	if err != nil {
 		t.Fatalf("read admission: %v", err)
 	}
-	if got.Revision != 7 || got.RouteRateLimits != 3 || got.Concurrency != 4 {
+	if got.Revision != 7 || got.RequestRateLimits != 3 || got.Concurrency != 4 {
 		t.Fatalf("unexpected admission revisions: %+v", got)
 	}
 }
@@ -107,10 +107,10 @@ func TestReaderFailsClosedForMissingOrInvalidFacts(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			reader := runtimefacts.NewReader(queryStub{admission: sqlc.GetGatewayAdmissionControlRevisionsRow{
-				RuntimeStateEpochValue:         readyEpochJSON(t),
-				RuntimeStateEpochRevision:      1,
-				RouteRateLimitDefaultsRevision: tc.routeRevision,
-				ConcurrencyDefaultsRevision:    tc.concurrencyRevision,
+				RuntimeStateEpochValue:           readyEpochJSON(t),
+				RuntimeStateEpochRevision:        1,
+				RequestRateLimitDefaultsRevision: tc.routeRevision,
+				ConcurrencyDefaultsRevision:      tc.concurrencyRevision,
 			}})
 			_, err := reader.Admission(context.Background())
 			if failure.CodeOf(err) != failure.CodeGatewayRuntimeSyncRequired {

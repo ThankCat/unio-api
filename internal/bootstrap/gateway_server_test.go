@@ -94,9 +94,9 @@ func (r *fakeGatewayServerAppRows) Scan(dest ...any) error {
 	if !ok {
 		return fmt.Errorf("expected destination 0 to be *int64, got %T", dest[0])
 	}
-	protocol, ok := dest[1].(*string)
+	protocols, ok := dest[1].(*[]string)
 	if !ok {
-		return fmt.Errorf("expected destination 1 to be *string, got %T", dest[1])
+		return fmt.Errorf("expected destination 1 to be *[]string, got %T", dest[1])
 	}
 	adapterKey, ok := dest[2].(*string)
 	if !ok {
@@ -109,7 +109,7 @@ func (r *fakeGatewayServerAppRows) Scan(dest ...any) error {
 
 	row := r.rows[r.index]
 	*channelID = row.ChannelID
-	*protocol = row.Protocol
+	*protocols = row.Protocols
 	*adapterKey = row.AdapterKey
 	*providerSlug = row.ProviderSlug
 	return nil
@@ -121,7 +121,7 @@ func (r *fakeGatewayServerAppRows) Values() ([]any, error) {
 	}
 
 	row := r.rows[r.index]
-	return []any{row.ChannelID, row.Protocol, row.AdapterKey, row.ProviderSlug}, nil
+	return []any{row.ChannelID, row.Protocols, row.AdapterKey, row.ProviderSlug}, nil
 }
 
 func (r *fakeGatewayServerAppRows) RawValues() [][]byte {
@@ -135,8 +135,8 @@ func (r *fakeGatewayServerAppRows) Conn() *pgx.Conn {
 func TestGatewayServerProviderAdapterPreflightAcceptsEnabledBindings(t *testing.T) {
 	db := &fakeGatewayServerAppDB{
 		rows: []sqlc.ListEnabledChannelAdaptersRow{
-			{ChannelID: 1, Protocol: "openai", AdapterKey: "deepseek", ProviderSlug: "deepseek"},
-			{ChannelID: 2, Protocol: "anthropic", AdapterKey: "deepseek", ProviderSlug: "deepseek"},
+			{ChannelID: 1, Protocols: []string{"openai"}, AdapterKey: "deepseek", ProviderSlug: "deepseek"},
+			{ChannelID: 2, Protocols: []string{"anthropic"}, AdapterKey: "deepseek", ProviderSlug: "deepseek"},
 		},
 	}
 	registry, err := NewAdapterRegistry(nil, zap.NewNop())
@@ -169,7 +169,7 @@ func TestNewGatewayServerAppRequiresRedis(t *testing.T) {
 func TestGatewayServerProviderAdapterPreflightRejectsUnknownBinding(t *testing.T) {
 	db := &fakeGatewayServerAppDB{
 		rows: []sqlc.ListEnabledChannelAdaptersRow{
-			{ChannelID: 1, Protocol: "openai", AdapterKey: "unknown", ProviderSlug: "unknown"},
+			{ChannelID: 1, Protocols: []string{"openai"}, AdapterKey: "unknown", ProviderSlug: "unknown"},
 		},
 	}
 	registry, err := NewAdapterRegistry(nil, zap.NewNop())

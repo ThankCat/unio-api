@@ -16,10 +16,10 @@ type ControlTarget struct {
 	controlKey string
 }
 
-// RouteRateLimitControl / GlobalConcurrencyControl / ChannelCapacityControl / SettingControl
+// RequestRateLimitControl / GlobalConcurrencyControl / ChannelCapacityControl / SettingControl
 // 构造各类控制目标。
-func (s *Store) RouteRateLimitControl() ControlTarget {
-	return ControlTarget{controlKey: s.keys.admissionRouteRate()}
+func (s *Store) RequestRateLimitControl() ControlTarget {
+	return ControlTarget{controlKey: s.keys.admissionRequestRate()}
 }
 
 func (s *Store) GlobalConcurrencyControl() ControlTarget {

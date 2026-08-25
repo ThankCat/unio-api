@@ -15,9 +15,9 @@ import (
 //
 // Route 维度按客户请求聚合，Channel 维度按单个 attempt 聚合：同一请求 fallback 到第二条渠道时，
 // Route 输入仍然只记一次，Channel 输入按真实 attempt 各记一次。
-// RouteID 来自 permit（由 request admission token 注入），为 0 时只观测 Channel 维度。
+// UserID 来自请求记录，为 0 时只观测 Channel 维度。
 type TPMAttemptScope struct {
-	RouteID          int64
+	UserID           int64
 	RequestID        int64
 	RequestStartedAt time.Time
 	ChannelID        int64
@@ -25,13 +25,13 @@ type TPMAttemptScope struct {
 	InputEstimate    int64
 }
 
-func (s TPMAttemptScope) route() (tpmobserver.Scope, bool) {
-	if s.RouteID <= 0 || s.RequestID <= 0 {
+func (s TPMAttemptScope) user() (tpmobserver.Scope, bool) {
+	if s.UserID <= 0 || s.RequestID <= 0 {
 		return tpmobserver.Scope{}, false
 	}
 	return tpmobserver.Scope{
-		Kind: breakerstore.TPMScopeRoute,
-		ID:   s.RouteID,
+		Kind: breakerstore.TPMScopeUser,
+		ID:   s.UserID,
 		Key:  strconv.FormatInt(s.RequestID, 10),
 	}, true
 }
@@ -55,7 +55,7 @@ func (l *RequestLifecycle) SetTPMObserver(observer *tpmobserver.Observer) {
 }
 
 // newTPMAttemptScope 组装一次 attempt 的观测归属。owner 为 nil（未启用 permit 的装配）时
-// 拿不到 RouteID，此时只观测 Channel 维度。
+// 拿不到 UserID，此时只观测 Channel 维度。
 func (l *RequestLifecycle) newTPMAttemptScope(
 	request requestlog.RequestRecord,
 	attempt requestlog.AttemptRecord,
@@ -64,7 +64,7 @@ func (l *RequestLifecycle) newTPMAttemptScope(
 	inputEstimate int64,
 ) TPMAttemptScope {
 	return TPMAttemptScope{
-		RouteID:          owner.RouteID(),
+		UserID:           request.UserID,
 		RequestID:        request.ID,
 		RequestStartedAt: request.StartedAt,
 		ChannelID:        candidate.Channel.ID,
@@ -85,12 +85,12 @@ func (l *RequestLifecycle) ObserveAttemptInput(scope TPMAttemptScope, upstreamSt
 	if channelScope, ok := scope.channel(); ok {
 		l.tpmObserver.Input(channelScope, upstreamStartedAt, scope.InputEstimate)
 	}
-	if routeScope, ok := scope.route(); ok {
+	if userScope, ok := scope.user(); ok {
 		at := scope.RequestStartedAt
 		if at.IsZero() {
 			at = upstreamStartedAt
 		}
-		l.tpmObserver.Input(routeScope, at, scope.InputEstimate)
+		l.tpmObserver.Input(userScope, at, scope.InputEstimate)
 	}
 }
 
@@ -110,8 +110,8 @@ func (l *RequestLifecycle) ObserveRouteOutput(scope TPMAttemptScope, at time.Tim
 	if l == nil || l.tpmObserver == nil || tokens <= 0 {
 		return
 	}
-	if routeScope, ok := scope.route(); ok {
-		l.tpmObserver.Output(routeScope, at, tokens)
+	if userScope, ok := scope.user(); ok {
+		l.tpmObserver.Output(userScope, at, tokens)
 	}
 }
 
@@ -132,7 +132,7 @@ func (l *RequestLifecycle) FinalizeTPMObservation(
 	if channelScope, ok := scope.channel(); ok {
 		l.tpmObserver.Finalize(channelScope, at, usageFacts, reliable)
 	}
-	if routeScope, ok := scope.route(); ok {
-		l.tpmObserver.Finalize(routeScope, at, usageFacts, reliable)
+	if userScope, ok := scope.user(); ok {
+		l.tpmObserver.Finalize(userScope, at, usageFacts, reliable)
 	}
 }

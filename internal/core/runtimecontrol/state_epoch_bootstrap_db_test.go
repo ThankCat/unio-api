@@ -355,7 +355,7 @@ func stateEpochFixture(t *testing.T) (context.Context, pgx.Tx, *redis.Client, st
 func seedReadinessSettings(t *testing.T, ctx context.Context, tx pgx.Tx) {
 	t.Helper()
 	for _, key := range []string{
-		"gateway.route_rate_limit_defaults",
+		"gateway.request_rate_limit_defaults",
 		"gateway.concurrency_defaults",
 		"gateway.circuit_breaker",
 		"gateway.routing_balance",

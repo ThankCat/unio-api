@@ -121,15 +121,15 @@ func TestOperationObserverCoversRequestAdmissionLifecycle(t *testing.T) {
 	store := newObservedTestStore(t, observer)
 	epoch, revision := seedAdmissionEnv(t, store)
 	ctx := context.Background()
-	in := raInput("observed-request", 71, 81, epoch, revision)
+	in := raInput("observed-request", 81, epoch, revision)
 
 	if result, err := store.AcquireRequestAdmission(ctx, in); err != nil || result.Outcome != RequestAllowed {
 		t.Fatalf("acquire request = %+v, err=%v", result, err)
 	}
-	if result, err := store.RenewRequestAdmission(ctx, in.RequestAdmissionID, in.RouteID, in.UserID, epoch, revision); err != nil || result != RequestLifecycleRenewed {
+	if result, err := store.RenewRequestAdmission(ctx, in.RequestAdmissionID, in.UserID, epoch, revision); err != nil || result != RequestLifecycleRenewed {
 		t.Fatalf("renew request = %s, err=%v", result, err)
 	}
-	if result, err := store.FinishRequestAdmission(ctx, in.RequestAdmissionID, in.RouteID, in.UserID, epoch, revision); err != nil || result != RequestLifecycleFinished {
+	if result, err := store.FinishRequestAdmission(ctx, in.RequestAdmissionID, in.UserID, epoch, revision); err != nil || result != RequestLifecycleFinished {
 		t.Fatalf("finish request = %s, err=%v", result, err)
 	}
 

@@ -133,7 +133,6 @@ type groupsData struct {
 }
 
 type filtersData struct {
-	Routes  []consoleusage.FilterOption `json:"routes"`
 	APIKeys []consoleusage.FilterOption `json:"api_keys"`
 	Models  []consoleusage.ModelOption  `json:"models"`
 }

@@ -129,9 +129,9 @@ type readinessControlFixture struct {
 func readinessControlFixtures() []readinessControlFixture {
 	return []readinessControlFixture{
 		{
-			name: "route rate", target: func(store *Store) ControlTarget { return store.RouteRateLimitControl() },
+			name: "route rate", target: func(store *Store) ControlTarget { return store.RequestRateLimitControl() },
 			revision: 2, payload: `{"rpm":11,"rpd":111}`,
-			setExpected: func(input *RuntimeReadinessInput, revision int64) { input.RouteRateLimitRevision = revision },
+			setExpected: func(input *RuntimeReadinessInput, revision int64) { input.RequestRateLimitRevision = revision },
 		},
 		{
 			name: "global concurrency", target: func(store *Store) ControlTarget { return store.GlobalConcurrencyControl() },

@@ -31,36 +31,31 @@ WHERE r.user_id = $1
   ) > 0
   AND (
       COALESCE(cardinality($2::bigint[]), 0) = 0
-      OR COALESCE(r.route_id, ak.route_id) = ANY($2::bigint[])
+      OR r.api_key_id = ANY($2::bigint[])
   )
   AND (
-      COALESCE(cardinality($3::bigint[]), 0) = 0
-      OR r.api_key_id = ANY($3::bigint[])
+      COALESCE(cardinality($3::text[]), 0) = 0
+      OR r.endpoint = ANY($3::text[])
   )
   AND (
       COALESCE(cardinality($4::text[]), 0) = 0
-      OR r.endpoint = ANY($4::text[])
+      OR (r.stream AND 'stream' = ANY($4::text[]))
+      OR ((NOT r.stream) AND 'sync' = ANY($4::text[]))
   )
   AND (
-      COALESCE(cardinality($5::text[]), 0) = 0
-      OR (r.stream AND 'stream' = ANY($5::text[]))
-      OR ((NOT r.stream) AND 'sync' = ANY($5::text[]))
+      $5::text IS NULL
+      OR btrim($5::text) = ''
+      OR r.requested_model_id ILIKE '%' || btrim($5::text) || '%'
+      OR COALESCE(m.display_name, '') ILIKE '%' || btrim($5::text) || '%'
+      OR r.request_id ILIKE '%' || btrim($5::text) || '%'
+      OR COALESCE(r.client_ip, '') ILIKE '%' || btrim($5::text) || '%'
   )
-  AND (
-      $6::text IS NULL
-      OR btrim($6::text) = ''
-      OR r.requested_model_id ILIKE '%' || btrim($6::text) || '%'
-      OR COALESCE(m.display_name, '') ILIKE '%' || btrim($6::text) || '%'
-      OR r.request_id ILIKE '%' || btrim($6::text) || '%'
-      OR COALESCE(r.client_ip, '') ILIKE '%' || btrim($6::text) || '%'
-  )
-  AND ($7::timestamptz IS NULL OR r.created_at >= $7::timestamptz)
-  AND ($8::timestamptz IS NULL OR r.created_at < $8::timestamptz)
+  AND ($6::timestamptz IS NULL OR r.created_at >= $6::timestamptz)
+  AND ($7::timestamptz IS NULL OR r.created_at < $7::timestamptz)
 `
 
 type CountConsoleBilledRequestsParams struct {
 	UserID      int64
-	RouteIds    []int64
 	ApiKeyIds   []int64
 	Endpoints   []string
 	StreamTypes []string
@@ -72,7 +67,6 @@ type CountConsoleBilledRequestsParams struct {
 func (q *Queries) CountConsoleBilledRequests(ctx context.Context, arg CountConsoleBilledRequestsParams) (int64, error) {
 	row := q.db.QueryRow(ctx, countConsoleBilledRequests,
 		arg.UserID,
-		arg.RouteIds,
 		arg.ApiKeyIds,
 		arg.Endpoints,
 		arg.StreamTypes,
@@ -93,25 +87,24 @@ WHERE ($1::bigint IS NULL OR user_id = $1::bigint)
   AND ($3::text IS NULL OR request_id = $3::text)
   AND ($4::text IS NULL OR status = $4::text)
   AND ($5::text IS NULL OR requested_model_id ILIKE '%' || $5::text || '%')
-  AND ($6::bigint IS NULL OR route_id = $6::bigint)
   AND (
-      ($7::bigint IS NULL AND $8::bigint IS NULL AND $9::text IS NULL)
+      ($6::bigint IS NULL AND $7::bigint IS NULL AND $8::text IS NULL)
       OR EXISTS (
           SELECT 1
           FROM request_attempts a
           WHERE a.request_record_id = request_records.id
-            AND ($7::bigint IS NULL OR a.channel_id = $7::bigint)
-            AND ($8::bigint IS NULL OR a.id = $8::bigint)
+            AND ($6::bigint IS NULL OR a.channel_id = $6::bigint)
+            AND ($7::bigint IS NULL OR a.id = $7::bigint)
             AND (
-                $9::text IS NULL
-                OR ($9::text = 'ttft' AND a.ttft_scoring_sample)
-                OR ($9::text = 'error' AND a.error_scoring_sample)
-                OR ($9::text = 'any' AND (a.ttft_scoring_sample OR a.error_scoring_sample))
+                $8::text IS NULL
+                OR ($8::text = 'ttft' AND a.ttft_scoring_sample)
+                OR ($8::text = 'error' AND a.error_scoring_sample)
+                OR ($8::text = 'any' AND (a.ttft_scoring_sample OR a.error_scoring_sample))
             )
       )
   )
-  AND ($10::timestamptz IS NULL OR created_at >= $10::timestamptz)
-  AND ($11::timestamptz IS NULL OR created_at < $11::timestamptz)
+  AND ($9::timestamptz IS NULL OR created_at >= $9::timestamptz)
+  AND ($10::timestamptz IS NULL OR created_at < $10::timestamptz)
 `
 
 type CountRequestRecordsParams struct {
@@ -120,7 +113,6 @@ type CountRequestRecordsParams struct {
 	RequestID     pgtype.Text
 	Status        pgtype.Text
 	Model         pgtype.Text
-	RouteID       pgtype.Int8
 	ChannelID     pgtype.Int8
 	AttemptID     pgtype.Int8
 	ScoringSample pgtype.Text
@@ -136,7 +128,6 @@ func (q *Queries) CountRequestRecords(ctx context.Context, arg CountRequestRecor
 		arg.RequestID,
 		arg.Status,
 		arg.Model,
-		arg.RouteID,
 		arg.ChannelID,
 		arg.AttemptID,
 		arg.ScoringSample,
@@ -174,7 +165,6 @@ SELECT
     completed_at,
     created_at,
     updated_at,
-    route_id,
     reasoning_effort,
     reasoning_budget_tokens,
     client_ip,
@@ -219,7 +209,6 @@ func (q *Queries) GetRequestRecordByRequestID(ctx context.Context, requestID str
 		&i.CompletedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.RouteID,
 		&i.ReasoningEffort,
 		&i.ReasoningBudgetTokens,
 		&i.ClientIp,
@@ -461,7 +450,6 @@ WITH windowed AS MATERIALIZED (
         r.stream,
         r.requested_model_id,
         r.ingress_protocol,
-        r.route_id,
         r.api_key_id,
         r.endpoint,
         r.request_id,
@@ -495,28 +483,24 @@ billed AS (
     LEFT JOIN models m ON m.model_id = w.requested_model_id
     WHERE (
           COALESCE(cardinality($4::bigint[]), 0) = 0
-          OR COALESCE(w.route_id, ak.route_id) = ANY($4::bigint[])
+          OR w.api_key_id = ANY($4::bigint[])
       )
       AND (
-          COALESCE(cardinality($5::bigint[]), 0) = 0
-          OR w.api_key_id = ANY($5::bigint[])
+          COALESCE(cardinality($5::text[]), 0) = 0
+          OR w.endpoint = ANY($5::text[])
       )
       AND (
           COALESCE(cardinality($6::text[]), 0) = 0
-          OR w.endpoint = ANY($6::text[])
+          OR (w.stream AND 'stream' = ANY($6::text[]))
+          OR ((NOT w.stream) AND 'sync' = ANY($6::text[]))
       )
       AND (
-          COALESCE(cardinality($7::text[]), 0) = 0
-          OR (w.stream AND 'stream' = ANY($7::text[]))
-          OR ((NOT w.stream) AND 'sync' = ANY($7::text[]))
-      )
-      AND (
-          $8::text IS NULL
-          OR btrim($8::text) = ''
-          OR w.requested_model_id ILIKE '%' || btrim($8::text) || '%'
-          OR COALESCE(m.display_name, '') ILIKE '%' || btrim($8::text) || '%'
-          OR w.request_id ILIKE '%' || btrim($8::text) || '%'
-          OR COALESCE(w.client_ip, '') ILIKE '%' || btrim($8::text) || '%'
+          $7::text IS NULL
+          OR btrim($7::text) = ''
+          OR w.requested_model_id ILIKE '%' || btrim($7::text) || '%'
+          OR COALESCE(m.display_name, '') ILIKE '%' || btrim($7::text) || '%'
+          OR w.request_id ILIKE '%' || btrim($7::text) || '%'
+          OR COALESCE(w.client_ip, '') ILIKE '%' || btrim($7::text) || '%'
       )
 ),
 top AS (
@@ -554,7 +538,6 @@ type ListConsoleBilledRequestTopModelsParams struct {
 	UserID      int64
 	FromTime    pgtype.Timestamptz
 	ToTime      pgtype.Timestamptz
-	RouteIds    []int64
 	ApiKeyIds   []int64
 	Endpoints   []string
 	StreamTypes []string
@@ -579,7 +562,6 @@ func (q *Queries) ListConsoleBilledRequestTopModels(ctx context.Context, arg Lis
 		arg.UserID,
 		arg.FromTime,
 		arg.ToTime,
-		arg.RouteIds,
 		arg.ApiKeyIds,
 		arg.Endpoints,
 		arg.StreamTypes,
@@ -634,31 +616,27 @@ WITH filtered_page AS (
       ) > 0
       AND (
           COALESCE(cardinality($4::bigint[]), 0) = 0
-          OR COALESCE(r.route_id, ak.route_id) = ANY($4::bigint[])
+          OR r.api_key_id = ANY($4::bigint[])
       )
       AND (
-          COALESCE(cardinality($5::bigint[]), 0) = 0
-          OR r.api_key_id = ANY($5::bigint[])
+          COALESCE(cardinality($5::text[]), 0) = 0
+          OR r.endpoint = ANY($5::text[])
       )
       AND (
           COALESCE(cardinality($6::text[]), 0) = 0
-          OR r.endpoint = ANY($6::text[])
+          OR (r.stream AND 'stream' = ANY($6::text[]))
+          OR ((NOT r.stream) AND 'sync' = ANY($6::text[]))
       )
       AND (
-          COALESCE(cardinality($7::text[]), 0) = 0
-          OR (r.stream AND 'stream' = ANY($7::text[]))
-          OR ((NOT r.stream) AND 'sync' = ANY($7::text[]))
+          $7::text IS NULL
+          OR btrim($7::text) = ''
+          OR r.requested_model_id ILIKE '%' || btrim($7::text) || '%'
+          OR COALESCE(m.display_name, '') ILIKE '%' || btrim($7::text) || '%'
+          OR r.request_id ILIKE '%' || btrim($7::text) || '%'
+          OR COALESCE(r.client_ip, '') ILIKE '%' || btrim($7::text) || '%'
       )
-      AND (
-          $8::text IS NULL
-          OR btrim($8::text) = ''
-          OR r.requested_model_id ILIKE '%' || btrim($8::text) || '%'
-          OR COALESCE(m.display_name, '') ILIKE '%' || btrim($8::text) || '%'
-          OR r.request_id ILIKE '%' || btrim($8::text) || '%'
-          OR COALESCE(r.client_ip, '') ILIKE '%' || btrim($8::text) || '%'
-      )
-      AND ($9::timestamptz IS NULL OR r.created_at >= $9::timestamptz)
-      AND ($10::timestamptz IS NULL OR r.created_at < $10::timestamptz)
+      AND ($8::timestamptz IS NULL OR r.created_at >= $8::timestamptz)
+      AND ($9::timestamptz IS NULL OR r.created_at < $9::timestamptz)
     ORDER BY
       CASE WHEN COALESCE($1::text, 'created_at') IN ('', 'created_at') AND COALESCE($2::bool, true) THEN r.created_at END DESC NULLS LAST,
       CASE WHEN COALESCE($1::text, 'created_at') IN ('', 'created_at') AND NOT COALESCE($2::bool, true) THEN r.created_at END ASC NULLS LAST,
@@ -709,7 +687,7 @@ WITH filtered_page AS (
         + COALESCE(ur.output_tokens_total, 0)
       ) END ASC NULLS LAST,
       r.id DESC
-    LIMIT $12 OFFSET $11
+    LIMIT $11 OFFSET $10
 )
 SELECT
     fp.total_count,
@@ -717,8 +695,6 @@ SELECT
     r.request_id,
     r.created_at,
     r.client_ip,
-    rt.id AS route_id,
-    rt.name AS route_name,
     r.api_key_id,
     ak.name AS api_key_name,
     ak.key_prefix AS api_key_prefix,
@@ -769,7 +745,6 @@ FROM filtered_page fp
 JOIN request_records r ON r.id = fp.id
 JOIN usage_records ur ON ur.request_record_id = r.id
 LEFT JOIN api_keys ak ON ak.id = r.api_key_id
-LEFT JOIN routes rt ON rt.id = COALESCE(r.route_id, ak.route_id)
 LEFT JOIN models m ON m.model_id = r.requested_model_id
 LEFT JOIN price_snapshots ps ON ps.request_record_id = r.id
 ORDER BY
@@ -828,7 +803,6 @@ type ListConsoleBilledRequestsParams struct {
 	SortField   pgtype.Text
 	SortDesc    pgtype.Bool
 	UserID      int64
-	RouteIds    []int64
 	ApiKeyIds   []int64
 	Endpoints   []string
 	StreamTypes []string
@@ -845,8 +819,6 @@ type ListConsoleBilledRequestsRow struct {
 	RequestID                 string
 	CreatedAt                 pgtype.Timestamptz
 	ClientIp                  pgtype.Text
-	RouteID                   pgtype.Int8
-	RouteName                 pgtype.Text
 	ApiKeyID                  int64
 	ApiKeyName                pgtype.Text
 	ApiKeyPrefix              pgtype.Text
@@ -887,7 +859,6 @@ func (q *Queries) ListConsoleBilledRequests(ctx context.Context, arg ListConsole
 		arg.SortField,
 		arg.SortDesc,
 		arg.UserID,
-		arg.RouteIds,
 		arg.ApiKeyIds,
 		arg.Endpoints,
 		arg.StreamTypes,
@@ -910,8 +881,6 @@ func (q *Queries) ListConsoleBilledRequests(ctx context.Context, arg ListConsole
 			&i.RequestID,
 			&i.CreatedAt,
 			&i.ClientIp,
-			&i.RouteID,
-			&i.RouteName,
 			&i.ApiKeyID,
 			&i.ApiKeyName,
 			&i.ApiKeyPrefix,
@@ -986,38 +955,6 @@ func (q *Queries) ListConsoleFilterAPIKeys(ctx context.Context, userID int64) ([
 	return items, nil
 }
 
-const listConsoleFilterRoutes = `-- name: ListConsoleFilterRoutes :many
-SELECT rt.id, rt.name
-FROM routes rt
-ORDER BY rt.name, rt.id
-`
-
-type ListConsoleFilterRoutesRow struct {
-	ID   int64
-	Name string
-}
-
-// 线路筛选项来自线路目录全量，不按用户历史请求聚合。
-func (q *Queries) ListConsoleFilterRoutes(ctx context.Context) ([]ListConsoleFilterRoutesRow, error) {
-	rows, err := q.db.Query(ctx, listConsoleFilterRoutes)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListConsoleFilterRoutesRow
-	for rows.Next() {
-		var i ListConsoleFilterRoutesRow
-		if err := rows.Scan(&i.ID, &i.Name); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listRequestRecordsPage = `-- name: ListRequestRecordsPage :many
 WITH filtered_page AS (
     SELECT
@@ -1029,7 +966,6 @@ WITH filtered_page AS (
       AND ($8::text IS NULL OR r.request_id = $8::text)
       AND ($9::text IS NULL OR r.status = $9::text)
       AND ($10::text IS NULL OR r.requested_model_id ILIKE '%' || $10::text || '%')
-      AND ($11::bigint IS NULL OR r.route_id = $11::bigint)
       AND (
           ($1::bigint IS NULL AND $2::bigint IS NULL AND $3::text IS NULL)
           OR EXISTS (
@@ -1046,8 +982,8 @@ WITH filtered_page AS (
                 )
           )
       )
-      AND ($12::timestamptz IS NULL OR r.created_at >= $12::timestamptz)
-      AND ($13::timestamptz IS NULL OR r.created_at < $13::timestamptz)
+      AND ($11::timestamptz IS NULL OR r.created_at >= $11::timestamptz)
+      AND ($12::timestamptz IS NULL OR r.created_at < $12::timestamptz)
     ORDER BY
       CASE WHEN COALESCE($4::text, 'created_at') IN ('', 'created_at') AND COALESCE($5::bool, true) THEN r.created_at END DESC NULLS LAST,
       CASE WHEN COALESCE($4::text, 'created_at') IN ('', 'created_at') AND NOT COALESCE($5::bool, true) THEN r.created_at END ASC NULLS LAST,
@@ -1060,7 +996,7 @@ WITH filtered_page AS (
       CASE WHEN $4::text = 'stream' AND COALESCE($5::bool, false) THEN r.stream END DESC NULLS LAST,
       CASE WHEN $4::text = 'stream' AND NOT COALESCE($5::bool, false) THEN r.stream END ASC NULLS LAST,
       r.id DESC
-    LIMIT $15 OFFSET $14
+    LIMIT $14 OFFSET $13
 )
 SELECT
     fp.total_count,
@@ -1144,13 +1080,11 @@ SELECT
     r.reasoning_effort,
     r.reasoning_budget_tokens,
     r.client_ip,
-    rt.name AS route_name,
     -- 倍率取结算当时的快照（price_snapshots.price_ratio），历史无快照行为 NULL，展示端回落「—」；
     -- 不再实时读 rt.price_ratio，避免管理员改倍率污染历史请求的倍率与倒推基准价展示。
-    ps.price_ratio AS route_price_ratio,
+    ps.price_ratio AS sale_price_ratio,
     -- 售价侧长上下文是否已应用（费用列标识）；无 price 快照时回落成本侧标记。
     COALESCE(ps.long_context_applied, cs.long_context_applied, false) AS long_context_applied,
-    rt.mode AS route_mode,
     m.display_name AS model_display_name,
     m.owned_by AS model_owned_by,
     fc.name AS final_channel_name,
@@ -1160,7 +1094,6 @@ SELECT
         JOIN channels ch ON ch.id = a.channel_id
         WHERE a.request_record_id = r.id
     ), '')::text AS channel_chain,
-    r.route_id,
     COALESCE(scoring_attempt.id, 0)::bigint AS scoring_attempt_id,
     COALESCE(scoring_attempt.dimensions, ARRAY[]::text[])::text[] AS scoring_dimensions,
     COALESCE(scoring_attempt.error_scoring_failure, false)::boolean AS scoring_error_failure,
@@ -1189,7 +1122,6 @@ LEFT JOIN usage_records ur ON ur.request_record_id = r.id
 LEFT JOIN cost_snapshots cs ON cs.request_record_id = r.id
 LEFT JOIN price_snapshots ps ON ps.request_record_id = r.id
 LEFT JOIN api_keys ak ON ak.id = r.api_key_id
-LEFT JOIN routes rt ON rt.id = COALESCE(r.route_id, ak.route_id)
 LEFT JOIN models m ON m.model_id = r.requested_model_id
 LEFT JOIN channels fc ON fc.id = r.final_channel_id
 LEFT JOIN routing_decision_traces rdt ON rdt.request_record_id = r.id
@@ -1248,7 +1180,6 @@ type ListRequestRecordsPageParams struct {
 	RequestID     pgtype.Text
 	Status        pgtype.Text
 	Model         pgtype.Text
-	RouteID       pgtype.Int8
 	FromTime      pgtype.Timestamptz
 	ToTime        pgtype.Timestamptz
 	PageOffset    int32
@@ -1327,15 +1258,12 @@ type ListRequestRecordsPageRow struct {
 	ReasoningEffort              pgtype.Text
 	ReasoningBudgetTokens        pgtype.Int4
 	ClientIp                     pgtype.Text
-	RouteName                    pgtype.Text
-	RoutePriceRatio              pgtype.Numeric
+	SalePriceRatio               pgtype.Numeric
 	LongContextApplied           bool
-	RouteMode                    pgtype.Text
 	ModelDisplayName             pgtype.Text
 	ModelOwnedBy                 pgtype.Text
 	FinalChannelName             pgtype.Text
 	ChannelChain                 string
-	RouteID                      pgtype.Int8
 	ScoringAttemptID             int64
 	ScoringDimensions            []string
 	ScoringErrorFailure          bool
@@ -1352,11 +1280,10 @@ type ListRequestRecordsPageRow struct {
 
 // ListRequestRecordsPage 供 admin 请求记录列表（富化版）按过滤条件分页倒序列出。
 // 关联（均 1:1 或标量子查询，不放大行数）：usage_records（token）、cost_snapshots（平台成本 + 分项）、
-// ledger_entries 净扣费（用户实际扣费）、api_keys→routes（线路名，当前绑定，快照见批二）、
+// ledger_entries 净扣费（用户实际扣费）、
 // final channel 名、经过的渠道链（attempts 按序 string_agg）、routing_decision_traces（sticky 摘要）。
 // 列表故意不 SELECT internal_error_detail（SQL 层脱敏，详情上游源站按 ?include_internal 返回）。
 // latency/ttft/tps 由 Go 侧用时间戳 + output_tokens 计算，不在此列。
-// 线路名优先用请求级快照 route_id（Key 换绑不影响历史）；历史行 route_id 为 NULL 时回落到 Key 当前绑定。
 // 模型元信息（显示名 / owned_by）按请求模型 id 关联；请求模型不在库时为 NULL。
 // 先在 request_records 上完成过滤、精确计数与分页，再只对当前页执行富字段 JOIN/子查询；
 // 避免 COUNT(*) OVER() 迫使数据库为全部匹配请求构造完整富化结果。
@@ -1372,7 +1299,6 @@ func (q *Queries) ListRequestRecordsPage(ctx context.Context, arg ListRequestRec
 		arg.RequestID,
 		arg.Status,
 		arg.Model,
-		arg.RouteID,
 		arg.FromTime,
 		arg.ToTime,
 		arg.PageOffset,
@@ -1457,15 +1383,12 @@ func (q *Queries) ListRequestRecordsPage(ctx context.Context, arg ListRequestRec
 			&i.ReasoningEffort,
 			&i.ReasoningBudgetTokens,
 			&i.ClientIp,
-			&i.RouteName,
-			&i.RoutePriceRatio,
+			&i.SalePriceRatio,
 			&i.LongContextApplied,
-			&i.RouteMode,
 			&i.ModelDisplayName,
 			&i.ModelOwnedBy,
 			&i.FinalChannelName,
 			&i.ChannelChain,
-			&i.RouteID,
 			&i.ScoringAttemptID,
 			&i.ScoringDimensions,
 			&i.ScoringErrorFailure,
@@ -1500,15 +1423,14 @@ WITH windowed AS MATERIALIZED (
         r.gateway_first_token_at,
         r.requested_model_id,
         r.ingress_protocol,
-        r.route_id,
         r.api_key_id,
         r.endpoint,
         r.request_id,
         r.client_ip
     FROM request_records r
-    WHERE r.user_id = $6
-      AND ($7::timestamptz IS NULL OR r.created_at >= $7::timestamptz)
-      AND ($8::timestamptz IS NULL OR r.created_at < $8::timestamptz)
+    WHERE r.user_id = $5
+      AND ($6::timestamptz IS NULL OR r.created_at >= $6::timestamptz)
+      AND ($7::timestamptz IS NULL OR r.created_at < $7::timestamptz)
 ),
 charges AS MATERIALIZED (
     SELECT
@@ -1644,33 +1566,28 @@ LEFT JOIN api_keys ak ON ak.id = w.api_key_id
 LEFT JOIN models m ON m.model_id = w.requested_model_id
 WHERE (
       COALESCE(cardinality($1::bigint[]), 0) = 0
-      OR COALESCE(w.route_id, ak.route_id) = ANY($1::bigint[])
+      OR w.api_key_id = ANY($1::bigint[])
   )
   AND (
-      COALESCE(cardinality($2::bigint[]), 0) = 0
-      OR w.api_key_id = ANY($2::bigint[])
+      COALESCE(cardinality($2::text[]), 0) = 0
+      OR w.endpoint = ANY($2::text[])
   )
   AND (
       COALESCE(cardinality($3::text[]), 0) = 0
-      OR w.endpoint = ANY($3::text[])
+      OR (w.stream AND 'stream' = ANY($3::text[]))
+      OR ((NOT w.stream) AND 'sync' = ANY($3::text[]))
   )
   AND (
-      COALESCE(cardinality($4::text[]), 0) = 0
-      OR (w.stream AND 'stream' = ANY($4::text[]))
-      OR ((NOT w.stream) AND 'sync' = ANY($4::text[]))
-  )
-  AND (
-      $5::text IS NULL
-      OR btrim($5::text) = ''
-      OR w.requested_model_id ILIKE '%' || btrim($5::text) || '%'
-      OR COALESCE(m.display_name, '') ILIKE '%' || btrim($5::text) || '%'
-      OR w.request_id ILIKE '%' || btrim($5::text) || '%'
-      OR COALESCE(w.client_ip, '') ILIKE '%' || btrim($5::text) || '%'
+      $4::text IS NULL
+      OR btrim($4::text) = ''
+      OR w.requested_model_id ILIKE '%' || btrim($4::text) || '%'
+      OR COALESCE(m.display_name, '') ILIKE '%' || btrim($4::text) || '%'
+      OR w.request_id ILIKE '%' || btrim($4::text) || '%'
+      OR COALESCE(w.client_ip, '') ILIKE '%' || btrim($4::text) || '%'
   )
 `
 
 type SummarizeConsoleBilledRequestsParams struct {
-	RouteIds    []int64
 	ApiKeyIds   []int64
 	Endpoints   []string
 	StreamTypes []string
@@ -1707,7 +1624,6 @@ type SummarizeConsoleBilledRequestsRow struct {
 // 可选筛选参数未知时优化器把账本聚合估成 1 行并内联进嵌套循环，1 万行会扫几千万次。
 func (q *Queries) SummarizeConsoleBilledRequests(ctx context.Context, arg SummarizeConsoleBilledRequestsParams) (SummarizeConsoleBilledRequestsRow, error) {
 	row := q.db.QueryRow(ctx, summarizeConsoleBilledRequests,
-		arg.RouteIds,
 		arg.ApiKeyIds,
 		arg.Endpoints,
 		arg.StreamTypes,

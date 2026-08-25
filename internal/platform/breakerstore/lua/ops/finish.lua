@@ -13,18 +13,17 @@ local permit_key = KEYS[2]
 local origin_key = KEYS[3]
 local channel_key = KEYS[4]
 local conc_key = KEYS[5]
-local route_channel_rpd_key = KEYS[6]
-local breaker_ctl = KEYS[7]
-local evidence_channels_key = KEYS[8]
-local evidence_models_key = KEYS[9]
+local breaker_ctl = KEYS[6]
+local evidence_channels_key = KEYS[7]
+local evidence_models_key = KEYS[8]
 
 local permit_id = ARGV[1]
-local ep_outcome = ARGV[18]
-local ch_outcome = ARGV[19]
-local origin_evidence = ARGV[20]
-local request_write_state = ARGV[21]
-local response_headers_received = ARGV[22]
-local first_token_eligible = ARGV[23]
+local ep_outcome = ARGV[17]
+local ch_outcome = ARGV[18]
+local origin_evidence = ARGV[19]
+local request_write_state = ARGV[20]
+local response_headers_received = ARGV[21]
+local first_token_eligible = ARGV[22]
 local interaction_evidence = request_write_state == 'completed'
   or request_write_state == 'uncertain'
   or response_headers_received == 'true'
@@ -42,19 +41,6 @@ if redis.call('HGET', permit_key, 'status') ~= 'active' then
     redis.call('HGET', permit_key, 'origin_disposition') or 'terminal_conflict',
     redis.call('HGET', permit_key, 'channel_disposition') or 'terminal_conflict',
   }
-end
-
--- 归因桶只记录已经进入真实上游交互的 attempt。它不参与 Channel 全局 RPD 限制，
--- 但必须和 permit 冻结的 route/channel/day key 一起原子写入，避免 fallback 漏记。
-if route_channel_rpd_key ~= '' and interaction_evidence then
-  local attribution_type = attempt_key_type(route_channel_rpd_key)
-  if attribution_type ~= 'none' and attribution_type ~= 'string' then
-    return { 'runtime_sync_required', 'runtime_sync_required' }
-  end
-  redis.call('INCR', route_channel_rpd_key)
-  if redis.call('PTTL', route_channel_rpd_key) < 0 then
-    redis.call('PEXPIRE', route_channel_rpd_key, 86400000 + 420000)
-  end
 end
 
 local breaker = read_committed_control(breaker_ctl, parse_circuit_breaker_payload)

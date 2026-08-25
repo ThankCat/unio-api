@@ -8,10 +8,8 @@ import (
 )
 
 func TestRequestListItemDTOIncludesRoutingSampleLocation(t *testing.T) {
-	routeID := int64(7)
 	attemptID := int64(19)
 	dto := toRequestListItemDTO(query.RequestListItem{
-		RouteID:             &routeID,
 		ScoringAttemptID:    &attemptID,
 		ScoringDimensions:   []string{"ttft", "error"},
 		ScoringErrorFailure: true,
@@ -25,7 +23,7 @@ func TestRequestListItemDTOIncludesRoutingSampleLocation(t *testing.T) {
 	if err := json.Unmarshal(payload, &got); err != nil {
 		t.Fatalf("decode request list item: %v", err)
 	}
-	if got["route_id"] != float64(routeID) || got["scoring_attempt_id"] != float64(attemptID) {
+	if got["scoring_attempt_id"] != float64(attemptID) {
 		t.Fatalf("routing location fields = %#v", got)
 	}
 	if got["scoring_error_failure"] != true {

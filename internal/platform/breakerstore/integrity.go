@@ -215,7 +215,7 @@ func (s *Store) BootstrapStateEpoch(ctx context.Context, epoch string, revision 
 type RuntimeReadinessInput struct {
 	Epoch                  string
 	EpochRevision          int64
-	RouteRateLimitRevision int64
+	RequestRateLimitRevision int64
 	ConcurrencyRevision    int64
 	CircuitBreakerRevision int64
 	RoutingBalanceRevision int64
@@ -243,7 +243,7 @@ func (s *Store) CheckRuntimeReadiness(ctx context.Context, in RuntimeReadinessIn
 
 	res, err := s.runtimeReady.Run(ctx, s.client, []string{
 		s.keys.stateIntegrityMarker(),
-		s.keys.admissionRouteRate(),
+		s.keys.admissionRequestRate(),
 		s.keys.admissionGlobalConcurrency(),
 		s.keys.runtimeControlSetting("gateway.circuit_breaker"),
 		s.keys.runtimeControlSetting("gateway.routing_balance"),
@@ -278,7 +278,7 @@ func runtimeReadinessArgs(in RuntimeReadinessInput) []interface{} {
 	return []interface{}{
 		in.Epoch,
 		strconv.FormatInt(in.EpochRevision, 10),
-		strconv.FormatInt(in.RouteRateLimitRevision, 10),
+		strconv.FormatInt(in.RequestRateLimitRevision, 10),
 		strconv.FormatInt(in.ConcurrencyRevision, 10),
 		strconv.FormatInt(in.CircuitBreakerRevision, 10),
 		strconv.FormatInt(in.RoutingBalanceRevision, 10),

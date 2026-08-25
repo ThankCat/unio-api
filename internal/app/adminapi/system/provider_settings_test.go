@@ -37,13 +37,13 @@ func (f *fakeProviderSettingsService) SetAnthropicBetaPolicy(context.Context, me
 
 func TestPutSettingReturnsRuntimeActivationState(t *testing.T) {
 	service := &fakeProviderSettingsService{result: appsettings.SettingWriteResult{
-		Key: appsettings.GatewayRouteRateLimitDefaultsKey, Revision: 4, State: "runtime_sync_pending",
+		Key: appsettings.GatewayRequestRateLimitDefaultsKey, Revision: 4, State: "runtime_sync_pending",
 		ActiveRevision: 3, PendingRevision: 4,
 	}}
 	router := chi.NewRouter()
 	router.Put("/settings/{key}", (&providerSettingsHandler{service: service}).putSetting)
 
-	req := httptest.NewRequest(http.MethodPut, "/settings/"+appsettings.GatewayRouteRateLimitDefaultsKey, strings.NewReader(`{"rpm":60,"rpd":0}`))
+	req := httptest.NewRequest(http.MethodPut, "/settings/"+appsettings.GatewayRequestRateLimitDefaultsKey, strings.NewReader(`{"rpm":60,"rpd":0}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)

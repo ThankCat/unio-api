@@ -10,42 +10,31 @@ import (
 
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-// testPriceRatio 返回测试用的有效线路价格倍率（1.0）；不设倍率会让 ScaleCustomerPrice 因无效倍率报错。
+// testPriceRatio 返回测试用的有效全局售价倍率（1.0）；不设倍率会让售价解析因无效倍率报错。
 func testPriceRatio() pgtype.Numeric {
 	return pgtype.Numeric{Int: big.NewInt(1), Exp: 0, Valid: true}
 }
 
 // fakeStore 是 routing 测试使用的候选 channel 存储替身。
 type fakeStore struct {
-	params            sqlc.FindRouteCandidatesParams
-	rows              []sqlc.FindRouteCandidatesRow
-	err               error
-	modelExistsID     string
-	modelExists       bool
-	modelExistsErr    error
-	routeOffersParams sqlc.RouteOffersModelParams
-	routeOffers       bool
-	routeOffersErr    error
-	userCanUseParams  sqlc.UserCanUseModelParams
-	userCanUse        bool
-	userCanUseErr     error
-	routeMode         string
-	routeStatus       string
-	routeErr          error
-	routeChannelCount int64
+	params         sqlc.FindModelCandidatesParams
+	rows           []sqlc.FindModelCandidatesRow
+	err            error
+	modelExistsID  string
+	modelExists    bool
+	modelExistsErr error
 }
 
-// FindRouteCandidates 记录查询参数，并返回测试预设候选结果。
-func (s *fakeStore) FindRouteCandidates(ctx context.Context, arg sqlc.FindRouteCandidatesParams) ([]sqlc.FindRouteCandidatesRow, error) {
+// FindModelCandidates 记录查询参数，并返回测试预设候选结果。
+func (s *fakeStore) FindModelCandidates(ctx context.Context, arg sqlc.FindModelCandidatesParams) ([]sqlc.FindModelCandidatesRow, error) {
 	s.params = arg
 	// DEC-027：候选成本需可解析。这些路由用例只验证选路/排序/超时，不关心成本数值，
 	// 故默认把未设成本来源的行标记为「绝对成本覆盖」（channel_price_id = channel_id），
 	// 让 buildChatRouteCandidate 走覆盖路径拿到零成本快照，避免误判为未定价。
-	rows := make([]sqlc.FindRouteCandidatesRow, len(s.rows))
+	rows := make([]sqlc.FindModelCandidatesRow, len(s.rows))
 	copy(rows, s.rows)
 	for i := range rows {
 		if rows[i].ChannelPriceID == 0 && rows[i].ChannelCostMultiplierID == 0 {
@@ -73,59 +62,9 @@ func (s *fakeStore) ModelExistsByID(ctx context.Context, requestedModelID string
 	return s.modelExists, s.modelExistsErr
 }
 
-func (s *fakeStore) RouteOffersModel(ctx context.Context, arg sqlc.RouteOffersModelParams) (bool, error) {
-	s.routeOffersParams = arg
-	return s.routeOffers, s.routeOffersErr
-}
-
-// UserCanUseModel 记录 user 模型可用性诊断参数，并返回测试预设结果。
-func (s *fakeStore) UserCanUseModel(ctx context.Context, arg sqlc.UserCanUseModelParams) (bool, error) {
-	s.userCanUseParams = arg
-	return s.userCanUse, s.userCanUseErr
-}
-
-// GetRouteByID 返回测试线路；调用方传入 RouteID 触发解析（线路必填）。
-func (s *fakeStore) GetRouteByID(ctx context.Context, id int64) (sqlc.Route, error) {
-	if s.routeErr != nil {
-		return sqlc.Route{}, s.routeErr
-	}
-	mode := s.routeMode
-	if mode == "" {
-		mode = "balanced"
-	}
-	status := s.routeStatus
-	if status == "" {
-		status = "enabled"
-	}
-	return sqlc.Route{ID: id, Name: "test", Mode: mode, Status: status, PriceRatio: testPriceRatio()}, nil
-}
-
-func (s *fakeStore) CountRouteChannels(context.Context, int64) (int64, error) {
-	if s.routeChannelCount == 0 {
-		return 1, nil
-	}
-	return s.routeChannelCount, nil
-}
-
-func testRouteID() *int64 {
-	id := int64(1)
-	return &id
-}
-
-func TestRouterRejectsCorruptFixedRoutePool(t *testing.T) {
-	store := &fakeStore{routeMode: "fixed", routeChannelCount: 2}
-	router := NewRouter(store, time.Second)
-	_, err := router.PlanChat(context.Background(), ChatRouteRequest{
-		UserID: 1, ModelID: "openai/gpt", IngressProtocol: ProtocolOpenAI, Endpoint: EndpointChatCompletions, RouteID: testRouteID(),
-	})
-	if failure.CodeOf(err) != failure.CodeRoutingNoAvailableChannel {
-		t.Fatalf("corrupt fixed pool must fail closed, got %v", err)
-	}
-}
-
 func TestRouterPlanChatReturnsOrderedCandidates(t *testing.T) {
 	store := &fakeStore{
-		rows: []sqlc.FindRouteCandidatesRow{
+		rows: []sqlc.FindModelCandidatesRow{
 			{
 				RequestedModelID:        "openai/gpt-4.1",
 				ProviderID:              11,
@@ -158,15 +97,11 @@ func TestRouterPlanChatReturnsOrderedCandidates(t *testing.T) {
 		UserID:          42,
 		ModelID:         "openai/gpt-4.1",
 		IngressProtocol: ProtocolOpenAI,
-		RouteID:         testRouteID(),
 	})
 	if err != nil {
 		t.Fatalf("PlanChat returned error: %v", err)
 	}
 
-	if store.params.UserID != 42 {
-		t.Fatalf("expected user id %d, got %d", int64(42), store.params.UserID)
-	}
 	if store.params.RequestedModelID != "openai/gpt-4.1" {
 		t.Fatalf("expected requested model %q, got %q", "openai/gpt-4.1", store.params.RequestedModelID)
 	}
@@ -224,7 +159,7 @@ func TestRouterPlanChatReturnsOrderedCandidates(t *testing.T) {
 }
 
 func TestRouterPlanChatFreezesProviderCostToSaleRatio(t *testing.T) {
-	store := &fakeStore{rows: []sqlc.FindRouteCandidatesRow{{
+	store := &fakeStore{rows: []sqlc.FindModelCandidatesRow{{
 		RequestedModelID: "openai/gpt-4.1",
 		ModelDbID:        10,
 		AdapterKey:       "openai",
@@ -250,8 +185,7 @@ func TestRouterPlanChatFreezesProviderCostToSaleRatio(t *testing.T) {
 	router := NewRouter(store, 30*time.Second)
 
 	plan, err := router.PlanChat(context.Background(), ChatRouteRequest{
-		UserID: 42, ModelID: "openai/gpt-4.1", IngressProtocol: ProtocolOpenAI, RouteID: testRouteID(),
-	})
+		UserID: 42, ModelID: "openai/gpt-4.1", IngressProtocol: ProtocolOpenAI})
 	if err != nil {
 		t.Fatalf("PlanChat returned error: %v", err)
 	}
@@ -266,7 +200,7 @@ func TestRouterPlanChatFreezesProviderCostToSaleRatio(t *testing.T) {
 
 func TestNewRouterUsesFallbackDefaultTimeout(t *testing.T) {
 	store := &fakeStore{
-		rows: []sqlc.FindRouteCandidatesRow{
+		rows: []sqlc.FindModelCandidatesRow{
 			{
 				AdapterKey:        "openai",
 				ChannelID:         123,
@@ -283,7 +217,6 @@ func TestNewRouterUsesFallbackDefaultTimeout(t *testing.T) {
 		UserID:          42,
 		ModelID:         "openai/gpt-4.1",
 		IngressProtocol: ProtocolOpenAI,
-		RouteID:         testRouteID(),
 	})
 	if err != nil {
 		t.Fatalf("PlanChat returned error: %v", err)
@@ -295,8 +228,8 @@ func TestNewRouterUsesFallbackDefaultTimeout(t *testing.T) {
 }
 
 func TestRouterSetDefaultTimeoutTakesEffect(t *testing.T) {
-	newRows := func() []sqlc.FindRouteCandidatesRow {
-		return []sqlc.FindRouteCandidatesRow{
+	newRows := func() []sqlc.FindModelCandidatesRow {
+		return []sqlc.FindModelCandidatesRow{
 			{
 				AdapterKey:        "openai",
 				ChannelID:         123,
@@ -313,7 +246,6 @@ func TestRouterSetDefaultTimeoutTakesEffect(t *testing.T) {
 		UserID:          42,
 		ModelID:         "openai/gpt-4.1",
 		IngressProtocol: ProtocolOpenAI,
-		RouteID:         testRouteID(),
 	}
 
 	// 热改默认超时:之后的候选构造用新值。
@@ -345,13 +277,12 @@ func TestRouterPlanChatReturnsNoAvailableChannel(t *testing.T) {
 		UserID:          42,
 		ModelID:         "openai/gpt-4.1",
 		IngressProtocol: ProtocolOpenAI,
-		RouteID:         testRouteID(),
 	})
 	if !errors.Is(err, ErrNoAvailableChannel) {
 		t.Fatalf("expected ErrNoAvailableChannel, got %v", err)
 	}
-	if store.modelExistsID != "" || store.userCanUseParams.UserID != 0 {
-		t.Fatalf("PlanChat must not repeat qualification checks: model=%q user=%#v", store.modelExistsID, store.userCanUseParams)
+	if store.modelExistsID != "" {
+		t.Fatalf("PlanChat must not repeat qualification checks: model=%q", store.modelExistsID)
 	}
 }
 
@@ -363,52 +294,9 @@ func TestRouterValidateChatReturnsModelNotFound(t *testing.T) {
 		UserID:          42,
 		ModelID:         "openai/missing",
 		IngressProtocol: ProtocolOpenAI,
-		RouteID:         testRouteID(),
 	})
 	if !errors.Is(err, ErrModelNotFound) {
 		t.Fatalf("expected ErrModelNotFound, got %v", err)
-	}
-	if store.userCanUseParams.UserID != 0 {
-		t.Fatalf("expected user policy check to be skipped, got %#v", store.userCanUseParams)
-	}
-}
-
-func TestRouterValidateChatReturnsRouteModelNotAvailable(t *testing.T) {
-	store := &fakeStore{
-		modelExists: true,
-		routeOffers: false,
-	}
-	router := NewRouter(store, 30*time.Second)
-
-	err := router.ValidateChat(context.Background(), ChatRouteRequest{
-		UserID:          42,
-		ModelID:         "openai/gpt-4.1",
-		IngressProtocol: ProtocolOpenAI,
-		RouteID:         testRouteID(),
-	})
-	if !errors.Is(err, ErrModelNotAvailable) {
-		t.Fatalf("expected ErrModelNotAvailable, got %v", err)
-	}
-	if store.routeOffersParams.RouteID != 1 || store.routeOffersParams.IngressProtocol != ProtocolOpenAI {
-		t.Fatalf("unexpected offering params: %#v", store.routeOffersParams)
-	}
-	if store.userCanUseParams.UserID != 0 {
-		t.Fatalf("user policy must be skipped for unoffered model: %#v", store.userCanUseParams)
-	}
-}
-
-func TestRouterValidateChatReturnsUserModelNotAvailable(t *testing.T) {
-	store := &fakeStore{modelExists: true, routeOffers: true, userCanUse: false}
-	router := NewRouter(store, 30*time.Second)
-
-	err := router.ValidateChat(context.Background(), ChatRouteRequest{
-		UserID: 42, ModelID: "openai/gpt-4.1", IngressProtocol: ProtocolOpenAI, RouteID: testRouteID(),
-	})
-	if !errors.Is(err, ErrModelNotAvailable) {
-		t.Fatalf("expected ErrModelNotAvailable, got %v", err)
-	}
-	if store.userCanUseParams.UserID != 42 || store.userCanUseParams.RequestedModelID != "openai/gpt-4.1" {
-		t.Fatalf("unexpected user policy params: %#v", store.userCanUseParams)
 	}
 }
 
@@ -420,7 +308,6 @@ func TestRouterPlanChatReturnsStoreError(t *testing.T) {
 		UserID:          42,
 		ModelID:         "openai/gpt-4.1",
 		IngressProtocol: ProtocolOpenAI,
-		RouteID:         testRouteID(),
 	})
 	if !errors.Is(err, storeErr) {
 		t.Fatalf("expected store error, got %v", err)
@@ -431,7 +318,7 @@ func TestRouterPlanChatReturnsStoreError(t *testing.T) {
 // 被跳过后收口为 ErrNoAvailableChannel，不泄露内部错误。
 func TestRouterPlanChatAllCandidatesMissingCredentialReturnsNoAvailable(t *testing.T) {
 	store := &fakeStore{
-		rows: []sqlc.FindRouteCandidatesRow{
+		rows: []sqlc.FindModelCandidatesRow{
 			{
 				AdapterKey:        "openai",
 				ChannelID:         123,
@@ -448,7 +335,6 @@ func TestRouterPlanChatAllCandidatesMissingCredentialReturnsNoAvailable(t *testi
 		UserID:          42,
 		ModelID:         "openai/gpt-4.1",
 		IngressProtocol: ProtocolOpenAI,
-		RouteID:         testRouteID(),
 	})
 	if !errors.Is(err, ErrNoAvailableChannel) {
 		t.Fatalf("expected ErrNoAvailableChannel, got %v", err)
@@ -459,7 +345,7 @@ func TestRouterPlanChatAllCandidatesMissingCredentialReturnsNoAvailable(t *testi
 // 健康候选仍正常进入 plan，请求不被整盘拖垮。
 func TestRouterPlanChatSkipsBadCandidateKeepsGood(t *testing.T) {
 	store := &fakeStore{
-		rows: []sqlc.FindRouteCandidatesRow{
+		rows: []sqlc.FindModelCandidatesRow{
 			{
 				AdapterKey:        "openai",
 				ChannelID:         111,
@@ -484,7 +370,6 @@ func TestRouterPlanChatSkipsBadCandidateKeepsGood(t *testing.T) {
 		UserID:          42,
 		ModelID:         "openai/gpt-4.1",
 		IngressProtocol: ProtocolOpenAI,
-		RouteID:         testRouteID(),
 	})
 	if err != nil {
 		t.Fatalf("expected good candidate to survive, got error: %v", err)
@@ -494,64 +379,6 @@ func TestRouterPlanChatSkipsBadCandidateKeepsGood(t *testing.T) {
 	}
 	if got.Candidates[0].Channel.ID != 222 {
 		t.Fatalf("expected surviving channel 222, got %d", got.Candidates[0].Channel.ID)
-	}
-}
-
-func TestRouterPlanChatReturnsRouteNotConfigured(t *testing.T) {
-	store := &fakeStore{}
-	router := NewRouter(store, 30*time.Second)
-
-	_, err := router.PlanChat(context.Background(), ChatRouteRequest{
-		UserID:          42,
-		ModelID:         "openai/gpt-4.1",
-		IngressProtocol: ProtocolOpenAI,
-	})
-	if !errors.Is(err, ErrRouteNotConfigured) {
-		t.Fatalf("expected ErrRouteNotConfigured, got %v", err)
-	}
-	if got := failure.CodeOf(err); got != failure.CodeRoutingRouteNotConfigured {
-		t.Fatalf("expected code %q, got %q", failure.CodeRoutingRouteNotConfigured, got)
-	}
-	if store.params != (sqlc.FindRouteCandidatesParams{}) {
-		t.Fatalf("expected store query to be skipped, got %#v", store.params)
-	}
-}
-
-func TestRouterPlanChatReturnsRouteNotConfiguredForMissingOrDisabledRoute(t *testing.T) {
-	tests := []struct {
-		name  string
-		store *fakeStore
-	}{
-		{name: "missing", store: &fakeStore{routeErr: pgx.ErrNoRows}},
-		{name: "disabled", store: &fakeStore{routeStatus: "disabled"}},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			router := NewRouter(tt.store, 30*time.Second)
-			_, err := router.PlanChat(context.Background(), ChatRouteRequest{
-				UserID: 42, ModelID: "openai/gpt-4.1", IngressProtocol: ProtocolOpenAI, RouteID: testRouteID(),
-			})
-			if failure.CodeOf(err) != failure.CodeRoutingRouteNotConfigured {
-				t.Fatalf("code = %q, want %q", failure.CodeOf(err), failure.CodeRoutingRouteNotConfigured)
-			}
-		})
-	}
-}
-
-func TestRouterPlanChatReturnsStoreFailureWhenRouteLookupFails(t *testing.T) {
-	storeErr := errors.New("database unavailable")
-	store := &fakeStore{routeErr: storeErr}
-	router := NewRouter(store, 30*time.Second)
-
-	_, err := router.PlanChat(context.Background(), ChatRouteRequest{
-		UserID: 42, ModelID: "openai/gpt-4.1", IngressProtocol: ProtocolOpenAI, RouteID: testRouteID(),
-	})
-	if failure.CodeOf(err) != failure.CodeRoutingStoreFailed {
-		t.Fatalf("code = %q, want %q", failure.CodeOf(err), failure.CodeRoutingStoreFailed)
-	}
-	if !errors.Is(err, storeErr) {
-		t.Fatalf("expected store error to be preserved, got %v", err)
 	}
 }
 
@@ -570,7 +397,113 @@ func TestRouterPlanChatRejectsInvalidIngressProtocolBeforeQuery(t *testing.T) {
 	if got := failure.CodeOf(err); got != failure.CodeRoutingProtocolInvalid {
 		t.Fatalf("expected code %q, got %q", failure.CodeRoutingProtocolInvalid, got)
 	}
-	if store.params != (sqlc.FindRouteCandidatesParams{}) {
+	if store.params != (sqlc.FindModelCandidatesParams{}) {
 		t.Fatalf("expected store query to be skipped, got %#v", store.params)
+	}
+}
+
+// numeric 构造用于断言的十进制值（如 numeric(25, -1) == 2.5）。
+func numeric(unscaled int64, exp int32) pgtype.Numeric {
+	return pgtype.Numeric{Int: big.NewInt(unscaled), Exp: exp, Valid: true}
+}
+
+// numericFloat 把 pgtype.Numeric 转成 float64，仅用于测试断言。
+func numericFloat(t *testing.T, n pgtype.Numeric) float64 {
+	t.Helper()
+	if !n.Valid {
+		t.Fatal("numeric is not valid")
+	}
+	f, err := n.Float64Value()
+	if err != nil {
+		t.Fatalf("numeric to float: %v", err)
+	}
+	return f.Float64
+}
+
+// salePriceRow 构造一条最小可用候选行，基准价固定为 input=10 / output=20。
+func salePriceRow() sqlc.FindModelCandidatesRow {
+	return sqlc.FindModelCandidatesRow{
+		RequestedModelID:   "openai/gpt-4.1",
+		ModelDbID:          10,
+		AdapterKey:         "openai",
+		Protocol:           ProtocolOpenAI,
+		ChannelID:          123,
+		Origin:             "https://api.openai.example/v1",
+		Credential:         "secret://openai/main",
+		UpstreamModel:      "gpt-4.1",
+		ChannelPriceID:     99,
+		BaseCurrency:       "USD",
+		BasePricingUnit:    "per_1m_tokens",
+		UncachedInputPrice: numeric(10, 0),
+		OutputPrice:        numeric(20, 0),
+		CostCurrency:       "USD",
+		CostPricingUnit:    "per_1m_tokens",
+		UncachedInputCost:  numeric(1, 0),
+		OutputCost:         numeric(2, 0),
+	}
+}
+
+// 售价倍率路径：模型没配绝对售价时，售价 = 基准价 × 全局倍率，且倍率落进快照供审计倒推基准价。
+func TestRouterPlanChatScalesSalePriceByRatio(t *testing.T) {
+	store := &fakeStore{rows: []sqlc.FindModelCandidatesRow{salePriceRow()}}
+	router := NewRouter(store, 30*time.Second)
+	router.SetSalePriceRatio(numeric(25, -1)) // 2.5
+
+	plan, err := router.PlanChat(context.Background(), ChatRouteRequest{
+		UserID: 42, ModelID: "openai/gpt-4.1", IngressProtocol: ProtocolOpenAI})
+	if err != nil {
+		t.Fatalf("PlanChat returned error: %v", err)
+	}
+	candidate := plan.Candidates[0]
+	if got := numericFloat(t, candidate.SalePrice.UncachedInputPrice); got != 25 {
+		t.Fatalf("uncached input sale price = %v, want 25 (10 × 2.5)", got)
+	}
+	if got := numericFloat(t, candidate.SalePrice.OutputPrice); got != 50 {
+		t.Fatalf("output sale price = %v, want 50 (20 × 2.5)", got)
+	}
+	if got := numericFloat(t, candidate.PriceRatio); got != 2.5 {
+		t.Fatalf("snapshot price ratio = %v, want 2.5", got)
+	}
+}
+
+// 绝对售价路径：模型配了绝对售价就直接用，倍率完全不参与；
+// 快照里的倍率必须留空，否则审计端会拿一个没参与计算的倍率去反推基准价。
+func TestRouterPlanChatPrefersAbsoluteSalePriceOverRatio(t *testing.T) {
+	row := salePriceRow()
+	row.SaleUncachedInputPrice = numeric(7, 0)
+	row.SaleOutputPrice = numeric(9, 0)
+	store := &fakeStore{rows: []sqlc.FindModelCandidatesRow{row}}
+	router := NewRouter(store, 30*time.Second)
+	router.SetSalePriceRatio(numeric(25, -1)) // 2.5，应被忽略
+
+	plan, err := router.PlanChat(context.Background(), ChatRouteRequest{
+		UserID: 42, ModelID: "openai/gpt-4.1", IngressProtocol: ProtocolOpenAI})
+	if err != nil {
+		t.Fatalf("PlanChat returned error: %v", err)
+	}
+	candidate := plan.Candidates[0]
+	if got := numericFloat(t, candidate.SalePrice.UncachedInputPrice); got != 7 {
+		t.Fatalf("uncached input sale price = %v, want 7 (绝对售价，不乘倍率)", got)
+	}
+	if got := numericFloat(t, candidate.SalePrice.OutputPrice); got != 9 {
+		t.Fatalf("output sale price = %v, want 9 (绝对售价，不乘倍率)", got)
+	}
+	if candidate.PriceRatio.Valid {
+		t.Fatal("绝对售价路径下快照倍率必须留空")
+	}
+}
+
+// 未注入倍率时按 1.0 兜底：宁可原价卖，也不能因为倍率缺失把售价算成 0。
+func TestRouterPlanChatDefaultsSaleRatioToOne(t *testing.T) {
+	store := &fakeStore{rows: []sqlc.FindModelCandidatesRow{salePriceRow()}}
+	router := NewRouter(store, 30*time.Second)
+
+	plan, err := router.PlanChat(context.Background(), ChatRouteRequest{
+		UserID: 42, ModelID: "openai/gpt-4.1", IngressProtocol: ProtocolOpenAI})
+	if err != nil {
+		t.Fatalf("PlanChat returned error: %v", err)
+	}
+	if got := numericFloat(t, plan.Candidates[0].SalePrice.UncachedInputPrice); got != 10 {
+		t.Fatalf("uncached input sale price = %v, want 10 (倍率兜底 1.0)", got)
 	}
 }

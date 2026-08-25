@@ -16,7 +16,7 @@ func TestGatewayRuntimeReadinessSnapshotBlocksAllPendingRoutingControls(t *testi
 
 	for _, key := range []string{
 		"gateway.runtime_state_epoch",
-		"gateway.route_rate_limit_defaults",
+		"gateway.request_rate_limit_defaults",
 		"gateway.channel_rate_limit_defaults",
 		"gateway.concurrency_defaults",
 		"gateway.circuit_breaker",
@@ -32,8 +32,8 @@ func TestGatewayRuntimeReadinessSnapshotBlocksAllPendingRoutingControls(t *testi
 	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("readiness-%d", suffix), "enabled")
 	var channelID int64
 	if err := tx.QueryRow(ctx, `INSERT INTO channels (
-		provider_id, name, protocol, adapter_key, credential, status, priority
-	) VALUES ($1, 'readiness', 'openai', 'openai', 'sk-readiness', 'enabled', 10)
+		provider_id, name, protocols, adapter_key, credential, status, priority
+	) VALUES ($1, 'readiness', ARRAY['openai']::text[], 'openai', 'sk-readiness', 'enabled', 10)
 	RETURNING id`, providerID).Scan(&channelID); err != nil {
 		t.Fatalf("seed channel: %v", err)
 	}

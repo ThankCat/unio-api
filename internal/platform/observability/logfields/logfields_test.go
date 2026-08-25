@@ -28,7 +28,6 @@ func TestFieldsZapFieldsOmitUnset(t *testing.T) {
 	SetRequestID(ctx, "req_abc")
 	SetAttemptID(ctx, 88)
 	SetModel(ctx, "openai/gpt-4.1")
-	SetRouteID(ctx, 2)
 	SetJSONDecodeSummary(ctx, JSONDecodeSummary{
 		Kind:          "type_mismatch",
 		Field:         "input",
@@ -39,7 +38,6 @@ func TestFieldsZapFieldsOmitUnset(t *testing.T) {
 	})
 	SetUpstreamAttempt(ctx, UpstreamAttempt{
 		ModelID:    99,
-		Router:     "default-route",
 		ProviderID: 9123,
 		Provider:   "openai",
 		ChannelID:  123,
@@ -55,8 +53,6 @@ func TestFieldsZapFieldsOmitUnset(t *testing.T) {
 		"api_key_id":        int64(100),
 		"model":             "openai/gpt-4.1",
 		"model_id":          int64(99),
-		"route_id":          int64(2),
-		"route_name":        "default-route",
 		"provider_id":       int64(9123),
 		"provider_slug":     "openai",
 		"channel_id":        int64(123),
@@ -84,7 +80,6 @@ func TestContextHelpersNoopWithoutHolder(t *testing.T) {
 	SetRequestID(ctx, "req")
 	SetAttemptID(ctx, 1)
 	SetModel(ctx, "m")
-	SetRouteID(ctx, 1)
 	SetJSONDecodeSummary(ctx, JSONDecodeSummary{Kind: "syntax"})
 	SetUpstreamAttempt(ctx, UpstreamAttempt{Provider: "p", Channel: "c"})
 
@@ -101,9 +96,7 @@ func TestNilFieldsSettersSafe(t *testing.T) {
 	f.SetAttemptID(1)
 	f.SetModel("m")
 	f.SetModelID(1)
-	f.SetRouteID(1)
 	f.SetJSONDecodeSummary(JSONDecodeSummary{Kind: "syntax"})
-	f.SetRouter("r")
 	f.SetUpstreamAttempt(UpstreamAttempt{Provider: "p", Channel: "c"})
 	if f.ZapFields() != nil {
 		t.Fatal("expected nil ZapFields from nil Fields")

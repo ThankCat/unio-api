@@ -36,8 +36,8 @@ var (
 // Store is the narrow BreakerStore contract owned by an ingress request session.
 type Store interface {
 	AcquireRequestAdmission(context.Context, breakerstore.RequestAdmissionInput) (breakerstore.RequestAdmissionResult, error)
-	RenewRequestAdmission(context.Context, string, int64, int64, string, int64) (breakerstore.RequestAdmissionLifecycleOutcome, error)
-	FinishRequestAdmission(context.Context, string, int64, int64, string, int64) (breakerstore.RequestAdmissionLifecycleOutcome, error)
+	RenewRequestAdmission(context.Context, string, int64, string, int64) (breakerstore.RequestAdmissionLifecycleOutcome, error)
+	FinishRequestAdmission(context.Context, string, int64, string, int64) (breakerstore.RequestAdmissionLifecycleOutcome, error)
 	SnapshotMany(context.Context, breakerstore.SnapshotManyInput) (breakerstore.SnapshotManyResult, error)
 	AggregateChannelSamples(context.Context, []int64) (map[int64]breakerstore.ChannelSampleWindow, error)
 }
@@ -87,12 +87,11 @@ type AcquiredSession interface {
 }
 
 // Identity is the immutable, trusted request identity used to acquire one token.
-// Limit overrides come directly from the authenticated route snapshot: nil inherits the
+// Limit overrides come directly from the authenticated user snapshot: nil inherits the
 // Redis active global control, zero is explicitly unlimited, and a positive value is a limit.
 type Identity struct {
-	RouteID int64
-	UserID  int64
-	Scope   string
+	UserID int64
+	Scope  string
 
 	RPMLimitOverride         *int64
 	RPDLimitOverride         *int64
@@ -157,7 +156,7 @@ func NewManager(store Store, facts RuntimeFactsReader, opts ManagerOptions) *Man
 // Acquire reads one coherent PostgreSQL revision snapshot, asks Redis for the token, and
 // starts the token renewer only after an allowed result.
 func (m *Manager) Acquire(ctx context.Context, identity Identity) (AcquireResult, error) {
-	if identity.RouteID <= 0 || identity.UserID <= 0 || identity.Scope == "" {
+	if identity.UserID <= 0 || identity.Scope == "" {
 		err := failure.Wrap(
 			failure.CodeGatewayRuntimeSyncRequired,
 			ErrInvalidIdentity,
@@ -176,11 +175,10 @@ func (m *Manager) Acquire(ctx context.Context, identity Identity) (AcquireResult
 	requestAdmissionID := m.newID()
 	input := breakerstore.RequestAdmissionInput{
 		RequestAdmissionID:        requestAdmissionID,
-		RouteID:                   identity.RouteID,
 		UserID:                    identity.UserID,
 		IntegrityEpoch:            admission.Epoch,
 		IntegrityRevision:         admission.Revision,
-		RouteRateRevision:         admission.RouteRateLimits,
+		RequestRateRevision:       admission.RequestRateLimits,
 		GlobalConcurrencyRevision: admission.Concurrency,
 		RPMLimitOverride:          cloneLimit(identity.RPMLimitOverride),
 		RPDLimitOverride:          cloneLimit(identity.RPDLimitOverride),
@@ -201,7 +199,6 @@ func (m *Manager) Acquire(ctx context.Context, identity Identity) (AcquireResult
 	}
 	if result.Outcome != breakerstore.RequestAllowed {
 		fields := []zap.Field{
-			zap.Int64("route_id", identity.RouteID),
 			zap.Int64("user_id", identity.UserID),
 			zap.String("outcome", string(result.Outcome)),
 			zap.String("limited_dimension", result.LimitedDimension),
@@ -227,10 +224,9 @@ func (m *Manager) Acquire(ctx context.Context, identity Identity) (AcquireResult
 		logger:                     m.logger,
 		metrics:                    m.metrics,
 		requestID:                  requestAdmissionID,
-		routeID:                    identity.RouteID,
 		userID:                     identity.UserID,
 		integrity:                  admission.Integrity,
-		routeRateRevision:          admission.RouteRateLimits,
+		requestRateRevision:        admission.RequestRateLimits,
 		requestConcurrencyRevision: admission.Concurrency,
 		operationTimeout:           m.operationTimeout,
 		renewInterval:              interval,
@@ -246,10 +242,10 @@ func (m *Manager) Acquire(ctx context.Context, identity Identity) (AcquireResult
 	s.startRenewer()
 	logging.Debug(m.logger, "admission", "request", "request admission acquired",
 		s.logData(
-			zap.Int64("route_id", identity.RouteID), zap.Int64("user_id", identity.UserID),
+			zap.Int64("user_id", identity.UserID),
 			zap.String("scope", identity.Scope), zap.Int64("lease_until", result.LeaseUntilMs),
 			zap.Int64("renew_interval_ms", interval.Milliseconds()),
-			zap.Int64("rate_revision", admission.RouteRateLimits),
+			zap.Int64("rate_revision", admission.RequestRateLimits),
 			zap.Int64("concurrency_revision", admission.Concurrency),
 		)...,
 	)
@@ -270,10 +266,9 @@ type session struct {
 	logFields                  *logfields.Fields
 	metrics                    MetricsRecorder
 	requestID                  string
-	routeID                    int64
 	userID                     int64
 	integrity                  runtimefacts.Integrity
-	routeRateRevision          int64
+	requestRateRevision        int64
 	requestConcurrencyRevision int64
 	operationTimeout           time.Duration
 	renewInterval              time.Duration
@@ -313,11 +308,10 @@ func (s *session) BindAttempt(input *breakerstore.AcquireAttemptInput) error {
 		return bindConflictError()
 	}
 	input.RequestAdmissionID = s.requestID
-	input.RouteID = s.routeID
 	return nil
 }
 
-// SnapshotMany keeps only the ingress-frozen route-rate revision for observability. Channel-rate,
+// SnapshotMany keeps only the ingress-frozen request-rate revision for observability. Channel-rate,
 // channel concurrency, breaker, and balance revisions are read for the candidate phase. A concurrent
 // integrity epoch change is rejected before Redis.
 func (s *session) SnapshotMany(ctx context.Context, modelID int64, candidates []breakerstore.SnapshotCandidateInput) (breakerstore.SnapshotManyResult, error) {
@@ -347,7 +341,7 @@ func (s *session) SnapshotMany(ctx context.Context, modelID int64, candidates []
 	if err != nil {
 		return breakerstore.SnapshotManyResult{}, err
 	}
-	result.RouteRateRevision = s.routeRateRevision
+	result.RequestRateRevision = s.requestRateRevision
 	return result, nil
 }
 
@@ -377,7 +371,7 @@ func (s *session) Finalize(ctx context.Context) error {
 			integrity, err := s.facts.Integrity(ctx)
 			if err == nil {
 				outcome, err = s.store.FinishRequestAdmission(
-					ctx, s.requestID, s.routeID, s.userID, integrity.Epoch, integrity.Revision,
+					ctx, s.requestID, s.userID, integrity.Epoch, integrity.Revision,
 				)
 				if err != nil && retryableLifecycleError(err) {
 					storeResultUnknown = true
@@ -406,7 +400,7 @@ func (s *session) Finalize(ctx context.Context) error {
 			s.finalizeErr = requestLifecycleError("finish", outcome)
 			logging.Error(s.logger, "admission", "request", "request admission finalize rejected",
 				s.logData(
-					zap.Int64("route_id", s.routeID), zap.Int64("user_id", s.userID),
+					zap.Int64("user_id", s.userID),
 					zap.String("outcome", string(outcome)),
 				)...,
 			)
@@ -438,7 +432,6 @@ func (s *session) startRenewer() {
 					outcome, err = s.store.RenewRequestAdmission(
 						renewCtx,
 						s.requestID,
-						s.routeID,
 						s.userID,
 						integrity.Epoch,
 						integrity.Revision,
@@ -525,9 +518,9 @@ func deriveRenewInterval(now time.Time, leaseUntilMs int64) time.Duration {
 
 func admissionFingerprint(in breakerstore.RequestAdmissionInput, scope string) string {
 	h := sha256.New()
-	fmt.Fprintf(h, "id=%s;route=%d;user=%d;scope=%s;epoch=%s;epoch_rev=%d;rate_rev=%d;concurrency_rev=%d;",
-		in.RequestAdmissionID, in.RouteID, in.UserID, scope, in.IntegrityEpoch, in.IntegrityRevision,
-		in.RouteRateRevision, in.GlobalConcurrencyRevision)
+	fmt.Fprintf(h, "id=%s;user=%d;scope=%s;epoch=%s;epoch_rev=%d;rate_rev=%d;concurrency_rev=%d;",
+		in.RequestAdmissionID, in.UserID, scope, in.IntegrityEpoch, in.IntegrityRevision,
+		in.RequestRateRevision, in.GlobalConcurrencyRevision)
 	writeLimitFingerprint(h, "rpm", in.RPMLimitOverride)
 	writeLimitFingerprint(h, "rpd", in.RPDLimitOverride)
 	writeLimitFingerprint(h, "concurrency", in.ConcurrencyLimitOverride)

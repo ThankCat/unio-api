@@ -74,8 +74,6 @@ func requestRejectionReason(err error) string {
 		return "model_not_found"
 	case failure.CodeRoutingModelNotAvailable:
 		return "model_not_available"
-	case failure.CodeRoutingRouteNotConfigured:
-		return "route_not_configured"
 	case failure.CodeRoutingProtocolInvalid:
 		return "protocol_invalid"
 	default:
@@ -183,6 +181,11 @@ func (l *RequestLifecycle) recordRoutingPlan(in RoutingDecisionTraceInput) {
 		result = "no_candidate"
 	}
 	m.ObserveRoutingBalance(in.Mode, result, in.PoolSize, len(in.Plan.Candidates), routingLoadSkew(in.Plan.Candidates))
+	// 候选同属一个模型，取首个候选的模型 ID 作为指标主体；无候选时没有权重可上报。
+	modelDBID := int64(0)
+	if len(in.Plan.Candidates) > 0 {
+		modelDBID = in.Plan.Candidates[0].Route.ModelDBID
+	}
 	for _, candidate := range in.Plan.Candidates {
 		readResult := "success"
 		if candidate.Balance.CapacityReadFailed {
@@ -191,10 +194,12 @@ func (l *RequestLifecycle) recordRoutingPlan(in RoutingDecisionTraceInput) {
 			readResult = "unknown"
 		}
 		m.IncRoutingCapacityRead(readResult)
-		m.SetBalancedFinalWeight(MetricsID(in.RouteID), MetricsID(candidate.Route.Channel.ID), candidate.Balance.FinalScore)
+		m.SetBalancedFinalWeight(MetricsID(modelDBID), MetricsID(candidate.Route.Channel.ID), candidate.Balance.FinalScore)
 	}
-	for _, excluded := range in.Plan.Excluded {
-		m.SetBalancedFinalWeight(MetricsID(in.RouteID), MetricsID(excluded.ChannelID), 0)
+	if modelDBID > 0 {
+		for _, excluded := range in.Plan.Excluded {
+			m.SetBalancedFinalWeight(MetricsID(modelDBID), MetricsID(excluded.ChannelID), 0)
+		}
 	}
 	l.recordBreakerRoutingFacts(in.Plan)
 }
@@ -256,20 +261,20 @@ func routingLoadSkew(candidates []Candidate) float64 {
 	return maxShare - minShare
 }
 
-func (l *RequestLifecycle) RecordBalanceSelected(routeID *int64, channelID int64) {
+func (l *RequestLifecycle) RecordBalanceSelected(modelDBID, channelID int64) {
 	m, ok := l.metrics.(routingBalanceMetricsRecorder)
-	if !ok || routeID == nil {
+	if !ok || modelDBID <= 0 {
 		return
 	}
-	m.IncRoutingBalanceSelected(MetricsID(*routeID), MetricsID(channelID))
+	m.IncRoutingBalanceSelected(MetricsID(modelDBID), MetricsID(channelID))
 }
 
-func (l *RequestLifecycle) RecordBalanceFallback(routeID *int64, reason string) {
+func (l *RequestLifecycle) RecordBalanceFallback(modelDBID int64, reason string) {
 	m, ok := l.metrics.(routingBalanceMetricsRecorder)
-	if !ok || routeID == nil {
+	if !ok || modelDBID <= 0 {
 		return
 	}
-	m.IncRoutingBalanceFallback(MetricsID(*routeID), reason)
+	m.IncRoutingBalanceFallback(MetricsID(modelDBID), reason)
 }
 
 func (l *RequestLifecycle) recordMarginGuard(result string) {

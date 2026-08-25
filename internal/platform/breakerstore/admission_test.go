@@ -228,17 +228,17 @@ func seedAdmissionEnvWithControls(t *testing.T, s *Store, ratePayload, concurren
 	if ok, err := s.BootstrapStateEpoch(context.Background(), "epoch-ra", 1, HashPayload("bootstrap")); err != nil || !ok {
 		t.Fatalf("bootstrap epoch: %v", err)
 	}
-	seedControl(t, s, s.RouteRateLimitControl(), "seed-route-rate", ratePayload)
+	seedControl(t, s, s.RequestRateLimitControl(), "seed-request-rate", ratePayload)
 	seedControl(t, s, s.GlobalConcurrencyControl(), "seed-conc", concurrencyPayload)
 	seedControl(t, s, s.SettingControl("gateway.circuit_breaker"), "seed-breaker", testCircuitBreakerPayload(cfg))
 	return "epoch-ra", 1
 }
 
-func raInput(id string, route, user int64, epoch string, epochRev int64) RequestAdmissionInput {
+func raInput(id string, user int64, epoch string, epochRev int64) RequestAdmissionInput {
 	return RequestAdmissionInput{
-		RequestAdmissionID: id, Fingerprint: id + "-fp", RouteID: route, UserID: user,
+		RequestAdmissionID: id, Fingerprint: id + "-fp", UserID: user,
 		IntegrityEpoch: epoch, IntegrityRevision: epochRev,
-		RouteRateRevision: testRouteRateRevision, GlobalConcurrencyRevision: 1,
+		RequestRateRevision: testRequestRateRevision, GlobalConcurrencyRevision: 1,
 	}
 }
 
@@ -252,12 +252,12 @@ func TestRequestAdmissionAcquireAndRPMLimit(t *testing.T) {
 	// Redis active route-default RPM=2，前两次 allowed，第三次 limited(rpm)。
 	for i := 0; i < 2; i++ {
 		r, err := s.AcquireRequestAdmission(context.Background(), raInput(
-			"ra"+string(rune('a'+i)), 1, 1, epoch, rev))
+			"ra"+string(rune('a'+i)), 1, epoch, rev))
 		if err != nil || r.Outcome != RequestAllowed {
 			t.Fatalf("acquire %d want allowed, got %s/%s err=%v", i, r.Outcome, r.LimitedDimension, err)
 		}
 	}
-	r, err := s.AcquireRequestAdmission(context.Background(), raInput("ra-third", 1, 1, epoch, rev))
+	r, err := s.AcquireRequestAdmission(context.Background(), raInput("ra-third", 1, epoch, rev))
 	if err != nil {
 		t.Fatalf("acquire third err: %v", err)
 	}
@@ -274,16 +274,16 @@ func TestRequestAdmissionRPDBucketTTLCoversDay(t *testing.T) {
 		t, s, `{"rpm":0,"rpd":100}`, `{"key_limit":0,"channel_limit":0}`, testConfig(),
 	)
 	ctx := context.Background()
-	r, err := s.AcquireRequestAdmission(ctx, raInput("ra-rpd-ttl", 1, 1, epoch, rev))
+	r, err := s.AcquireRequestAdmission(ctx, raInput("ra-rpd-ttl", 1, epoch, rev))
 	if err != nil || r.Outcome != RequestAllowed {
 		t.Fatalf("acquire want allowed, got %s err=%v", r.Outcome, err)
 	}
 	now := time.Now()
-	rpdTTL, err := rc.PTTL(ctx, s.keys.requestRPDBucket(1, 1, dayBucket(now))).Result()
+	rpdTTL, err := rc.PTTL(ctx, s.keys.requestRPDBucket( 1, dayBucket(now))).Result()
 	if err != nil {
 		t.Fatalf("rpd pttl: %v", err)
 	}
-	rpmTTL, err := rc.PTTL(ctx, s.keys.requestRPMBucket(1, 1, minuteBucket(now))).Result()
+	rpmTTL, err := rc.PTTL(ctx, s.keys.requestRPMBucket( 1, minuteBucket(now))).Result()
 	if err != nil {
 		t.Fatalf("rpm pttl: %v", err)
 	}
@@ -299,7 +299,7 @@ func TestRequestAdmissionRPDBucketTTLCoversDay(t *testing.T) {
 func TestRequestAdmissionStaleEpochFailClosed(t *testing.T) {
 	s, _, _ := newTestStore(t)
 	_, rev := seedAdmissionEnv(t, s)
-	r, err := s.AcquireRequestAdmission(context.Background(), raInput("ra-stale", 2, 2, "wrong-epoch", rev))
+	r, err := s.AcquireRequestAdmission(context.Background(), raInput("ra-stale", 2, "wrong-epoch", rev))
 	if err != nil {
 		t.Fatalf("acquire err: %v", err)
 	}
@@ -315,19 +315,19 @@ func TestRequestAdmissionConcurrencyAndFinish(t *testing.T) {
 		t, s, `{"rpm":0,"rpd":0}`, `{"key_limit":1,"channel_limit":0}`, testConfig(),
 	)
 
-	r1, err := s.AcquireRequestAdmission(context.Background(), raInput("rc1", 3, 3, epoch, rev))
+	r1, err := s.AcquireRequestAdmission(context.Background(), raInput("rc1", 3, epoch, rev))
 	if err != nil || r1.Outcome != RequestAllowed {
 		t.Fatalf("rc1 want allowed, got %s err=%v", r1.Outcome, err)
 	}
-	r2, _ := s.AcquireRequestAdmission(context.Background(), raInput("rc2", 3, 3, epoch, rev))
+	r2, _ := s.AcquireRequestAdmission(context.Background(), raInput("rc2", 3, epoch, rev))
 	if r2.Outcome != RequestLimited || r2.LimitedDimension != "concurrency" {
 		t.Fatalf("rc2 want limited/concurrency, got %s/%s", r2.Outcome, r2.LimitedDimension)
 	}
 	// Finish rc1 释放并发。
-	if outcome, err := s.FinishRequestAdmission(context.Background(), "rc1", 3, 3, epoch, rev); err != nil || outcome != RequestLifecycleFinished {
+	if outcome, err := s.FinishRequestAdmission(context.Background(), "rc1", 3, epoch, rev); err != nil || outcome != RequestLifecycleFinished {
 		t.Fatalf("finish rc1: outcome=%s err=%v", outcome, err)
 	}
-	r3, _ := s.AcquireRequestAdmission(context.Background(), raInput("rc3", 3, 3, epoch, rev))
+	r3, _ := s.AcquireRequestAdmission(context.Background(), raInput("rc3", 3, epoch, rev))
 	if r3.Outcome != RequestAllowed {
 		t.Fatalf("rc3 after finish want allowed, got %s/%s", r3.Outcome, r3.LimitedDimension)
 	}
@@ -339,26 +339,25 @@ func TestRequestAdmissionLifecycleEpochMismatchLeavesResourcesUntouched(t *testi
 		t, s, `{"rpm":0,"rpd":0}`, `{"key_limit":0,"channel_limit":0}`, testConfig(),
 	)
 	const requestID = "request-epoch-fence"
-	const routeID int64 = 88
 	const userID int64 = 89
 	if result, err := s.AcquireRequestAdmission(
 		context.Background(),
-		raInput(requestID, routeID, userID, epoch, revision),
+		raInput(requestID, userID, epoch, revision),
 	); err != nil || result.Outcome != RequestAllowed {
 		t.Fatalf("acquire request token: result=%+v err=%v", result, err)
 	}
 	tokenKey := s.keys.admissionRequest(requestID)
-	concKey := s.keys.requestConcurrency(routeID, userID)
+	concKey := s.keys.requestConcurrency(userID)
 	leaseBefore, _ := s.client.HGet(context.Background(), tokenKey, "lease_until_ms").Result()
 	concBefore, _ := s.client.ZScore(context.Background(), concKey, requestID).Result()
 
 	if outcome, renewErr := s.RenewRequestAdmission(
-		context.Background(), requestID, routeID, userID, "wrong-epoch", revision,
+		context.Background(), requestID, userID, "wrong-epoch", revision,
 	); renewErr != nil || outcome != RequestLifecycleStaleEpoch {
 		t.Fatalf("stale renew: outcome=%s err=%v", outcome, renewErr)
 	}
 	if outcome, finishErr := s.FinishRequestAdmission(
-		context.Background(), requestID, routeID, userID, "wrong-epoch", revision,
+		context.Background(), requestID, userID, "wrong-epoch", revision,
 	); finishErr != nil || outcome != RequestLifecycleStaleEpoch {
 		t.Fatalf("stale finish: outcome=%s err=%v", outcome, finishErr)
 	}
@@ -380,7 +379,7 @@ func TestRequestAdmissionLifecycleEpochMismatchLeavesResourcesUntouched(t *testi
 		t.Fatalf("corrupt token epoch: %v", err)
 	}
 	if outcome, finishErr := s.FinishRequestAdmission(
-		context.Background(), requestID, routeID, userID, epoch, revision,
+		context.Background(), requestID, userID, epoch, revision,
 	); finishErr != nil || outcome != RequestLifecycleStaleEpoch {
 		t.Fatalf("token epoch mismatch finish: outcome=%s err=%v", outcome, finishErr)
 	}
@@ -390,7 +389,7 @@ func TestRequestAdmissionLifecycleEpochMismatchLeavesResourcesUntouched(t *testi
 		t.Fatalf("restore token epoch: %v", err)
 	}
 	if outcome, finishErr := s.FinishRequestAdmission(
-		context.Background(), requestID, routeID, userID, epoch, revision,
+		context.Background(), requestID, userID, epoch, revision,
 	); finishErr != nil || outcome != RequestLifecycleFinished {
 		t.Fatalf("valid finish: outcome=%s err=%v", outcome, finishErr)
 	}

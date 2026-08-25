@@ -325,7 +325,7 @@ ORDER BY id;
 -- name: ListChannelsPage :many
 -- ListChannelsPage 按 provider/状态/关键字过滤后分页列出 channel，连带 provider 名称；过滤项为 NULL 时不过滤。
 SELECT
-    c.id, c.provider_id, c.name, c.protocol, c.adapter_key, p.origin,
+    c.id, c.provider_id, c.name, c.protocols, c.adapter_key, p.origin,
     c.credential, c.status, c.priority, c.created_at, c.updated_at,
     c.supports_openai_fast,
     c.concurrency_limit,
@@ -371,7 +371,7 @@ LIMIT 1;
 SELECT
     c.id AS channel_id,
     c.provider_id,
-    c.protocol,
+    c.protocols,
     c.adapter_key,
     c.credential,
     c.credential_valid,
@@ -429,7 +429,7 @@ WITH current AS MATERIALIZED (
     RETURNING
         c.id AS channel_id,
         c.provider_id,
-        c.protocol,
+        c.protocols,
         c.adapter_key,
         c.credential,
         c.credential_valid,
@@ -439,7 +439,7 @@ WITH current AS MATERIALIZED (
 SELECT
     updated.channel_id,
     updated.provider_id,
-    updated.protocol,
+    updated.protocols,
     updated.adapter_key,
     updated.credential,
     updated.credential_valid,
@@ -552,16 +552,16 @@ FROM current_state
 JOIN logged ON logged.channel_id = current_state.id;
 
 -- name: CreateChannel :one
--- CreateChannel 创建 channel；credential 为明文上游凭据，protocol+adapter_key 复合键须先在 adapter registry 校验存在。
+-- CreateChannel 创建 channel；credential 为明文上游凭据，protocols 中每个协议与 adapter_key 的组合都须先在 adapter registry 校验存在。
 -- 并发容量随业务行一次写入，初始 capacity_revision 固定使用表默认值 1；随后同步安装 revision=1 Redis control。
 INSERT INTO channels (
-    provider_id, name, protocol, adapter_key, credential, status, priority,
+    provider_id, name, protocols, adapter_key, credential, status, priority,
     supports_openai_fast,
     response_timeout_ms, first_token_timeout_ms, concurrency_limit,
     sticky_enabled, sticky_ttl_ms
 )
 VALUES (
-    sqlc.arg(provider_id), sqlc.arg(name), sqlc.arg(protocol), sqlc.arg(adapter_key),
+    sqlc.arg(provider_id), sqlc.arg(name), sqlc.arg(protocols), sqlc.arg(adapter_key),
     sqlc.arg(credential), sqlc.arg(status), sqlc.arg(priority),
     sqlc.arg(supports_openai_fast),
     sqlc.narg(response_timeout_ms), sqlc.narg(first_token_timeout_ms), sqlc.narg(concurrency_limit),
@@ -570,7 +570,7 @@ VALUES (
 RETURNING *;
 
 -- name: UpdateChannel :one
--- UpdateChannel 更新 channel 的展示名、绑定 Origin、启停状态、优先级与超时；protocol、adapter_key 与凭据不在此更新。
+-- UpdateChannel 更新 channel 的展示名、绑定 Origin、启停状态、优先级与超时；protocols、adapter_key 与凭据不在此更新。
 -- origin 归 Provider；config_revision 递增由服务层在真变化时于同事务处理。
 UPDATE channels
 SET name = sqlc.arg(name),
@@ -616,20 +616,13 @@ SET credential = sqlc.arg(credential), updated_at = now()
 WHERE id = sqlc.arg(id);
 
 -- name: ArchiveChannel :execrows
--- ArchiveChannel 归档单个渠道；调用方必须先确认不存在任何 route_channels 引用。
+-- ArchiveChannel 归档单个渠道。
 -- 释放渠道名（追加 __archived_<id> 后缀释放 (provider_id, name) 槽位供复用）。不动 provider。
--- 返回 channels 受影响行数（0 = 渠道不存在或已归档）。恢复保持后缀名、不自动重加线路池。
+-- 返回 channels 受影响行数（0 = 渠道不存在或已归档）。恢复保持后缀名。
 UPDATE channels
 SET status = 'archived', archived_at = now(), name = name || '__archived_' || id::text,
     config_revision = config_revision + 1, updated_at = now()
 WHERE channels.id = sqlc.arg(id) AND channels.status <> 'archived';
-
--- name: ListRoutesReferencingChannel :many
--- 归档目标渠道前必须显式从所有线路池移除。
-SELECT rt.id, rt.name
-FROM routes rt
-JOIN route_channels target ON target.route_id = rt.id AND target.channel_id = sqlc.arg(channel_id)
-ORDER BY rt.id;
 
 -- name: RestoreChannel :execrows
 -- RestoreChannel 取消归档渠道：archived → disabled（archived_at 清空）。名字保持归档时的后缀名
@@ -648,7 +641,6 @@ WHERE id = sqlc.arg(id) AND status = 'archived';
 -- 子配置先删除，语句末 channels 的删除不会留下悬挂引用。若 channel 仍被请求/账务历史
 -- （request_attempts/request_records/cost_snapshots/settlement_recovery_jobs）引用，
 -- 整条语句报 23503 全部回滚，上层降级为 conflict，提示改用停用/保持归档。返回值为 channels 行的受影响数（0 表示 channel 不存在）。
--- 注：归档时已从 route_channels 线路池移除（ArchiveChannelCascade），故此处无需再清线路池。
 WITH deleted_channel_prices AS (
     DELETE FROM channel_prices WHERE channel_prices.channel_id = sqlc.arg(id)
 ),
@@ -675,7 +667,7 @@ SELECT
     c.id,
     c.name,
     c.status,
-    c.protocol,
+    c.protocols,
     c.adapter_key,
     pr.origin,
     c.priority,
@@ -739,7 +731,6 @@ SELECT
         CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
              THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p99,
     (SELECT COUNT(*) FROM channel_models cm WHERE cm.channel_id = c.id AND cm.status = 'enabled') AS bound_models,
-    (SELECT COUNT(*) FROM route_channels rc WHERE rc.channel_id = c.id) AS bound_routes,
     (
         SELECT a2.error_code FROM request_attempts a2
         WHERE a2.channel_id = c.id AND a2.status = 'failed' AND a2.fault_party = 'upstream' AND a2.error_code IS NOT NULL
@@ -756,7 +747,7 @@ LEFT JOIN request_attempts a
 WHERE (sqlc.narg('status')::text IS NULL OR c.status = sqlc.narg('status')::text)
   AND (sqlc.narg('provider_id')::bigint IS NULL OR c.provider_id = sqlc.narg('provider_id')::bigint)
   AND (sqlc.narg('search')::text IS NULL OR c.name ILIKE '%' || sqlc.narg('search')::text || '%')
-GROUP BY c.id, c.name, c.status, c.protocol, c.adapter_key, pr.origin, c.priority,
+GROUP BY c.id, c.name, c.status, c.protocols, c.adapter_key, pr.origin, c.priority,
          c.response_timeout_ms, c.first_token_timeout_ms, c.credential,
          c.concurrency_limit, c.created_at, c.last_tested_at, c.last_test_ok,
          c.last_test_latency_ms, c.last_test_error, c.credential_valid, pr.name
@@ -779,8 +770,6 @@ ORDER BY
   CASE WHEN sqlc.narg('sort_field')::text = 'timeout' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COUNT(a.id) FILTER (WHERE a.status = 'failed' AND (a.error_code ILIKE '%timeout%' OR a.error_code = 'context_deadline_exceeded')) END ASC NULLS LAST,
   CASE WHEN sqlc.narg('sort_field')::text = 'bound_models' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (SELECT COUNT(*) FROM channel_models cm WHERE cm.channel_id = c.id AND cm.status = 'enabled') END DESC NULLS LAST,
   CASE WHEN sqlc.narg('sort_field')::text = 'bound_models' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (SELECT COUNT(*) FROM channel_models cm WHERE cm.channel_id = c.id AND cm.status = 'enabled') END ASC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'bound_routes' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (SELECT COUNT(*) FROM route_channels rc WHERE rc.channel_id = c.id) END DESC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'bound_routes' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (SELECT COUNT(*) FROM route_channels rc WHERE rc.channel_id = c.id) END ASC NULLS LAST,
   CASE WHEN sqlc.narg('sort_field')::text = 'priority' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN c.priority END DESC NULLS LAST,
   CASE WHEN sqlc.narg('sort_field')::text = 'priority' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN c.priority END ASC NULLS LAST,
   c.id
@@ -1008,10 +997,3 @@ WHERE cm.channel_id = sqlc.arg('channel_id')
 GROUP BY cm.model_id, m.model_id, m.display_name, cm.upstream_model, cm.status
 ORDER BY attempt_total DESC, m.model_id;
 
--- name: ChannelOpsRoutes :many
--- ChannelOpsRoutes 引用该渠道的线路池（抽屉线路 Tab）。
-SELECT rt.id, rt.name, rt.mode, rt.status, rt.price_ratio
-FROM route_channels rc
-JOIN routes rt ON rt.id = rc.route_id
-WHERE rc.channel_id = sqlc.arg('channel_id')
-ORDER BY rt.id;

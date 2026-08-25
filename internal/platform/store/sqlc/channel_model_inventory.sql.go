@@ -523,7 +523,7 @@ const getChannelModelDiscoveryExecutionSnapshot = `-- name: GetChannelModelDisco
 SELECT
     r.id, r.channel_id, r.source, r.status, r.channel_config_revision, r.provider_origin_revision, r.provider_status_revision, r.attempt_count, r.next_attempt_at, r.model_count, r.warning_code, r.error_code, r.message, r.created_at, r.started_at, r.completed_at,
     c.provider_id,
-    c.protocol,
+    c.protocols,
     c.adapter_key,
     c.credential,
     c.status AS channel_status,
@@ -556,7 +556,7 @@ type GetChannelModelDiscoveryExecutionSnapshotRow struct {
 	StartedAt                     pgtype.Timestamptz
 	CompletedAt                   pgtype.Timestamptz
 	ProviderID                    int64
-	Protocol                      string
+	Protocols                     []string
 	AdapterKey                    string
 	Credential                    string
 	ChannelStatus                 string
@@ -588,7 +588,7 @@ func (q *Queries) GetChannelModelDiscoveryExecutionSnapshot(ctx context.Context,
 		&i.StartedAt,
 		&i.CompletedAt,
 		&i.ProviderID,
-		&i.Protocol,
+		&i.Protocols,
 		&i.AdapterKey,
 		&i.Credential,
 		&i.ChannelStatus,
@@ -637,7 +637,7 @@ func (q *Queries) GetChannelModelDiscoveryRun(ctx context.Context, arg GetChanne
 
 const getChannelModelInventoryContext = `-- name: GetChannelModelInventoryContext :one
 SELECT c.id AS channel_id, c.name AS channel_name, c.status AS channel_status,
-    c.config_revision, c.provider_id, c.protocol, c.adapter_key,
+    c.config_revision, c.provider_id, c.protocols, c.adapter_key,
     p.slug AS provider_slug, p.origin_revision, p.status_revision
 FROM channels c JOIN providers p ON p.id = c.provider_id
 WHERE c.id = $1
@@ -649,7 +649,7 @@ type GetChannelModelInventoryContextRow struct {
 	ChannelStatus  string
 	ConfigRevision int64
 	ProviderID     int64
-	Protocol       string
+	Protocols      []string
 	AdapterKey     string
 	ProviderSlug   string
 	OriginRevision int64
@@ -665,7 +665,7 @@ func (q *Queries) GetChannelModelInventoryContext(ctx context.Context, channelID
 		&i.ChannelStatus,
 		&i.ConfigRevision,
 		&i.ProviderID,
-		&i.Protocol,
+		&i.Protocols,
 		&i.AdapterKey,
 		&i.ProviderSlug,
 		&i.OriginRevision,
@@ -675,7 +675,7 @@ func (q *Queries) GetChannelModelInventoryContext(ctx context.Context, channelID
 }
 
 const getChannelModelVerificationExecutionSnapshot = `-- name: GetChannelModelVerificationExecutionSnapshot :one
-SELECT r.id, r.channel_id, r.source, r.status, r.channel_config_revision, r.provider_origin_revision, r.provider_status_revision, r.total_count, r.succeeded_count, r.failed_count, r.error_code, r.message, r.created_at, r.started_at, r.completed_at, c.provider_id, c.protocol, c.adapter_key, c.credential,
+SELECT r.id, r.channel_id, r.source, r.status, r.channel_config_revision, r.provider_origin_revision, r.provider_status_revision, r.total_count, r.succeeded_count, r.failed_count, r.error_code, r.message, r.created_at, r.started_at, r.completed_at, c.provider_id, c.protocols, c.adapter_key, c.credential,
     c.status AS channel_status, c.config_revision AS current_channel_config_revision,
     p.slug AS provider_slug, p.origin,
     p.origin_revision AS current_provider_origin_revision,
@@ -703,7 +703,7 @@ type GetChannelModelVerificationExecutionSnapshotRow struct {
 	StartedAt                     pgtype.Timestamptz
 	CompletedAt                   pgtype.Timestamptz
 	ProviderID                    int64
-	Protocol                      string
+	Protocols                     []string
 	AdapterKey                    string
 	Credential                    string
 	ChannelStatus                 string
@@ -734,7 +734,7 @@ func (q *Queries) GetChannelModelVerificationExecutionSnapshot(ctx context.Conte
 		&i.StartedAt,
 		&i.CompletedAt,
 		&i.ProviderID,
-		&i.Protocol,
+		&i.Protocols,
 		&i.AdapterKey,
 		&i.Credential,
 		&i.ChannelStatus,

@@ -64,7 +64,7 @@ func TestDeleteChannelCascadeRemovesOwnConfig(t *testing.T) {
 
 // TestDeleteModelCascadeRemovesOwnConfig 验证录错的 model 可一键真删：
 // CTE 清掉它自身的配置子表——绑定、基准售价（model_prices）、渠道成本价（channel_prices，NO ACTION）；
-// model_capabilities、user_model_policies 由 ON DELETE CASCADE 自动清理；channel 本身不受影响。
+// model_capabilities 由 ON DELETE CASCADE 自动清理；channel 本身不受影响。
 // 价格表是追加式配置（无删除接口，只能停用），必须由级联清掉，否则任何配过价的 model 永远删不掉。
 func TestDeleteModelCascadeRemovesOwnConfig(t *testing.T) {
 	ctx, tx, queries, cleanup := newModelChannelTestTx(t)
@@ -72,14 +72,12 @@ func TestDeleteModelCascadeRemovesOwnConfig(t *testing.T) {
 
 	suffix := time.Now().UnixNano()
 	timeoutMS := int32(15000)
-	userID := createUserForModelPolicy(t, ctx, queries, suffix)
 
 	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("del-model-provider-%d", suffix), "enabled")
 	channelID := insertChannel(t, ctx, tx, providerID, fmt.Sprintf("del-model-channel-%d", suffix), "enabled", 10, &timeoutMS)
 	modelID := insertModel(t, ctx, tx, fmt.Sprintf("openai/del-model-%d", suffix), "openai", "enabled")
 	insertChannelModel(t, ctx, tx, channelID, modelID, "del-model-upstream", "enabled")
 	insertModelCapability(t, ctx, tx, modelID, "text.output", "full")
-	insertUserModelPolicy(t, ctx, tx, userID, modelID, "denied")
 	// 追加式价格配置：模型基准售价 + 渠道成本价，验证级联把两者一并清掉。
 	now := time.Now().UTC()
 	createModelPriceForTest(t, ctx, queries, modelID, now)
@@ -104,9 +102,6 @@ func TestDeleteModelCascadeRemovesOwnConfig(t *testing.T) {
 	}
 	if got := countRows(t, ctx, tx, `SELECT count(*) FROM model_capabilities WHERE model_id = $1`, modelID); got != 0 {
 		t.Fatalf("expected model_capabilities ON DELETE CASCADE removed, got %d", got)
-	}
-	if got := countRows(t, ctx, tx, `SELECT count(*) FROM user_model_policies WHERE model_id = $1`, modelID); got != 0 {
-		t.Fatalf("expected user_model_policies ON DELETE CASCADE removed, got %d", got)
 	}
 	// channel 本身不应被模型删除连带删掉。
 	if _, err := queries.GetChannel(ctx, channelID); err != nil {

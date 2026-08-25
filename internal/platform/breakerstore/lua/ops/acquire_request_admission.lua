@@ -2,7 +2,7 @@ local function now_ms()
   local t = redis.call('TIME')
   return tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
 end
-local route_rate_ctl = KEYS[1]
+local request_rate_ctl = KEYS[1]
 local conc_ctl = KEYS[2]
 local breaker_ctl = KEYS[3]
 local marker = KEYS[4]
@@ -15,15 +15,14 @@ local instance_proof = KEYS[10]
 
 local rid = ARGV[1]
 local fingerprint = ARGV[2]
-local route_id = ARGV[3]
-local user_id = ARGV[4]
-local expected_epoch = ARGV[5]
-local expected_epoch_rev = ARGV[6]
-local expected_route_rate_rev = tonumber(ARGV[7])
-local expected_conc_rev = tonumber(ARGV[8])
-local rpm_override = ARGV[9]
-local rpd_override = ARGV[10]
-local concurrency_override = ARGV[11]
+local user_id = ARGV[3]
+local expected_epoch = ARGV[4]
+local expected_epoch_rev = ARGV[5]
+local expected_request_rate_rev = tonumber(ARGV[6])
+local expected_conc_rev = tonumber(ARGV[7])
+local rpm_override = ARGV[8]
+local rpd_override = ARGV[9]
+local concurrency_override = ARGV[10]
 
 if redis.call('EXISTS', fault_latch) == 1 then return { 'store_unavailable' } end
 local instance_matches = redis_instance_proof_matches(instance_proof)
@@ -43,12 +42,11 @@ if token_type == 'hash' then
   if redis.call('HGET', token_key, 'admission_fingerprint') ~= fingerprint then return { 'conflict' } end
   if redis.call('HGET', token_key, 'status') ~= 'active' then return { 'conflict' } end
   if
-    redis.call('HGET', token_key, 'route_id') ~= route_id
-    or redis.call('HGET', token_key, 'user_id') ~= user_id
+    redis.call('HGET', token_key, 'user_id') ~= user_id
     or redis.call('HGET', token_key, 'runtime_integrity_epoch') ~= expected_epoch
     or redis.call('HGET', token_key, 'runtime_integrity_revision') ~= expected_epoch_rev
-    or redis.call('HGET', token_key, 'route_rate_limits_revision') ~= ARGV[7]
-    or redis.call('HGET', token_key, 'global_concurrency_revision') ~= ARGV[8]
+    or redis.call('HGET', token_key, 'request_rate_limits_revision') ~= ARGV[6]
+    or redis.call('HGET', token_key, 'global_concurrency_revision') ~= ARGV[7]
     or redis.call('HGET', token_key, 'rpm_override') ~= rpm_override
     or redis.call('HGET', token_key, 'rpd_override') ~= rpd_override
     or redis.call('HGET', token_key, 'concurrency_override') ~= concurrency_override
@@ -63,17 +61,17 @@ end
 if token_type ~= 'none' then return { 'runtime_sync_required', 'request_token' } end
 
 -- 新 token 的所有执行值都来自 committed active controls；调用方 effective/TTL 不参与。
-local route_rate, route_rate_state =
-  read_new_admission_control(route_rate_ctl, expected_route_rate_rev, parse_rate_limit_defaults_payload)
-if route_rate == nil then return { route_rate_state, 'route_rate' } end
+local request_rate, request_rate_state =
+  read_new_admission_control(request_rate_ctl, expected_request_rate_rev, parse_rate_limit_defaults_payload)
+if request_rate == nil then return { request_rate_state, 'request_rate' } end
 local concurrency, concurrency_state =
   read_new_admission_control(conc_ctl, expected_conc_rev, parse_global_concurrency_payload)
 if concurrency == nil then return { concurrency_state, 'global_concurrency' } end
 local breaker = read_committed_control(breaker_ctl, parse_circuit_breaker_payload)
 if breaker == nil then return { 'runtime_sync_required', 'circuit_breaker' } end
 
-local eff_rpm = resolve_request_limit_override(rpm_override, route_rate.rpm)
-local eff_rpd = resolve_request_limit_override(rpd_override, route_rate.rpd)
+local eff_rpm = resolve_request_limit_override(rpm_override, request_rate.rpm)
+local eff_rpd = resolve_request_limit_override(rpd_override, request_rate.rpd)
 local eff_conc = resolve_request_limit_override(concurrency_override, concurrency.key_limit)
 if eff_rpm == nil or eff_rpd == nil or eff_conc == nil then
   return { 'runtime_sync_required', 'request_overrides' }
@@ -116,8 +114,6 @@ redis.call(
   token_key,
   'status',
   'active',
-  'route_id',
-  route_id,
   'user_id',
   user_id,
   'admission_fingerprint',
@@ -126,8 +122,8 @@ redis.call(
   expected_epoch,
   'runtime_integrity_revision',
   expected_epoch_rev,
-  'route_rate_limits_revision',
-  expected_route_rate_rev,
+  'request_rate_limits_revision',
+  expected_request_rate_rev,
   'global_concurrency_revision',
   expected_conc_rev,
   'rpm_override',

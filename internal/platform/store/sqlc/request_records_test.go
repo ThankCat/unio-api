@@ -40,20 +40,6 @@ func createRequestRecordIdentity(t *testing.T, ctx context.Context, queries *sql
 		t.Fatalf("generate api key: %v", err)
 	}
 
-	// 线路必填：先建一条线路供 API Key 绑定（route_id 现为 NOT NULL）。
-	var priceRatio pgtype.Numeric
-	if err := priceRatio.Scan("1"); err != nil {
-		t.Fatalf("scan price ratio: %v", err)
-	}
-	route, err := queries.CreateRoute(ctx, sqlc.CreateRouteParams{
-		Name:       fmt.Sprintf("request-record-route-%d", suffix),
-		Mode:       "balanced",
-		Status:     "enabled",
-		PriceRatio: priceRatio,
-	})
-	if err != nil {
-		t.Fatalf("create route: %v", err)
-	}
 
 	apiKey, err := queries.CreateAPIKey(ctx, sqlc.CreateAPIKeyParams{
 		UserID:    user.ID,
@@ -61,7 +47,6 @@ func createRequestRecordIdentity(t *testing.T, ctx context.Context, queries *sql
 		KeyPrefix: generatedKey.Prefix,
 		KeyHash:   generatedKey.Hash,
 		ExpiresAt: pgtype.Timestamptz{Valid: false},
-		RouteID:   route.ID,
 	})
 	if err != nil {
 		t.Fatalf("create api key: %v", err)
@@ -99,7 +84,6 @@ func createRequestRecordForTest(t *testing.T, ctx context.Context, queries *sqlc
 		ResponseCompletedAt: pgtype.Timestamptz{Valid: false},
 		StartedAt:           pgtype.Timestamptz{Time: time.Now(), Valid: true},
 		CompletedAt:         pgtype.Timestamptz{Valid: false},
-		RouteID:             pgtype.Int8{Int64: identity.apiKey.RouteID, Valid: true},
 	})
 	if err != nil {
 		t.Fatalf("create request record: %v", err)

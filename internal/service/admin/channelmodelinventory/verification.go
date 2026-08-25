@@ -187,7 +187,7 @@ func (s *Service) ExecuteNextVerification(ctx context.Context) (bool, error) {
 		}
 		start := time.Now()
 		probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
-		probeResult, probeErr := s.prober.ProbeChannel(probeCtx, snapshot.Protocol, snapshot.AdapterKey, runtime, item.UpstreamModel)
+		probeResult, probeErr := s.prober.ProbeChannel(probeCtx, primaryProtocol(snapshot.Protocols), snapshot.AdapterKey, runtime, item.UpstreamModel)
 		latency := time.Since(start).Milliseconds()
 		cancel()
 
@@ -199,7 +199,7 @@ func (s *Service) ExecuteNextVerification(ctx context.Context) (bool, error) {
 		idempotencyKey := "model-verification:" + uuid.NewString()
 		accountErr := s.accountant.AccountProbe(ctx, providerledger.ProbeParams{
 			ProviderID: snapshot.ProviderID, ChannelID: snapshot.ChannelID, ModelID: item.ModelID,
-			Protocol: snapshot.Protocol, Source: "model_verification", UpstreamModel: item.UpstreamModel,
+			Protocol: primaryProtocol(snapshot.Protocols), Source: "model_verification", UpstreamModel: item.UpstreamModel,
 			Success: success, HTTPStatus: probeResult.StatusCode, ErrorCode: errorCode, Message: message,
 			LatencyMs: latency, StartedAt: start.UTC(), Facts: probeResult.Facts, IdempotencyKey: idempotencyKey,
 		})

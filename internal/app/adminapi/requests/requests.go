@@ -100,10 +100,7 @@ type requestListItemDTO struct {
 	ApiKeyName            *string  `json:"api_key_name"`
 	ApiKeyPrefix          *string  `json:"api_key_prefix"`
 	ApiKeyPlaintext       *string  `json:"api_key_plaintext"`
-	RouteName             *string  `json:"route_name"`
-	RouteID               *int64   `json:"route_id"`
-	RoutePriceRatio       *string  `json:"route_price_ratio"`
-	RouteMode             *string  `json:"route_mode"`
+	SalePriceRatio        *string  `json:"sale_price_ratio"`
 	FinalChannelName      *string  `json:"final_channel_name"`
 	ChannelChain          string   `json:"channel_chain"`
 	ScoringAttemptID      *int64   `json:"scoring_attempt_id"`
@@ -230,14 +227,12 @@ type requestDetailDTO struct {
 	LatencyMs             *int64                      `json:"latency_ms"`
 	GatewayTTFTMs         *int64                      `json:"gateway_ttft_ms"`
 	Tps                   *float64                    `json:"tps"`
-	RouteID               *int64                      `json:"route_id"`
 	ReasoningEffort       *string                     `json:"reasoning_effort"`
 	ReasoningBudgetTokens *int32                      `json:"reasoning_budget_tokens"`
 	ClientIP              *string                     `json:"client_ip"`
 	CostSnapshot          *costSnapshotDTO            `json:"cost_snapshot"`
 	PriceSnapshot         *priceSnapshotDTO           `json:"price_snapshot"`
-	RoutePriceRatio       *string                     `json:"route_price_ratio"`
-	RouteMode             *string                     `json:"route_mode"`
+	SalePriceRatio        *string                     `json:"sale_price_ratio"`
 	Attempts              []attemptDTO                `json:"attempts"`
 	Usage                 *usageDTO                   `json:"usage"`
 	LedgerEntries         []ledger.LedgerEntryDTO     `json:"ledger_entries"`
@@ -255,11 +250,6 @@ func (h *requestsHandler) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	apiKeyID, err := adminhttp.OptionalInt64Query(r, "api_key_id")
-	if err != nil {
-		adminhttp.WriteServiceError(w, err)
-		return
-	}
-	routeID, err := adminhttp.OptionalInt64Query(r, "route_id")
 	if err != nil {
 		adminhttp.WriteServiceError(w, err)
 		return
@@ -316,7 +306,6 @@ func (h *requestsHandler) list(w http.ResponseWriter, r *http.Request) {
 		RequestID:     adminhttp.QueryString(r, "request_id"),
 		Status:        adminhttp.QueryString(r, "status"),
 		Model:         adminhttp.QueryString(r, "model"),
-		RouteID:       routeID,
 		ChannelID:     channelID,
 		AttemptID:     attemptID,
 		ScoringSample: scoringSample,
@@ -433,10 +422,7 @@ func toRequestListItemDTO(item query.RequestListItem) requestListItemDTO {
 		ApiKeyPrefix:    item.APIKeyPrefix,
 		ApiKeyPlaintext: item.APIKeyPlaintext,
 
-		RouteName:             item.RouteName,
-		RouteID:               item.RouteID,
-		RoutePriceRatio:       item.RoutePriceRatio,
-		RouteMode:             item.RouteMode,
+		SalePriceRatio:        item.SalePriceRatio,
 		FinalChannelName:      item.FinalChannelName,
 		ChannelChain:          item.ChannelChain,
 		ScoringAttemptID:      item.ScoringAttemptID,
@@ -510,12 +496,10 @@ func toRequestDetailDTO(d query.RequestDetail) requestDetailDTO {
 		LatencyMs:             d.LatencyMs,
 		GatewayTTFTMs:         d.GatewayTTFTMs,
 		Tps:                   d.TPS,
-		RouteID:               d.RouteID,
 		ReasoningEffort:       d.ReasoningEffort,
 		ReasoningBudgetTokens: d.ReasoningBudgetTokens,
 		ClientIP:              d.ClientIP,
-		RoutePriceRatio:       d.RoutePriceRatio,
-		RouteMode:             d.RouteMode,
+		SalePriceRatio:        d.SalePriceRatio,
 		Attempts:              make([]attemptDTO, 0, len(d.Attempts)),
 		LedgerEntries:         make([]ledger.LedgerEntryDTO, 0, len(d.LedgerEntries)),
 	}

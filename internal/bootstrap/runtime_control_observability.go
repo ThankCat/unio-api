@@ -21,7 +21,7 @@ const runtimeControlFailureLogInterval = 30 * time.Second
 
 var runtimeControlMetricTargets = [...]string{
 	"channel_capacity",
-	"route_rate",
+	"request_rate",
 	"global_concurrency",
 	"circuit_breaker",
 	"routing_balance",
@@ -376,8 +376,8 @@ func runtimeControlMetricTarget(operation sqlc.RuntimeControlOperation) string {
 
 func runtimeControlMetricTargetForSetting(settingKey string) string {
 	switch settingKey {
-	case appsettings.GatewayRouteRateLimitDefaultsKey:
-		return "route_rate"
+	case appsettings.GatewayRequestRateLimitDefaultsKey:
+		return "request_rate"
 	case appsettings.GatewayConcurrencyDefaultsKey:
 		return "global_concurrency"
 	case appsettings.GatewayCircuitBreakerKey:

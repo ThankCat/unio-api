@@ -102,7 +102,7 @@ func (q *Queries) GetChannelName(ctx context.Context, channelID int64) (string, 
 }
 
 const listChannelsForCredentialTest = `-- name: ListChannelsForCredentialTest :many
-SELECT c.id, c.provider_id, c.name, c.protocol, c.adapter_key, p.origin, c.credential,
+SELECT c.id, c.provider_id, c.name, c.protocols, c.adapter_key, p.origin, c.credential,
        c.status, c.priority, c.created_at, c.updated_at, c.last_tested_at,
        c.last_test_ok, c.last_test_latency_ms, c.last_test_error, c.credential_valid,
        c.archived_at, c.concurrency_limit,
@@ -120,7 +120,7 @@ type ListChannelsForCredentialTestRow struct {
 	ID                     int64
 	ProviderID             int64
 	Name                   string
-	Protocol               string
+	Protocols              []string
 	AdapterKey             string
 	Origin                 string
 	Credential             string
@@ -158,7 +158,7 @@ func (q *Queries) ListChannelsForCredentialTest(ctx context.Context) ([]ListChan
 			&i.ID,
 			&i.ProviderID,
 			&i.Name,
-			&i.Protocol,
+			&i.Protocols,
 			&i.AdapterKey,
 			&i.Origin,
 			&i.Credential,
@@ -193,7 +193,7 @@ func (q *Queries) ListChannelsForCredentialTest(ctx context.Context) ([]ListChan
 const listEnabledChannelAdapters = `-- name: ListEnabledChannelAdapters :many
 SELECT
     c.id AS channel_id,
-    c.protocol,
+    c.protocols,
     c.adapter_key,
     p.slug AS provider_slug
 FROM channels c
@@ -205,7 +205,7 @@ ORDER BY c.id
 
 type ListEnabledChannelAdaptersRow struct {
 	ChannelID    int64
-	Protocol     string
+	Protocols    []string
 	AdapterKey   string
 	ProviderSlug string
 }
@@ -222,7 +222,7 @@ func (q *Queries) ListEnabledChannelAdapters(ctx context.Context) ([]ListEnabled
 		var i ListEnabledChannelAdaptersRow
 		if err := rows.Scan(
 			&i.ChannelID,
-			&i.Protocol,
+			&i.Protocols,
 			&i.AdapterKey,
 			&i.ProviderSlug,
 		); err != nil {

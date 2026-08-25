@@ -10,14 +10,13 @@ func limitOverride(value int64) *int64 { return &value }
 
 // assertNoRequestResources 断言被拒绝的入口准入没有留下任何部分写入。
 // ru-tpm 已经没有任何生产者，这里保留它是回归护栏：TPM 桶重新出现即视为退化。
-func assertNoRequestResources(t *testing.T, s *Store, requestID string, routeID, userID int64) {
+func assertNoRequestResources(t *testing.T, s *Store, requestID string, userID int64) {
 	t.Helper()
 	patterns := []string{
 		s.keys.admissionRequest(requestID),
-		s.keys.base + "admission:v1:ru-rpm:" + i(routeID) + ":" + i(userID) + ":*",
-		s.keys.base + "admission:v1:ru-rpd:" + i(routeID) + ":" + i(userID) + ":*",
-		s.keys.base + "admission:v1:ru-tpm:" + i(routeID) + ":" + i(userID) + ":*",
-		s.keys.requestConcurrency(routeID, userID),
+		s.keys.base + "admission:v1:u-rpm:" + i(userID) + ":*",
+		s.keys.base + "admission:v1:u-rpd:" + i(userID) + ":*",
+		s.keys.requestConcurrency(userID),
 	}
 	for _, pattern := range patterns {
 		keys, err := s.client.Keys(context.Background(), pattern).Result()
@@ -80,7 +79,7 @@ func TestRequestAdmissionMergesTrustedOverridesWithRedisDefaults(t *testing.T) {
 		testConfig(),
 	)
 
-	in := raInput("override-merge", 81, 82, epoch, revision)
+	in := raInput("override-merge", 82, epoch, revision)
 	in.RPMLimitOverride = limitOverride(0)
 	in.ConcurrencyLimitOverride = limitOverride(2)
 	result, err := s.AcquireRequestAdmission(context.Background(), in)
@@ -110,13 +109,13 @@ func TestRequestAdmissionMergesTrustedOverridesWithRedisDefaults(t *testing.T) {
 		}
 	}
 
-	second := raInput("override-concurrency-2", 81, 82, epoch, revision)
+	second := raInput("override-concurrency-2", 82, epoch, revision)
 	second.RPMLimitOverride = limitOverride(0)
 	second.ConcurrencyLimitOverride = limitOverride(2)
 	if got, err := s.AcquireRequestAdmission(context.Background(), second); err != nil || got.Outcome != RequestAllowed {
 		t.Fatalf("second request under concurrency override want allowed, got %+v err=%v", got, err)
 	}
-	third := raInput("override-concurrency-3", 81, 82, epoch, revision)
+	third := raInput("override-concurrency-3", 82, epoch, revision)
 	third.RPMLimitOverride = limitOverride(0)
 	third.ConcurrencyLimitOverride = limitOverride(2)
 	if got, err := s.AcquireRequestAdmission(context.Background(), third); err != nil ||
@@ -157,7 +156,7 @@ func TestRequestAdmissionFreezesCommittedLifecycleWhileBreakerUpdateIsPending(t 
 		t.Helper()
 		result, acquireErr := s.AcquireRequestAdmission(
 			context.Background(),
-			raInput(requestID, 86, 87, epoch, revision),
+			raInput(requestID, 87, epoch, revision),
 		)
 		if acquireErr != nil || result.Outcome != RequestAllowed {
 			t.Fatalf("acquire %s want allowed, got %+v err=%v", requestID, result, acquireErr)
@@ -209,23 +208,23 @@ func TestRequestAdmissionControlFailuresLeaveNoResources(t *testing.T) {
 			name: "missing route rate",
 			mutate: func(t *testing.T, s *Store, _ *RequestAdmissionInput) {
 				t.Helper()
-				if err := s.client.Del(context.Background(), s.keys.admissionRouteRate()).Err(); err != nil {
+				if err := s.client.Del(context.Background(), s.keys.admissionRequestRate()).Err(); err != nil {
 					t.Fatal(err)
 				}
 			},
-			want: RequestRuntimeSyncReq, syncTarget: "route_rate",
+			want: RequestRuntimeSyncReq, syncTarget: "request_rate",
 		},
 		{
 			name: "pending route rate",
 			mutate: func(t *testing.T, s *Store, _ *RequestAdmissionInput) {
 				t.Helper()
-				code, _, err := s.PrepareControl(context.Background(), s.RouteRateLimitControl(), "pending-route-rate",
-					testRouteRateRevision, testRouteRateRevision+1, `{"rpm":2,"rpd":0}`)
+				code, _, err := s.PrepareControl(context.Background(), s.RequestRateLimitControl(), "pending-request-rate",
+					testRequestRateRevision, testRequestRateRevision+1, `{"rpm":2,"rpd":0}`)
 				if err != nil || code != ControlPrepared {
 					t.Fatalf("prepare pending route rate: %s %v", code, err)
 				}
 			},
-			want: RequestRuntimeSyncPending, syncTarget: "route_rate",
+			want: RequestRuntimeSyncPending, syncTarget: "request_rate",
 		},
 		{
 			name: "pending global concurrency",
@@ -244,7 +243,7 @@ func TestRequestAdmissionControlFailuresLeaveNoResources(t *testing.T) {
 		name   string
 		target func(*Store) string
 	}{
-		{name: "malformed route rate", target: func(s *Store) string { return s.keys.admissionRouteRate() }},
+		{name: "malformed route rate", target: func(s *Store) string { return s.keys.admissionRequestRate() }},
 		{name: "malformed global concurrency", target: func(s *Store) string { return s.keys.admissionGlobalConcurrency() }},
 		{name: "malformed breaker", target: func(s *Store) string { return s.keys.runtimeControlSetting("gateway.circuit_breaker") }},
 	}
@@ -271,7 +270,7 @@ func TestRequestAdmissionControlFailuresLeaveNoResources(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s, _, _ := newTestStore(t)
 			epoch, revision := seedAdmissionEnv(t, s)
-			in := raInput("fail-closed", 91, 92, epoch, revision)
+			in := raInput("fail-closed", 92, epoch, revision)
 			tc.mutate(t, s, &in)
 			result, err := s.AcquireRequestAdmission(context.Background(), in)
 			if err != nil || result.Outcome != tc.want {
@@ -280,7 +279,7 @@ func TestRequestAdmissionControlFailuresLeaveNoResources(t *testing.T) {
 			if tc.syncTarget != "" && result.SyncTarget != tc.syncTarget {
 				t.Fatalf("want sync target %s, got %s", tc.syncTarget, result.SyncTarget)
 			}
-			assertNoRequestResources(t, s, in.RequestAdmissionID, in.RouteID, in.UserID)
+			assertNoRequestResources(t, s, in.RequestAdmissionID, in.UserID)
 		})
 	}
 }

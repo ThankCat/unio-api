@@ -160,7 +160,7 @@ func (compactRuntimeFacts) Integrity(context.Context) (runtimefacts.Integrity, e
 func (compactRuntimeFacts) Admission(context.Context) (runtimefacts.AdmissionRevisions, error) {
 	integrity := runtimefacts.Integrity{Epoch: "epoch-compact", Revision: 7}
 	return runtimefacts.AdmissionRevisions{
-		Integrity: integrity, RouteRateLimits: 8, Concurrency: 9,
+		Integrity: integrity, RequestRateLimits: 8, Concurrency: 9,
 	}, nil
 }
 

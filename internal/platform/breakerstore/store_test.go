@@ -83,7 +83,7 @@ func testCircuitBreakerPayload(cfg Config) string {
 const (
 	testAttemptIntegrityEpoch    = "test-attempt-epoch"
 	testAttemptIntegrityRevision = int64(1)
-	testRouteRateRevision        = int64(1)
+	testRequestRateRevision        = int64(1)
 )
 
 const (
@@ -128,7 +128,7 @@ func seedAttemptControlsWithRoutingBalance(
 ) {
 	t.Helper()
 	seedAttemptIntegrity(t, s)
-	ensureTestControlAtRevision(t, s, s.RouteRateLimitControl(), testRouteRateRevision, `{"rpm":97,"rpd":970}`)
+	ensureTestControlAtRevision(t, s, s.RequestRateLimitControl(), testRequestRateRevision, `{"rpm":97,"rpd":970}`)
 	ensureTestControl(t, s, s.GlobalConcurrencyControl(), `{"key_limit":0,"channel_limit":0}`)
 	ensureTestControl(t, s, s.SettingControl("gateway.circuit_breaker"), testCircuitBreakerPayload(cfg))
 	ensureTestControl(t, s, s.SettingControl("gateway.routing_balance"), routingBalancePayload)
@@ -161,7 +161,6 @@ func seedActiveRequestAdmission(t *testing.T, s *Store, in AcquireAttemptInput) 
 		"status", "active",
 		"runtime_integrity_epoch", in.IntegrityEpoch,
 		"runtime_integrity_revision", in.IntegrityRevision,
-		"route_id", in.RouteID,
 	).Err(); err != nil {
 		t.Fatalf("seed reserved request admission: %v", err)
 	}
@@ -537,56 +536,6 @@ func TestFinishIdempotentFirstTerminalWins(t *testing.T) {
 	snap, _ := s.Snapshot(context.Background(), ScopeChannel, 6)
 	if snap.EligibleSuccesses != 1 {
 		t.Fatalf("duplicate finish must not double count: %+v", snap)
-	}
-}
-
-func TestRouteChannelRPDAttributionRequiresInteractionEvidence(t *testing.T) {
-	s, _, _ := newTestStore(t)
-	cfg := testConfig()
-	const routeID, channelID, providerID = int64(41), int64(42), int64(420)
-	seedAttemptControls(t, s, cfg, channelID, `{"concurrency":null}`)
-
-	acquireForRoute := func(permitID string) *AttemptPermit {
-		t.Helper()
-		admission, err := acquireAttempt(t, s, withAttemptControlRevisions(AcquireAttemptInput{
-			PermitID: permitID, AdmissionFingerprint: permitID + "-fp", RequestAdmissionID: "req-" + permitID,
-			RouteID: routeID, ProviderID: providerID, ChannelID: channelID,
-			OriginRevision: 1, ProviderStatusRevision: 1, ChannelConfigRevision: 1,
-			ModelID: 100, UpstreamEndpoint: EndpointChatCompletions, RequestMode: ModeNonStream,
-			InputEstimate: 10,
-		}))
-		if err != nil || admission.Mode != AdmissionPermit || admission.Permit == nil {
-			t.Fatalf("acquire route attribution permit: admission=%+v err=%v", admission, err)
-		}
-		return admission.Permit
-	}
-
-	withEvidence := acquireForRoute("route-rpd-evidence")
-	if _, err := s.Finish(context.Background(), *withEvidence, FinishOutcome{
-		ProviderOutcome: OutcomeIgnored, ChannelOutcome: OutcomeEligibleSuccess,
-		RequestWriteState: RequestWriteCompleted,
-	}); err != nil {
-		t.Fatalf("finish route attribution permit: %v", err)
-	}
-	if _, err := s.Finish(context.Background(), *withEvidence, FinishOutcome{
-		ProviderOutcome: OutcomeIgnored, ChannelOutcome: OutcomeEligibleSuccess,
-		RequestWriteState: RequestWriteCompleted,
-	}); err != nil {
-		t.Fatalf("repeat finish route attribution permit: %v", err)
-	}
-
-	withoutEvidence := acquireForRoute("route-rpd-no-evidence")
-	if err := s.Abort(context.Background(), *withoutEvidence); err != nil {
-		t.Fatalf("abort without interaction evidence: %v", err)
-	}
-	aborted := acquireForRoute("route-rpd-abort")
-	if err := s.Abort(context.Background(), *aborted); err != nil {
-		t.Fatalf("abort route attribution permit: %v", err)
-	}
-
-	used, err := s.RouteChannelRPDUsage(context.Background(), routeID, channelID)
-	if err != nil || used != 1 {
-		t.Fatalf("route-channel RPD attribution = %d, want 1, err=%v", used, err)
 	}
 }
 

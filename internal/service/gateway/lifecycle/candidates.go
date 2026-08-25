@@ -53,12 +53,10 @@ type PrepareCandidatesParams struct {
 	// EstimateInputTokens 对每个可用 fallback candidate 做 provider-specific 保守估算。
 	EstimateInputTokens CandidateInputTokenEstimator
 
-	// Mode 是线路策略（balanced/fixed）；fixed 保持唯一候选，balanced 按容量和健康度排序。
 	// 排序叠加在能力过滤/熔断可用性之前，故最终 fallback 顺序即策略顺序。
-	Mode string
 
 	// StickyChannelID 是会话粘性命中的既有绑定渠道 ID（0=无绑定/未启用）。非 0 时该渠道候选被
-	// 置顶，绝对优先于 Mode 排序与失败软冷却 demote（R5）；其余候选仍按策略序作 fallback。
+	// 置顶，绝对优先于策略排序与失败软冷却 demote（R5）；其余候选仍按策略序作 fallback。
 	// 该渠道未进入可尝试候选时置顶落空，由 CandidatePlan.StickyPinned 报告。调用方必须结合 Excluded
 	// 区分 cooldown 临时绕行与永久失格，不能仅凭 StickyPinned=false 清除绑定。
 	StickyChannelID int64
@@ -291,7 +289,7 @@ func (e *Executor) PrepareCandidates(ctx context.Context, params PrepareCandidat
 		}
 	}
 	selectedConfig := BalanceConfig{}
-	orderingMode := params.Mode
+	orderingMode := RoutingModeBalanced
 	var scoreReader ChannelScoreSnapshotReader
 	var sampleWindows map[int64]breakerstore.ChannelSampleWindow
 	if runtimePresent {
@@ -517,7 +515,7 @@ func enrichBalanceScore(
 	score.CandidateChannelCapacityRevision = candidate.ChannelCapacityRevision
 	score.RuntimeChannelCapacityRevision = snapshot.Candidate.ChannelCapacityRevision
 	score.ChannelCapacityRevisionCurrent = snapshot.Candidate.ChannelCapacityRevision == candidate.ChannelCapacityRevision
-	score.RouteRateLimitsRevision = result.RouteRateRevision
+	score.RequestRateLimitsRevision = result.RequestRateRevision
 	score.GlobalConcurrencyRevision = result.GlobalConcurrencyRevision
 	score.CircuitBreakerRevision = result.CircuitBreakerRevision
 	score.ProviderBreakerState = traceBreakerState(snapshot.Provider)

@@ -66,8 +66,8 @@ func trimBreaker(prefix string) string {
 
 // ---- admission control（§5.1）----
 
-func (k keyBuilder) admissionRouteRate() string {
-	return k.base + "admission:v1:route-rate-limits"
+func (k keyBuilder) admissionRequestRate() string {
+	return k.base + "admission:v1:request-rate-limits"
 }
 
 func (k keyBuilder) admissionGlobalConcurrency() string {
@@ -90,36 +90,19 @@ func (k keyBuilder) admissionOp(token string) string {
 	return k.base + "admission:v1:op:" + token
 }
 
-// route-user 稳定窗口桶 / 并发 active set（不带 revision，§5.2）。
-func (k keyBuilder) requestRPMBucket(routeID, userID, minuteBucket int64) string {
-	return k.base + "admission:v1:ru-rpm:" + i(routeID) + ":" + i(userID) + ":" + i(minuteBucket)
+// 用户级稳定窗口桶 / 并发 active set（不带 revision，§5.2）。
+// 主体是用户而非 Key：同一用户的多把 Key 共享同一份额度，否则多开 Key 即可绕过限流。
+// 前缀用 u- 与历史的 ru-（route-user 复合主体）区分，旧桶随 TTL 自然消亡。
+func (k keyBuilder) requestRPMBucket(userID, minuteBucket int64) string {
+	return k.base + "admission:v1:u-rpm:" + i(userID) + ":" + i(minuteBucket)
 }
 
-func (k keyBuilder) requestRPDBucket(routeID, userID, dayBucket int64) string {
-	return k.base + "admission:v1:ru-rpd:" + i(routeID) + ":" + i(userID) + ":" + i(dayBucket)
+func (k keyBuilder) requestRPDBucket(userID, dayBucket int64) string {
+	return k.base + "admission:v1:u-rpd:" + i(userID) + ":" + i(dayBucket)
 }
 
-func (k keyBuilder) requestConcurrency(routeID, userID int64) string {
-	return k.base + "admission:v1:ru-conc:" + i(routeID) + ":" + i(userID)
-}
-
-// 线路级 SCAN 模式：汇总该线路所有 (route,user) 桶（admin 只读展示用，不进热路径）。
-func (k keyBuilder) requestConcurrencyRoutePattern(routeID int64) string {
-	return k.base + "admission:v1:ru-conc:" + i(routeID) + ":*"
-}
-
-func (k keyBuilder) requestRPMBucketRoutePattern(routeID, minuteBucket int64) string {
-	return k.base + "admission:v1:ru-rpm:" + i(routeID) + ":*:" + i(minuteBucket)
-}
-
-func (k keyBuilder) requestRPDBucketRoutePattern(routeID, dayBucket int64) string {
-	return k.base + "admission:v1:ru-rpd:" + i(routeID) + ":*:" + i(dayBucket)
-}
-
-// routeChannelRPDBucket records attempt attribution for one route/channel UTC day.
-// It is observational and does not replace the global Channel RPD capacity bucket.
-func (k keyBuilder) routeChannelRPDBucket(routeID, channelID, dayBucket int64) string {
-	return k.base + "admission:v1:route-ch-rpd:" + i(routeID) + ":" + i(channelID) + ":" + i(dayBucket)
+func (k keyBuilder) requestConcurrency(userID int64) string {
+	return k.base + "admission:v1:u-conc:" + i(userID)
 }
 
 // ---- 评分样本 / 观测（§12，独立于 admission 硬门槛）----
@@ -142,10 +125,10 @@ func (k keyBuilder) sampleWriteMarker(attemptID int64) string {
 
 // ---- TPM 观测（§8，best-effort，永远不参与准入）----
 
-// obsTPMRoute / obsTPMChannel 是自然 UTC 分钟的 TPM 观测桶（hash）。
+// obsTPMUser / obsTPMChannel 是自然 UTC 分钟的 TPM 观测桶（hash）。
 // 与任何 admission 限流桶彻底分离：观测只描述已经发生的事实，不冻结额度、不做门槛判断。
-func (k keyBuilder) obsTPMRoute(routeID, minute int64) string {
-	return k.base + "obs:tpm:v1:route:" + i(routeID) + ":min:" + i(minute)
+func (k keyBuilder) obsTPMUser(userID, minute int64) string {
+	return k.base + "obs:tpm:v1:user:" + i(userID) + ":min:" + i(minute)
 }
 
 func (k keyBuilder) obsTPMChannel(channelID, minute int64) string {

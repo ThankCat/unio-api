@@ -64,8 +64,8 @@ func TestMetricsExposesRecordedSeries(t *testing.T) {
 		`unio_gateway_routing_balance_total{mode="balanced",result="planned"} 1`,
 		`unio_gateway_routing_balance_candidate_count_count{mode="balanced"} 1`,
 		`unio_gateway_routing_balance_pool_size_count{mode="balanced"} 1`,
-		`unio_gateway_routing_balance_selected_total{channel="123",route="42"} 1`,
-		`unio_gateway_routing_balance_fallback_total{reason="upstream_timeout",route="42"} 1`,
+		`unio_gateway_routing_balance_selected_total{channel="123",model="42"} 1`,
+		`unio_gateway_routing_balance_fallback_total{model="42",reason="upstream_timeout"} 1`,
 		`unio_gateway_routing_balance_load_skew_count 1`,
 		`unio_gateway_routing_balance_capacity_read_total{result="success"} 1`,
 		`unio_gateway_routing_margin_guard_total{result="runtime_rejected"} 1`,
@@ -169,7 +169,7 @@ func TestMetricsExposeBoundedRuntimeFacts(t *testing.T) {
 		`unio_gateway_upstream_ttft_seconds_count{channel_id="17",endpoint="responses",protocol="openai",provider_id="23",sample_source="stream_only"} 1`,
 		`unio_gateway_upstream_total_duration_seconds_count{channel_id="17",endpoint="responses",mode="stream",protocol="openai",provider_id="23"} 1`,
 		`unio_gateway_upstream_total_duration_seconds_count{channel_id="17",endpoint="responses",mode="non_stream",protocol="openai",provider_id="23"} 1`,
-		`unio_gateway_balanced_final_weight{channel_id="17",route_id="31"} 0.75`,
+		`unio_gateway_balanced_final_weight{channel_id="17",model_id="31"} 0.75`,
 	}
 	for _, want := range wants {
 		if !strings.Contains(body, want) {

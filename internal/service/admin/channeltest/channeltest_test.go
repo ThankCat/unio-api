@@ -91,7 +91,7 @@ func (p *fakeProber) ProbeChannel(_ context.Context, _, _ string, _ corechannel.
 func rotationFixture() sqlc.PrepareChannelCredentialRotationRow {
 	return sqlc.PrepareChannelCredentialRotationRow{
 		ChannelID: 7, ProviderID: 2,
-		Protocol: "openai", AdapterKey: "openai", Credential: "sk-new",
+		Protocols: []string{"openai"}, AdapterKey: "openai", Credential: "sk-new",
 		CredentialValid: false, ConfigRevision: 8, CredentialChanged: true,
 		ProviderSlug: "openai", Origin: "https://api.example.test",
 		OriginRevision: 3, StatusRevision: 4,
@@ -214,7 +214,7 @@ func TestRotateCredentialFailedProbeDoesNotRestoreCredential(t *testing.T) {
 func permissionSnapshot(configRevision int64) sqlc.GetChannelProbeSnapshotRow {
 	return sqlc.GetChannelProbeSnapshotRow{
 		ChannelID: 7, ProviderID: 2,
-		Protocol: "openai", AdapterKey: "openai", Credential: "test-secret", CredentialValid: true,
+		Protocols: []string{"openai"}, AdapterKey: "openai", Credential: "test-secret", CredentialValid: true,
 		ConfigRevision: configRevision, ProviderSlug: "openai", Origin: "https://api.example.test",
 		OriginRevision: 3, StatusRevision: 4,
 	}

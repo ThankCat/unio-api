@@ -31,8 +31,8 @@ type Integrity struct {
 
 type AdmissionRevisions struct {
 	Integrity
-	RouteRateLimits int64
-	Concurrency     int64
+	RequestRateLimits int64
+	Concurrency       int64
 }
 
 type RoutingRevisions struct {
@@ -76,15 +76,15 @@ func (r *Reader) Admission(ctx context.Context) (AdmissionRevisions, error) {
 		return AdmissionRevisions{}, err
 	}
 	if err := validRevisions(
-		row.RouteRateLimitDefaultsRevision,
+		row.RequestRateLimitDefaultsRevision,
 		row.ConcurrencyDefaultsRevision,
 	); err != nil {
 		return AdmissionRevisions{}, runtimeSyncError("admission control revision is invalid", err)
 	}
 	return AdmissionRevisions{
-		Integrity:       integrity,
-		RouteRateLimits: row.RouteRateLimitDefaultsRevision,
-		Concurrency:     row.ConcurrencyDefaultsRevision,
+		Integrity:         integrity,
+		RequestRateLimits: row.RequestRateLimitDefaultsRevision,
+		Concurrency:       row.ConcurrencyDefaultsRevision,
 	}, nil
 }
 

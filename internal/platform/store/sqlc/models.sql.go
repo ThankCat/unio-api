@@ -9,18 +9,7 @@ import (
 	"context"
 )
 
-const listAvailableModelsForUser = `-- name: ListAvailableModelsForUser :many
-WITH user_scope AS (
-    SELECT $2::BIGINT AS user_id
-),
-user_policy_mode AS (
-    SELECT EXISTS (
-        SELECT 1
-        FROM user_model_policies ump
-        JOIN user_scope us ON us.user_id = ump.user_id
-        WHERE ump.visibility = 'allowed'
-    ) AS has_allow_list
-)
+const listAvailableModels = `-- name: ListAvailableModels :many
 SELECT
     m.id,
     m.model_id,
@@ -32,41 +21,13 @@ SELECT
         '{}'
     )::text[] AS capability_keys
 FROM models m
-JOIN route_model_offerings o ON o.model_id = m.id
-    AND o.route_id = $1
-    AND o.status = 'enabled'
-    AND o.ingress_protocol = 'openai'
-JOIN routes rt ON rt.id = o.route_id AND rt.status = 'enabled'
 LEFT JOIN model_capabilities mc ON mc.model_id = m.id
-JOIN user_scope us ON us.user_id > 0
 WHERE m.status = 'enabled'
-    AND NOT EXISTS (
-        SELECT 1
-        FROM user_model_policies denied
-        JOIN user_scope us ON us.user_id = denied.user_id
-        WHERE denied.model_id = m.id
-            AND denied.visibility = 'denied'
-    )
-    AND (
-        NOT (SELECT has_allow_list FROM user_policy_mode)
-        OR EXISTS (
-            SELECT 1
-            FROM user_model_policies allowed
-            JOIN user_scope us ON us.user_id = allowed.user_id
-            WHERE allowed.model_id = m.id
-                AND allowed.visibility = 'allowed'
-        )
-    )
 GROUP BY m.id, m.model_id, m.display_name, m.owned_by
 ORDER BY m.model_id ASC
 `
 
-type ListAvailableModelsForUserParams struct {
-	RouteID int64
-	UserID  int64
-}
-
-type ListAvailableModelsForUserRow struct {
+type ListAvailableModelsRow struct {
 	ID             int64
 	ModelID        string
 	DisplayName    string
@@ -74,19 +35,22 @@ type ListAvailableModelsForUserRow struct {
 	CapabilityKeys []string
 }
 
-// ListAvailableModelsForUser 列出指定用户在 API Key 当前线路内可见且可路由的模型，并附带该模型已声明的
-// cap-tags（能力架构 Layer 2，support_level<>'unsupported' 的 capability_key 去重升序）。
+// ListAvailableModels 列出所有启用模型，并附带该模型已声明的 cap-tags
+// （能力架构 Layer 2，support_level<>'unsupported' 的 capability_key 去重升序）。
 // cap-tags 取模型级声明，不下钻到 channel override（不向客户暴露 channel 维度收紧）。
 // 未声明任何能力的模型 capability_keys 为空数组（unprovisioned）。
-func (q *Queries) ListAvailableModelsForUser(ctx context.Context, arg ListAvailableModelsForUserParams) ([]ListAvailableModelsForUserRow, error) {
-	rows, err := q.db.Query(ctx, listAvailableModelsForUser, arg.RouteID, arg.UserID)
+//
+// 不做用户级过滤：模型 enabled 的前置条件是「至少有一条可用渠道能供」（供给不变量），
+// 因此列出即可调用。协议维度由 ListModelProtocols 单独提供，不在此收窄。
+func (q *Queries) ListAvailableModels(ctx context.Context) ([]ListAvailableModelsRow, error) {
+	rows, err := q.db.Query(ctx, listAvailableModels)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListAvailableModelsForUserRow
+	var items []ListAvailableModelsRow
 	for rows.Next() {
-		var i ListAvailableModelsForUserRow
+		var i ListAvailableModelsRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.ModelID,
@@ -94,6 +58,48 @@ func (q *Queries) ListAvailableModelsForUser(ctx context.Context, arg ListAvaila
 			&i.OwnedBy,
 			&i.CapabilityKeys,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listModelProtocols = `-- name: ListModelProtocols :many
+SELECT
+    m.model_id,
+    array_agg(DISTINCT proto ORDER BY proto)::text[] AS protocols
+FROM models m
+JOIN channel_models cm ON cm.model_id = m.id AND cm.status = 'enabled'
+JOIN channels c ON c.id = cm.channel_id AND c.status = 'enabled' AND c.credential_valid
+JOIN providers p ON p.id = c.provider_id AND p.status = 'enabled'
+CROSS JOIN LATERAL unnest(c.protocols) AS proto
+WHERE m.status = 'enabled'
+GROUP BY m.model_id
+ORDER BY m.model_id ASC
+`
+
+type ListModelProtocolsRow struct {
+	ModelID   string
+	Protocols []string
+}
+
+// ListModelProtocols 汇总每个启用模型当前实际可用的入口协议：
+// 取其所有可用渠道 protocols 的并集。协议信息不落库，恒等于实际供给能力，
+// 不存在「声明支持但调不通」的状态。
+func (q *Queries) ListModelProtocols(ctx context.Context) ([]ListModelProtocolsRow, error) {
+	rows, err := q.db.Query(ctx, listModelProtocols)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListModelProtocolsRow
+	for rows.Next() {
+		var i ListModelProtocolsRow
+		if err := rows.Scan(&i.ModelID, &i.Protocols); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -119,32 +125,4 @@ func (q *Queries) ModelExistsByID(ctx context.Context, requestedModelID string) 
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
-}
-
-const routeOffersModel = `-- name: RouteOffersModel :one
-SELECT EXISTS (
-    SELECT 1
-    FROM route_model_offerings o
-    JOIN models m ON m.id = o.model_id
-    WHERE o.route_id = $1
-      AND m.model_id = $2
-      AND m.status = 'enabled'
-      AND o.status = 'enabled'
-      AND o.ingress_protocol = $3
-) AS offered
-`
-
-type RouteOffersModelParams struct {
-	RouteID          int64
-	RequestedModelID string
-	IngressProtocol  string
-}
-
-// RouteOffersModel 判断 API Key 所在线路是否明确向客户提供该模型与入口协议。
-// 只承认 enabled Offering（ADR-0019）：disabled Offering 保留历史关系，但按未提供处理（404）。
-func (q *Queries) RouteOffersModel(ctx context.Context, arg RouteOffersModelParams) (bool, error) {
-	row := q.db.QueryRow(ctx, routeOffersModel, arg.RouteID, arg.RequestedModelID, arg.IngressProtocol)
-	var offered bool
-	err := row.Scan(&offered)
-	return offered, err
 }

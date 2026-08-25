@@ -215,7 +215,7 @@ func TestAttemptPermitManagerRequiresOneIntegrityEpoch(t *testing.T) {
 	store := &attemptPermitStoreStub{}
 	manager := NewAttemptPermitManager(store, attemptRuntimeFactsStub{
 		admission: runtimefacts.AdmissionRevisions{
-			Integrity: integrity, RouteRateLimits: 3, Concurrency: 4,
+			Integrity: integrity, RequestRateLimits: 3, Concurrency: 4,
 		},
 		routing: runtimefacts.RoutingRevisions{
 			Integrity:      runtimefacts.Integrity{Epoch: "epoch-b", Revision: 8},
@@ -243,7 +243,7 @@ func TestAttemptPermitManagerBuildsBoundAuthoritativeInput(t *testing.T) {
 	}}
 	manager := NewAttemptPermitManager(store, attemptRuntimeFactsStub{
 		admission: runtimefacts.AdmissionRevisions{
-			Integrity: integrity, RouteRateLimits: 3, Concurrency: 4,
+			Integrity: integrity, RequestRateLimits: 3, Concurrency: 4,
 		},
 		routing: runtimefacts.RoutingRevisions{Integrity: integrity, CircuitBreaker: 5, RoutingBalance: 6},
 	}, AttemptPermitManagerOptions{})
@@ -298,7 +298,7 @@ func TestAttemptPermitMetricsFollowPermitOwnershipAndStaleFinish(t *testing.T) {
 	}
 	manager := NewAttemptPermitManager(store, attemptRuntimeFactsStub{
 		admission: runtimefacts.AdmissionRevisions{
-			Integrity: integrity, RouteRateLimits: 3, Concurrency: 4,
+			Integrity: integrity, RequestRateLimits: 3, Concurrency: 4,
 		},
 		routing: runtimefacts.RoutingRevisions{Integrity: integrity, CircuitBreaker: 5, RoutingBalance: 6},
 	}, AttemptPermitManagerOptions{Metrics: metrics})

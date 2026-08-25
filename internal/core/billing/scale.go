@@ -6,10 +6,52 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-// ScaleCustomerPrice 把「模型基准售价」按「线路倍率」逐分项缩放，得到客户最终售价快照（DEC-026）。
+// SaleOverride 是模型配置的绝对售价向量（model_prices.sale_* / model_price_service_tiers.sale_*）。
 //
-// 客户售价 = 模型基准价（model_prices）× 线路倍率（routes.price_ratio）。每个单价分量独立相乘并
-// 四舍五入到 NUMERIC(20,10)（与 model_prices / price_snapshots 单价同精度，可直接入库快照）。
+// 语义是「整组给齐或整组留空」，由数据库 CHECK 约束保证；判定只看必填的两项（uncached input 与
+// output），可选分项为空时沿用 NULL 语义，计费侧回退到这两项。
+type SaleOverride struct {
+	UncachedInputPrice      pgtype.Numeric
+	CacheReadInputPrice     pgtype.Numeric
+	CacheWrite5mInputPrice  pgtype.Numeric
+	CacheWrite1hInputPrice  pgtype.Numeric
+	CacheWrite30mInputPrice pgtype.Numeric
+	OutputPrice             pgtype.Numeric
+	ReasoningOutputPrice    pgtype.Numeric
+}
+
+// Configured 判断该模型是否配了绝对售价。
+func (o SaleOverride) Configured() bool {
+	return o.UncachedInputPrice.Valid && o.OutputPrice.Valid
+}
+
+// ResolveCustomerPrice 两级解析客户售价：模型配了绝对售价就直接用，否则基准价 × 全局售价倍率。
+//
+// 绝对售价与倍率是互斥的两种表达，不做混合：绝对售价存在时倍率完全不参与，避免「这一项按绝对价、
+// 那一项按倍率」这种无法向管理员解释的口径。两条路径都产出可直接入库的 NUMERIC(20,10) 快照，
+// Currency / PricingUnit / FormulaVersion 一律取自基准价（绝对售价只覆盖单价，不改计价单位）。
+func ResolveCustomerPrice(base CustomerPriceSnapshot, ratio pgtype.Numeric, override SaleOverride) (CustomerPriceSnapshot, error) {
+	if !override.Configured() {
+		return ScaleCustomerPrice(base, ratio)
+	}
+	return CustomerPriceSnapshot{
+		Currency:                base.Currency,
+		PricingUnit:             base.PricingUnit,
+		FormulaVersion:          base.FormulaVersion,
+		UncachedInputPrice:      override.UncachedInputPrice,
+		CacheReadInputPrice:     override.CacheReadInputPrice,
+		CacheWrite5mInputPrice:  override.CacheWrite5mInputPrice,
+		CacheWrite1hInputPrice:  override.CacheWrite1hInputPrice,
+		CacheWrite30mInputPrice: override.CacheWrite30mInputPrice,
+		OutputPrice:             override.OutputPrice,
+		ReasoningOutputPrice:    override.ReasoningOutputPrice,
+	}, nil
+}
+
+// ScaleCustomerPrice 把「模型基准售价」按「全局售价倍率」逐分项缩放，得到客户最终售价快照。
+//
+// 客户售价 = 模型基准价（model_prices）× 全局售价倍率（gateway.model_sale_price_ratio）。每个单价分量
+// 独立相乘并四舍五入到 NUMERIC(20,10)（与 model_prices / price_snapshots 单价同精度，可直接入库快照）。
 // 未配置（NULL）的 cache / reasoning 分量保持 NULL —— 计费时由 normalizeTokenRates 回退到已缩放的
 // uncached / output，与现有口径一致。Currency / PricingUnit / FormulaVersion 原样保留。
 // ratio 无效（NaN/Inf/NULL）或为负时返回 ErrInvalidRate。

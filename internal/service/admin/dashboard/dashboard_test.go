@@ -38,7 +38,6 @@ type fakeStore struct {
 	backlog             sqlc.DashboardRadarSettlementBacklogRow
 	badChannels         []sqlc.DashboardRadarBadChannelsRow
 	providerBD          []sqlc.DashboardBreakdownProviderRow
-	routeBD             []sqlc.DashboardBreakdownRouteRow
 	channelBD           []sqlc.DashboardBreakdownChannelRow
 	channelBuckets      []sqlc.DashboardChannelSuccessBucketsRow
 	modelBD             []sqlc.DashboardBreakdownModelRow
@@ -94,9 +93,6 @@ func (s *fakeStore) DashboardBreakdownProvider(context.Context, sqlc.DashboardBr
 }
 func (s *fakeStore) CountLowBalanceProviders(context.Context) (int64, error) {
 	return s.lowBalanceProviders, nil
-}
-func (s *fakeStore) DashboardBreakdownRoute(context.Context, sqlc.DashboardBreakdownRouteParams) ([]sqlc.DashboardBreakdownRouteRow, error) {
-	return s.routeBD, nil
 }
 func (s *fakeStore) DashboardBreakdownChannel(context.Context, sqlc.DashboardBreakdownChannelParams) ([]sqlc.DashboardBreakdownChannelRow, error) {
 	return s.channelBD, nil

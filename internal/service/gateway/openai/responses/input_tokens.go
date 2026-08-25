@@ -37,7 +37,6 @@ func (s *ResponsesService) CountInputTokens(ctx context.Context, req gatewayapi.
 		ModelID:         req.Model,
 		IngressProtocol: routing.ProtocolOpenAI,
 		Endpoint:        routing.EndpointResponses,
-		RouteID:         principal.RouteID,
 	}
 	if err := s.router.ValidateChat(ctx, routeRequest); err != nil {
 		s.lifecycle.RecordRequestRejected(err)

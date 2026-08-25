@@ -211,8 +211,6 @@ const (
 	// CodeAPIKeyInvalidName 表示创建 API Key 时 name 非法。
 	CodeAPIKeyInvalidName Code = "apikey_invalid_name"
 
-	// CodeAPIKeyInvalidRoute 表示创建 API Key 时未提供合法线路（线路必填，无默认回落）。
-	CodeAPIKeyInvalidRoute Code = "apikey_invalid_route"
 
 	// CodeAPIKeyGenerateFailed 表示 API Key 随机密钥生成失败。
 	CodeAPIKeyGenerateFailed Code = "apikey_generate_failed"
@@ -256,8 +254,6 @@ const (
 	// CodeRoutingNoAvailableChannel 表示模型存在但没有可用 channel。
 	CodeRoutingNoAvailableChannel Code = "routing_no_available_channel"
 
-	// CodeRoutingRouteNotConfigured 表示 API Key 与项目均未绑定可用线路。
-	CodeRoutingRouteNotConfigured Code = "routing_route_not_configured"
 
 	// CodeRoutingStoreFailed 表示 routing 查询存储失败。
 	CodeRoutingStoreFailed Code = "routing_store_failed"

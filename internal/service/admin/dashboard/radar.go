@@ -106,14 +106,13 @@ const (
 	BreakdownProvider = "provider"
 	BreakdownChannel  = "channel"
 	BreakdownModel    = "model"
-	BreakdownRoute    = "route"
 )
 
 // BreakdownRow 是各维度表现 Top 精简行。
 type BreakdownRow struct {
 	Label          string
-	RefID          *int64 // route_id / channel_id / provider_id（model 维度为 nil）
-	Status         string // enabled/disabled（provider/channel/route）
+	RefID          *int64 // channel_id / provider_id（model 维度为 nil）
+	Status         string // enabled/disabled（provider/channel）
 	BalanceUSD     *string
 	BalanceStatus  string
 	Terminal       int64
@@ -125,7 +124,7 @@ type BreakdownRow struct {
 	CostUSD        string // 区间内该分组上游成本合计（USD，十进制字符串）
 	MarginUSD      string // 贡献利润 = 收入 − 成本（USD）
 	Latency        LatencyStats
-	LatencyP95     float64 // route/model 维度仍用 P95 单值
+	LatencyP95     float64 // model 维度仍用 P95 单值
 	AvgTPS         float64 // provider/channel 维度：成功 attempt 的加权平均输出速度
 	RecentError    string
 	ChannelCount   int64           // provider 维度：命中渠道数
@@ -280,7 +279,7 @@ func (s *Service) Radar(ctx context.Context, from, to time.Time) (RadarReport, e
 	return report, nil
 }
 
-// Breakdown 返回某维度（provider|channel|model|route）的表现 Top 精简行。
+// Breakdown 返回某维度（provider|channel|model）的表现 Top 精简行。
 func (s *Service) Breakdown(ctx context.Context, dimension string, from, to time.Time) ([]BreakdownRow, error) {
 	fromTS, toTS := tsNarg(from), tsNarg(to)
 	switch dimension {
@@ -311,36 +310,6 @@ func (s *Service) Breakdown(ctx context.Context, dimension string, from, to time
 				br.Label = "未知服务商"
 			}
 			br.Status = r.ProviderStatus
-			out = append(out, br)
-		}
-		return out, nil
-	case BreakdownRoute:
-		rows, err := s.store.DashboardBreakdownRoute(ctx, sqlc.DashboardBreakdownRouteParams{FromTime: fromTS, ToTime: toTS})
-		if err != nil {
-			return nil, storeFailed(err, "aggregate route breakdown")
-		}
-		out := make([]BreakdownRow, 0, len(rows))
-		for _, r := range rows {
-			br := BreakdownRow{
-				Tokens:     r.TokensTotal,
-				LatencyP95: r.LatencyP95,
-			}
-			applyBreakdownMoney(&br, r.RevenueUsd, r.CostUsd)
-			fillBreakdownCounts(&br, r.SucceededTotal, r.TerminalTotal, r.FailedTotal)
-			// route_id 在 DB 层 NOT NULL（线路必填），恒有值。
-			id := r.RouteID
-			br.RefID = &id
-			if r.RouteName.Valid && r.RouteName.String != "" {
-				br.Label = r.RouteName.String
-			} else {
-				br.Label = "未指定线路"
-			}
-			if r.RouteStatus.Valid {
-				br.Status = r.RouteStatus.String
-			}
-			if r.RecentErrorCode.Valid {
-				br.RecentError = r.RecentErrorCode.String
-			}
 			out = append(out, br)
 		}
 		return out, nil

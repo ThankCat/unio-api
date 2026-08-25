@@ -140,6 +140,16 @@ func (a *settingsApplier) applyOnce(ctx context.Context) {
 		a.warnDecode(ctx, appsettings.GatewayDefaultFirstTokenTimeoutKey, err)
 	}
 
+	// 全局售价倍率直接决定客户账单，解码失败必须留在告警里：
+	// Router 会保留上一个已知有效值（首次启动时为 1.0），绝不静默按 0 计费。
+	if ratio, err := appsettings.DecodeSalePriceRatioSetting(
+		a.store.Raw(ctx, appsettings.GatewayModelSalePriceRatioKey),
+	); err == nil {
+		a.router.SetSalePriceRatio(ratio)
+	} else {
+		a.warnDecode(ctx, appsettings.GatewayModelSalePriceRatioKey, err)
+	}
+
 	if a.sticky != nil {
 		if st, err := appsettings.DecodeRoutingStickySettings(a.store.Raw(ctx, appsettings.GatewayRoutingStickyKey)); err == nil {
 			a.sticky.SetConfig(st.EnabledDefault, st.TTL)

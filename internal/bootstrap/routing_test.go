@@ -12,25 +12,17 @@ import (
 )
 
 type fakeChatRouteStore struct {
-	rows []sqlc.FindRouteCandidatesRow
+	rows []sqlc.FindModelCandidatesRow
 }
 
 func (s *fakeChatRouteStore) ModelExistsByID(ctx context.Context, requestedModelID string) (bool, error) {
 	return true, nil
 }
 
-func (s *fakeChatRouteStore) RouteOffersModel(context.Context, sqlc.RouteOffersModelParams) (bool, error) {
-	return true, nil
-}
-
-func (s *fakeChatRouteStore) UserCanUseModel(ctx context.Context, arg sqlc.UserCanUseModelParams) (bool, error) {
-	return true, nil
-}
-
-func (s *fakeChatRouteStore) FindRouteCandidates(ctx context.Context, arg sqlc.FindRouteCandidatesParams) ([]sqlc.FindRouteCandidatesRow, error) {
+func (s *fakeChatRouteStore) FindModelCandidates(ctx context.Context, arg sqlc.FindModelCandidatesParams) ([]sqlc.FindModelCandidatesRow, error) {
 	// DEC-027：候选成本需可解析；本测试只验证凭据明文透传，故默认把行标记为绝对成本覆盖
 	// （channel_price_id = channel_id），让 buildChatRouteCandidate 走覆盖路径拿到零成本快照。
-	rows := make([]sqlc.FindRouteCandidatesRow, len(s.rows))
+	rows := make([]sqlc.FindModelCandidatesRow, len(s.rows))
 	copy(rows, s.rows)
 	for i := range rows {
 		if rows[i].ChannelPriceID == 0 && rows[i].ChannelCostMultiplierID == 0 {
@@ -48,24 +40,11 @@ func (s *fakeChatRouteStore) FindRouteCandidates(ctx context.Context, arg sqlc.F
 	return rows, nil
 }
 
-func (s *fakeChatRouteStore) GetRouteByID(ctx context.Context, id int64) (sqlc.Route, error) {
-	return sqlc.Route{ID: id, Name: "test", Mode: "balanced", Status: "enabled", PriceRatio: pgtype.Numeric{Int: big.NewInt(1), Exp: 0, Valid: true}}, nil
-}
-
-func (s *fakeChatRouteStore) CountRouteChannels(context.Context, int64) (int64, error) {
-	return 1, nil
-}
-
-func testRouteID() *int64 {
-	id := int64(1)
-	return &id
-}
-
 // TestNewChatRouterUsesPlaintextCredential 验证渠道凭据明文存储（产品决策）：routing 直接把
 // channels.credential 明文用作上游 API key，无解密环节。
 func TestNewChatRouterUsesPlaintextCredential(t *testing.T) {
 	router := NewChatRouter(&fakeChatRouteStore{
-		rows: []sqlc.FindRouteCandidatesRow{
+		rows: []sqlc.FindModelCandidatesRow{
 			{
 				ModelDbID:         7,
 				ProviderID:        11,
@@ -83,7 +62,6 @@ func TestNewChatRouterUsesPlaintextCredential(t *testing.T) {
 		UserID:          1,
 		ModelID:         "gpt-4.1",
 		IngressProtocol: routing.ProtocolOpenAI,
-		RouteID:         testRouteID(),
 	})
 	if err != nil {
 		t.Fatalf("PlanChat returned error: %v", err)

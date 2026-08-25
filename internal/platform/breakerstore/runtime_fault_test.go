@@ -44,8 +44,9 @@ func TestRuntimeInfrastructureFaultLatchIsSharedAndRequiresExplicitCASClear(t *t
 
 	blockedRequest := RequestAdmissionInput{
 		RequestAdmissionID: "blocked-request", Fingerprint: "blocked-request-fingerprint",
-		RouteID: 31, UserID: 41, IntegrityEpoch: testAttemptIntegrityEpoch,
-		IntegrityRevision: testAttemptIntegrityRevision, RouteRateRevision: testRouteRateRevision,
+		UserID:            41,
+		IntegrityEpoch:    testAttemptIntegrityEpoch,
+		IntegrityRevision: testAttemptIntegrityRevision, RequestRateRevision: testRequestRateRevision,
 		GlobalConcurrencyRevision: 1,
 	}
 	requestResult, err := storeB.AcquireRequestAdmission(ctx, blockedRequest)
@@ -171,8 +172,9 @@ func TestRedisInstanceProofMismatchBlocksEveryNewAdmissionBeforeResourceWrite(t 
 	}
 	requestInput := RequestAdmissionInput{
 		RequestAdmissionID: "instance-changed-request", Fingerprint: "instance-changed-request-fp",
-		RouteID: routeID, UserID: userID, IntegrityEpoch: testAttemptIntegrityEpoch,
-		IntegrityRevision: testAttemptIntegrityRevision, RouteRateRevision: testRouteRateRevision, GlobalConcurrencyRevision: 1,
+		UserID:            userID,
+		IntegrityEpoch:    testAttemptIntegrityEpoch,
+		IntegrityRevision: testAttemptIntegrityRevision, RequestRateRevision: testRequestRateRevision, GlobalConcurrencyRevision: 1,
 	}
 	requestResult, err := store.AcquireRequestAdmission(ctx, requestInput)
 	if err != nil || requestResult.Outcome != RequestStoreUnavailable {
@@ -180,9 +182,9 @@ func TestRedisInstanceProofMismatchBlocksEveryNewAdmissionBeforeResourceWrite(t 
 	}
 	if got := client.Exists(ctx,
 		store.keys.admissionRequest(requestInput.RequestAdmissionID),
-		store.keys.requestRPMBucket(routeID, userID, minuteBucket(time.Now())),
-		store.keys.requestRPDBucket(routeID, userID, dayBucket(time.Now())),
-		store.keys.requestConcurrency(routeID, userID),
+		store.keys.requestRPMBucket(userID, minuteBucket(time.Now())),
+		store.keys.requestRPDBucket(userID, dayBucket(time.Now())),
+		store.keys.requestConcurrency(userID),
 	).Val(); got != 0 {
 		t.Fatalf("instance mismatch wrote %d request admission resources", got)
 	}
@@ -318,7 +320,7 @@ func TestRuntimeFaultClearCommitValidatesAllFourCriticalControlProofs(t *testing
 			keys := []string{
 				store.keys.runtimeInfrastructureFault(),
 				store.keys.stateIntegrityMarker(),
-				store.keys.admissionRouteRate(),
+				store.keys.admissionRequestRate(),
 				store.keys.admissionGlobalConcurrency(),
 				store.keys.runtimeControlSetting("gateway.circuit_breaker"),
 				store.keys.runtimeControlSetting("gateway.routing_balance"),
@@ -426,9 +428,9 @@ func TestReconcileProviderControlPreservesBreakerState(t *testing.T) {
 func testRuntimeReadinessInput() RuntimeReadinessInput {
 	return RuntimeReadinessInput{
 		Epoch: testAttemptIntegrityEpoch, EpochRevision: testAttemptIntegrityRevision,
-		RouteRateLimitRevision: testRouteRateRevision,
-		ConcurrencyRevision:    1,
-		CircuitBreakerRevision: 1, RoutingBalanceRevision: 1,
+		RequestRateLimitRevision: testRequestRateRevision,
+		ConcurrencyRevision:      1,
+		CircuitBreakerRevision:   1, RoutingBalanceRevision: 1,
 	}
 }
 

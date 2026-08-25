@@ -22,7 +22,6 @@ type ApiKey struct {
 	UpdatedAt    pgtype.Timestamptz
 	SpendLimit   pgtype.Numeric
 	SpentTotal   pgtype.Numeric
-	RouteID      int64
 	UserID       int64
 }
 
@@ -51,7 +50,6 @@ type Channel struct {
 	ID               int64
 	ProviderID       int64
 	Name             string
-	Protocol         string
 	AdapterKey       string
 	Credential       string
 	ConfigRevision   int64
@@ -74,6 +72,8 @@ type Channel struct {
 	ArchivedAt          pgtype.Timestamptz
 	ConcurrencyLimit    pgtype.Int4
 	SupportsOpenaiFast  bool
+	// 本渠道可服务的入口协议族集合；与 adapter_key 组合后必须在代码 adapter 注册表中存在。
+	Protocols []string
 }
 
 type ChannelCostMultiplier struct {
@@ -325,6 +325,11 @@ type Model struct {
 	Source                         string
 	CreatedAt                      pgtype.Timestamptz
 	UpdatedAt                      pgtype.Timestamptz
+	// 停用直接原因：manual_delisted 管理员主动下架；binding_disabled 最后一条渠道绑定被停用或解除；channel_disabled 最后一条可用渠道被停用。enabled 时为空。
+	DisabledReason pgtype.Text
+	DisabledAt     pgtype.Timestamptz
+	// 模型系列（来自 models.dev feed 的 family），仅用于列表分组展示，空串表示未归类。
+	Family string
 }
 
 type ModelCapability struct {
@@ -382,6 +387,17 @@ type ModelCatalogLink struct {
 	UpdatedAt            pgtype.Timestamptz
 }
 
+// 模型出品方（models.dev 的 lab），与 models.owned_by 按 slug 关联，不设外键：owned_by 是 OpenAI 兼容契约字段，必须保持字符串形态。
+type ModelLab struct {
+	ID           int64
+	Slug         string
+	Name         string
+	LogoSvg      string
+	LogoSyncedAt pgtype.Timestamptz
+	CreatedAt    pgtype.Timestamptz
+	UpdatedAt    pgtype.Timestamptz
+}
+
 type ModelPrice struct {
 	ID                          int64
 	ModelID                     int64
@@ -403,6 +419,14 @@ type ModelPrice struct {
 	LongContextThreshold        pgtype.Int8
 	LongContextInputMultiplier  pgtype.Numeric
 	LongContextOutputMultiplier pgtype.Numeric
+	// 模型对外绝对售价；整组为空时回退「基准价 × 全局售价倍率」。可选分项为空按 billing fallback 归一。
+	SaleUncachedInputPrice      pgtype.Numeric
+	SaleCacheReadInputPrice     pgtype.Numeric
+	SaleCacheWrite5mInputPrice  pgtype.Numeric
+	SaleCacheWrite1hInputPrice  pgtype.Numeric
+	SaleCacheWrite30mInputPrice pgtype.Numeric
+	SaleOutputPrice             pgtype.Numeric
+	SaleReasoningOutputPrice    pgtype.Numeric
 }
 
 type ModelPriceServiceTier struct {
@@ -419,6 +443,14 @@ type ModelPriceServiceTier struct {
 	ReferenceSource         pgtype.Text
 	ReferenceCheckedAt      pgtype.Date
 	CreatedAt               pgtype.Timestamptz
+	// Fast 档对外绝对售价；整组为空时回退「该档基准价 × 全局售价倍率」。
+	SaleUncachedInputPrice      pgtype.Numeric
+	SaleCacheReadInputPrice     pgtype.Numeric
+	SaleCacheWrite5mInputPrice  pgtype.Numeric
+	SaleCacheWrite1hInputPrice  pgtype.Numeric
+	SaleCacheWrite30mInputPrice pgtype.Numeric
+	SaleOutputPrice             pgtype.Numeric
+	SaleReasoningOutputPrice    pgtype.Numeric
 }
 
 type PriceSnapshot struct {
@@ -609,7 +641,6 @@ type RequestRecord struct {
 	CompletedAt           pgtype.Timestamptz
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
-	RouteID               pgtype.Int8
 	ReasoningEffort       pgtype.Text
 	ReasoningBudgetTokens pgtype.Int4
 	ClientIp              pgtype.Text
@@ -622,43 +653,9 @@ type RequestRecord struct {
 	ClientRequestKind     pgtype.Text
 }
 
-type Route struct {
-	ID               int64
-	Name             string
-	Mode             string
-	Status           string
-	Description      pgtype.Text
-	CreatedAt        pgtype.Timestamptz
-	UpdatedAt        pgtype.Timestamptz
-	PriceRatio       pgtype.Numeric
-	RpmLimit         pgtype.Int4
-	RpdLimit         pgtype.Int4
-	ConcurrencyLimit pgtype.Int4
-	ArchivedAt       pgtype.Timestamptz
-	// Deprecated compatibility column; Sticky policy is owned by channels
-	StickyEnabled pgtype.Bool
-}
-
-type RouteChannel struct {
-	RouteID   int64
-	ChannelID int64
-}
-
-type RouteModelOffering struct {
-	RouteID         int64
-	ModelID         int64
-	IngressProtocol string
-	Status          string
-	DisabledReason  pgtype.Text
-	DisabledAt      pgtype.Timestamptz
-	CreatedAt       pgtype.Timestamptz
-	UpdatedAt       pgtype.Timestamptz
-}
-
 type RoutingDecisionTrace struct {
 	ID               int64
 	RequestRecordID  int64
-	RouteID          int64
 	Mode             string
 	RequestedModelID string
 	Protocol         string
@@ -844,6 +841,10 @@ type User struct {
 	UpdatedAt    pgtype.Timestamptz
 	Status       string
 	Uid          pgtype.UUID
+	// 用户级每分钟请求上限；NULL 继承全局默认，0 表示不限。同一用户的多把 Key 共享该配额。
+	RpmLimit         pgtype.Int4
+	RpdLimit         pgtype.Int4
+	ConcurrencyLimit pgtype.Int4
 }
 
 type UserBalance struct {
@@ -854,12 +855,4 @@ type UserBalance struct {
 	ReservedBalance pgtype.Numeric
 	CreatedAt       pgtype.Timestamptz
 	UpdatedAt       pgtype.Timestamptz
-}
-
-type UserModelPolicy struct {
-	UserID     int64
-	ModelID    int64
-	Visibility string
-	CreatedAt  pgtype.Timestamptz
-	UpdatedAt  pgtype.Timestamptz
 }

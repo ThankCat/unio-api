@@ -18,8 +18,6 @@ var (
 	// ErrInvalidName 表示创建 API Key 时 name 为空。
 	ErrInvalidName = errors.New("invalid api key name")
 
-	// ErrInvalidRoute 表示创建 API Key 时未提供合法线路（线路必填，无默认回落）。
-	ErrInvalidRoute = errors.New("invalid route id")
 )
 
 // Store 定义 API Key 创建服务需要的数据库能力。
@@ -52,8 +50,6 @@ type CreateParams struct {
 	UserID    int64
 	Name      string
 	ExpiresAt *time.Time
-	// RouteID 是 Key 绑定的线路 ID，必填（> 0）：线路必须显式绑定，无默认回落。
-	RouteID int64
 }
 
 // Create 创建新的 API Key。Plaintext 只能返回给调用方一次，不能保存到数据库。
@@ -76,14 +72,6 @@ func (s *Service) Create(ctx context.Context, params CreateParams) (*CreatedKey,
 		)
 	}
 
-	// 线路必填：API Key 必须显式绑定一条线路（无默认线路回落）。DB NOT NULL 是最终兜底。
-	if params.RouteID <= 0 {
-		return nil, failure.Wrap(
-			failure.CodeAPIKeyInvalidRoute,
-			ErrInvalidRoute,
-			failure.WithMessage(ErrInvalidRoute.Error()),
-		)
-	}
 
 	generatedKey, err := Generate()
 	if err != nil {
@@ -106,7 +94,6 @@ func (s *Service) Create(ctx context.Context, params CreateParams) (*CreatedKey,
 		KeyHash:      generatedKey.Hash,
 		KeyPlaintext: pgtype.Text{String: generatedKey.Plaintext, Valid: true},
 		ExpiresAt:    expiresAt,
-		RouteID:      params.RouteID,
 	}
 	storedKey, err := s.store.CreateAPIKey(ctx, storeParams)
 	if err != nil {

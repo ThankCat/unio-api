@@ -11,10 +11,9 @@ local marker = KEYS[1]
 local token_key = KEYS[2]
 local conc_key = KEYS[3]
 local rid = ARGV[1]
-local route_id = ARGV[2]
-local user_id = ARGV[3]
-local expected_epoch = ARGV[4]
-local expected_epoch_rev = ARGV[5]
+local user_id = ARGV[2]
+local expected_epoch = ARGV[3]
+local expected_epoch_rev = ARGV[4]
 local now = now_ms()
 
 if key_type(marker) ~= 'hash' then return { 'runtime_state_lost' } end
@@ -34,8 +33,7 @@ then
   return { 'stale_integrity_epoch' }
 end
 if
-  redis.call('HGET', token_key, 'route_id') ~= route_id
-  or redis.call('HGET', token_key, 'user_id') ~= user_id
+  redis.call('HGET', token_key, 'user_id') ~= user_id
   or redis.call('HGET', token_key, 'conc_key') ~= conc_key
 then
   return { 'conflict' }

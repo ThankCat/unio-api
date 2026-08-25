@@ -113,14 +113,11 @@ func (s *fakeStickyStore) ClearIfCurrent(
 }
 
 func stickyResolveParams(sessionKey string) StickyResolveParams {
-	routeID := int64(7)
 	return StickyResolveParams{
 		Protocol:   routing.ProtocolOpenAI,
-		RouteID:    &routeID,
 		APIKeyID:   42,
 		ModelID:    31,
 		SessionKey: sessionKey,
-		Mode:       "balanced",
 		Candidates: []routing.ChatRouteCandidate{
 			stickyCandidate(1, nil, nil), stickyCandidate(7, nil, nil),
 			stickyCandidate(101, nil, nil), stickyCandidate(202, nil, nil),
@@ -427,27 +424,27 @@ func TestStickyResolveClearsBindingWhenChannelDisablesSticky(t *testing.T) {
 
 // TestStickyRedisKeyIncludesModelAndHashesSession 冻结 §10.1 的 key 形状。
 func TestStickyRedisKeyIncludesModelAndHashesSession(t *testing.T) {
-	key := stickyRedisKey(routing.ProtocolOpenAI, 7, 42, 31, "raw-session-key")
-	if !strings.HasPrefix(key, "sticky:openai:7:42:31:") {
+	key := stickyRedisKey(routing.ProtocolOpenAI, 42, 31, "raw-session-key")
+	if !strings.HasPrefix(key, "sticky:openai:42:31:") {
 		t.Fatalf("unexpected key prefix: %s", key)
 	}
 	if strings.Contains(key, "raw-session-key") {
 		t.Fatalf("raw session key must be hashed, got %s", key)
 	}
-	if hash := strings.TrimPrefix(key, "sticky:openai:7:42:31:"); len(hash) != 32 {
+	if hash := strings.TrimPrefix(key, "sticky:openai:42:31:"); len(hash) != 32 {
 		t.Fatalf("expected a 32-hex hash, got %q (len %d)", hash, len(hash))
 	}
-	if key != stickyRedisKey(routing.ProtocolOpenAI, 7, 42, 31, "raw-session-key") {
+	if key != stickyRedisKey(routing.ProtocolOpenAI, 42, 31, "raw-session-key") {
 		t.Fatal("key derivation must be deterministic")
 	}
 	// 同一会话换模型必须落到不同 key，避免继承与新模型无关的渠道选择。
-	if key == stickyRedisKey(routing.ProtocolOpenAI, 7, 42, 32, "raw-session-key") {
+	if key == stickyRedisKey(routing.ProtocolOpenAI, 42, 32, "raw-session-key") {
 		t.Fatal("different model must yield a different redis key")
 	}
-	if key == stickyRedisKey(routing.ProtocolOpenAI, 7, 43, 31, "raw-session-key") {
+	if key == stickyRedisKey(routing.ProtocolOpenAI, 43, 31, "raw-session-key") {
 		t.Fatal("different api key must yield a different redis key")
 	}
-	if key == stickyRedisKey(routing.ProtocolAnthropic, 7, 42, 31, "raw-session-key") {
+	if key == stickyRedisKey(routing.ProtocolAnthropic, 42, 31, "raw-session-key") {
 		t.Fatal("different protocol must yield a different redis key")
 	}
 }

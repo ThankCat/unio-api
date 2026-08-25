@@ -28,7 +28,7 @@ func TestRuntimeControlTelemetryPublishesRecoveryFacts(t *testing.T) {
 
 	runtimeOperation := sqlc.RuntimeControlOperation{
 		Kind:            runtimecontrol.KindAppSetting,
-		SettingKey:      pgtype.Text{String: appsettings.GatewayRouteRateLimitDefaultsKey, Valid: true},
+		SettingKey:      pgtype.Text{String: appsettings.GatewayRequestRateLimitDefaultsKey, Valid: true},
 		CurrentRevision: 2,
 		NextRevision:    3,
 		PayloadHash:     "0123456789abcdef",
@@ -57,8 +57,8 @@ func TestRuntimeControlTelemetryPublishesRecoveryFacts(t *testing.T) {
 	telemetry.observeProviderPending(envelope, providerOperation.age)
 	body := scrapeRuntimeControlMetrics(t, recorder)
 	for _, want := range []string{
-		`unio_gateway_runtime_control_pending{target="route_rate"} 1`,
-		`unio_gateway_runtime_control_pending_seconds{target="route_rate"} 5`,
+		`unio_gateway_runtime_control_pending{target="request_rate"} 1`,
+		`unio_gateway_runtime_control_pending_seconds{target="request_rate"} 5`,
 		`unio_gateway_origin_revision_fence{provider_id="23",state="pending"} 1`,
 		`unio_gateway_origin_revision_pending_seconds{provider_id="23"} 7`,
 	} {
@@ -69,12 +69,12 @@ func TestRuntimeControlTelemetryPublishesRecoveryFacts(t *testing.T) {
 
 	telemetry.passSucceeded(observation)
 	telemetry.ProviderControlReconciled(23, 2, 1, "enabled", true)
-	telemetry.criticalSettingReconciled(appsettings.GatewayRouteRateLimitDefaultsKey, 3, true)
+	telemetry.criticalSettingReconciled(appsettings.GatewayRequestRateLimitDefaultsKey, 3, true)
 	telemetry.channelControlReconciled(42, 4, true)
 	body = scrapeRuntimeControlMetrics(t, recorder)
 	for _, want := range []string{
-		`unio_gateway_runtime_control_pending{target="route_rate"} 0`,
-		`unio_gateway_runtime_control_recovery_total{result="committed",target="route_rate"} 1`,
+		`unio_gateway_runtime_control_pending{target="request_rate"} 0`,
+		`unio_gateway_runtime_control_recovery_total{result="committed",target="request_rate"} 1`,
 		`unio_gateway_runtime_control_recovery_total{result="restored",target="channel_capacity"} 1`,
 		`unio_gateway_origin_revision_fence{provider_id="23",state="active"} 1`,
 		`unio_gateway_origin_revision_pending_seconds{provider_id="23"} 0`,

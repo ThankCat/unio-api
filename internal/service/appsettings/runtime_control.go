@@ -11,7 +11,7 @@ import (
 
 // RuntimeControlRestorer 是 Admin/Worker 启动恢复关键 setting control 所需的最小能力。
 type RuntimeControlRestorer interface {
-	RouteRateLimitControl() breakerstore.ControlTarget
+	RequestRateLimitControl() breakerstore.ControlTarget
 	GlobalConcurrencyControl() breakerstore.ControlTarget
 	SettingControl(settingKey string) breakerstore.ControlTarget
 	RestoreMissingControl(ctx context.Context, target breakerstore.ControlTarget, revision int64, payload string) (bool, error)
@@ -20,7 +20,7 @@ type RuntimeControlRestorer interface {
 }
 
 var runtimeControlSettingKeys = [...]string{
-	GatewayRouteRateLimitDefaultsKey,
+	GatewayRequestRateLimitDefaultsKey,
 	GatewayConcurrencyDefaultsKey,
 	GatewayCircuitBreakerKey,
 	GatewayRoutingBalanceKey,

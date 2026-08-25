@@ -79,20 +79,6 @@ func createIdentity(t *testing.T, ctx context.Context, queries *sqlc.Queries) te
 		t.Fatalf("generate api key: %v", err)
 	}
 
-	// 线路必填：先建一条线路供 API Key 绑定（route_id 现为 NOT NULL）。
-	var priceRatio pgtype.Numeric
-	if err := priceRatio.Scan("1"); err != nil {
-		t.Fatalf("scan price ratio: %v", err)
-	}
-	route, err := queries.CreateRoute(ctx, sqlc.CreateRouteParams{
-		Name:       fmt.Sprintf("requestlog-route-%d", suffix),
-		Mode:       "balanced",
-		Status:     "enabled",
-		PriceRatio: priceRatio,
-	})
-	if err != nil {
-		t.Fatalf("create route: %v", err)
-	}
 
 	key, err := queries.CreateAPIKey(ctx, sqlc.CreateAPIKeyParams{
 		UserID:    user.ID,
@@ -100,7 +86,6 @@ func createIdentity(t *testing.T, ctx context.Context, queries *sqlc.Queries) te
 		KeyPrefix: generatedKey.Prefix,
 		KeyHash:   generatedKey.Hash,
 		ExpiresAt: pgtype.Timestamptz{Valid: false},
-		RouteID:   route.ID,
 	})
 	if err != nil {
 		t.Fatalf("create api key: %v", err)
@@ -130,8 +115,8 @@ func createProviderChannel(t *testing.T, ctx context.Context, tx pgx.Tx) (int64,
 
 	var channelID int64
 	err = tx.QueryRow(ctx, `
-			INSERT INTO channels (provider_id, name, protocol, adapter_key, credential, status, priority, response_timeout_ms)
-		VALUES ($1, $2, 'openai', 'openai', $3, $4, $5, $6)
+			INSERT INTO channels (provider_id, name, protocols, adapter_key, credential, status, priority, response_timeout_ms)
+		VALUES ($1, $2, ARRAY['openai']::text[], 'openai', ARRAY[$3]::text[], $4, $5, $6)
 		RETURNING id
 	`, providerID, fmt.Sprintf("requestlog-channel-%d", suffix), "sk-requestlog-test", "enabled", 10, nil).Scan(&channelID)
 	if err != nil {

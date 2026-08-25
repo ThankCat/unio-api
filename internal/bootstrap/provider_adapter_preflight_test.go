@@ -59,8 +59,8 @@ func TestProviderAdapterPreflightAcceptsRegisteredDualProtocolBindings(t *testin
 	preflight := NewProviderAdapterPreflight(
 		&fakeProviderAdapterStore{
 			rows: []sqlc.ListEnabledChannelAdaptersRow{
-				{ChannelID: 1, Protocol: "openai", AdapterKey: "deepseek", ProviderSlug: "deepseek"},
-				{ChannelID: 2, Protocol: "anthropic", AdapterKey: "deepseek", ProviderSlug: "deepseek"},
+				{ChannelID: 1, Protocols: []string{"openai"}, AdapterKey: "deepseek", ProviderSlug: "deepseek"},
+				{ChannelID: 2, Protocols: []string{"anthropic"}, AdapterKey: "deepseek", ProviderSlug: "deepseek"},
 			},
 		},
 		&fakeAdapterCapabilityRegistry{
@@ -107,7 +107,7 @@ func TestProviderAdapterPreflightAcceptsPartialCapabilityBinding(t *testing.T) {
 	preflight := NewProviderAdapterPreflight(
 		&fakeProviderAdapterStore{
 			rows: []sqlc.ListEnabledChannelAdaptersRow{
-				{ChannelID: 42, Protocol: "openai", AdapterKey: "openai", ProviderSlug: "openai"},
+				{ChannelID: 42, Protocols: []string{"openai"}, AdapterKey: "openai", ProviderSlug: "openai"},
 			},
 		},
 		&fakeAdapterCapabilityRegistry{
@@ -126,7 +126,7 @@ func TestProviderAdapterPreflightRejectsUnknownBinding(t *testing.T) {
 	preflight := NewProviderAdapterPreflight(
 		&fakeProviderAdapterStore{
 			rows: []sqlc.ListEnabledChannelAdaptersRow{
-				{ChannelID: 99, Protocol: "openai", AdapterKey: "deepseek", ProviderSlug: "deepseek"},
+				{ChannelID: 99, Protocols: []string{"openai"}, AdapterKey: "deepseek", ProviderSlug: "deepseek"},
 			},
 		},
 		&fakeAdapterCapabilityRegistry{},
@@ -146,7 +146,7 @@ func TestProviderAdapterPreflightDoesNotResolveSameKeyAcrossProtocols(t *testing
 	preflight := NewProviderAdapterPreflight(
 		&fakeProviderAdapterStore{
 			rows: []sqlc.ListEnabledChannelAdaptersRow{
-				{ChannelID: 101, Protocol: "anthropic", AdapterKey: "deepseek", ProviderSlug: "deepseek"},
+				{ChannelID: 101, Protocols: []string{"anthropic"}, AdapterKey: "deepseek", ProviderSlug: "deepseek"},
 			},
 		},
 		&fakeAdapterCapabilityRegistry{

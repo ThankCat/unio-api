@@ -1,11 +1,15 @@
-// Package supply 实现 ADR-0019 的供给影响预览与显式联合操作基础设施：
+// Package supply 实现供给影响预览与显式联合操作基础设施。
 //
-//   - 结构支撑串行化：所有改变某个 Model 结构支撑事实的写事务，先按 model_id 升序
-//     FOR UPDATE 锁定 Model 行，再在锁内计算影响或校验支撑；
-//   - 影响计算：状态变化前反查可能失去配置支撑或运行候选的 enabled Offering；
-//   - 影响指纹：由影响预览的相关状态集合计算 sha256 指纹，确认请求必须携带一致指纹；
-//   - 确认契约：需要二次确认的操作返回 ConfirmationRequired（HTTP 层渲染为 409），
-//     确认请求必须明确携带需要跨层修改的 Offering；空选择合法且是默认值。
+// 供给的根是 Model：模型 enabled 即对外可售，其背后必定有至少一条可用渠道——
+// 这条不变量是整个包存在的理由。任何会让某个模型失去最后一条支撑的写操作，都不能默默执行，
+// 否则客户会拿到「列表里有、一调 503」的结果。
+//
+// 因此每个收缩型写操作都走同一套流程：
+//   - 串行化：先按 model_id 升序 FOR UPDATE 锁定受影响的 Model 行，避免并发写各自看到过期事实；
+//   - 影响预览：在锁内反查哪些 enabled 模型会失去最后支撑；
+//   - 影响指纹：对预览内容取 sha256，确认请求必须携带一致指纹，保证管理员看到的就是即将发生的；
+//   - 确认契约：需要确认时返回 ConfirmationRequired（HTTP 层渲染为 409），
+//     管理员明确选择要一并停用哪些模型；空选择合法且是默认值（即接受这些模型转为 503）。
 package supply
 
 import (
@@ -21,62 +25,39 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 )
 
-// route_model_offerings.disabled_reason 受控枚举。ADR-0018 遗留原因仅用于历史解释，
-// 新联合操作使用 manual_unselected、binding_disabled 或 model_delisted。
+// models.disabled_reason 受控枚举，与数据库 CHECK 约束保持一致。
 const (
-	// ReasonManualUnselected 管理员在 Route 中主动取消勾选该 Model 与协议组合。
-	ReasonManualUnselected = "manual_unselected"
-	// ReasonModelDisabled 旧版 Model 级联停用留下的历史原因。
-	ReasonModelDisabled = "model_disabled"
-	// ReasonBindingDisabled Route 内最后一条同模型、同协议 enabled Binding 被停用或解除。
+	// ReasonManualDelisted 管理员主动下架该模型。
+	ReasonManualDelisted = "manual_delisted"
+	// ReasonBindingDisabled 该模型最后一条渠道绑定被停用或解除。
 	ReasonBindingDisabled = "binding_disabled"
-	// ReasonChannelDisabled 旧版 Channel 级联停用留下的历史原因。
+	// ReasonChannelDisabled 该模型最后一条可用渠道被停用。
 	ReasonChannelDisabled = "channel_disabled"
-	// ReasonRouteChannelRemoved 旧版 Route 换池级联留下的历史原因。
-	ReasonRouteChannelRemoved = "route_channel_removed"
-	// ReasonChannelProtocolChanged 旧版 Channel 协议变更级联留下的历史原因。
-	ReasonChannelProtocolChanged = "channel_protocol_changed"
-	// ReasonMigrationBackfill 一次切换迁移按当时事实回填。
-	ReasonMigrationBackfill = "migration_backfill"
-	// ReasonModelDelisted 管理员通过全局下架联合操作明确停止该 Offering。
-	ReasonModelDelisted = "model_delisted"
 )
 
-// Offering 状态。
-const (
-	OfferingEnabled  = "enabled"
-	OfferingDisabled = "disabled"
-)
-
-// AffectedOffering 是影响预览中将停止（或恢复）售卖的一条 Route+Model+协议组合。
-type AffectedOffering struct {
-	RouteID          int64
-	RouteName        string
-	RouteStatus      string
+// AffectedModel 是影响预览中将失去供给的一个模型。
+type AffectedModel struct {
 	ModelID          int64
 	PublicModelID    string
 	ModelDisplayName string
-	IngressProtocol  string
-	// KeptResult 是只执行目标层操作、保留 Offering 时对新请求的预期结果。
+	// KeptResult 是只执行目标层操作、保留模型 enabled 时对新请求的预期结果。
 	KeptResult string
-	// SelectedResult 是同时停止该 Offering 时对新请求的预期结果。
+	// SelectedResult 是同时停用该模型时对新请求的预期结果。
 	SelectedResult string
 }
 
-// OfferingSelection 是联合操作中由管理员明确选择的一条 Offering。
-type OfferingSelection struct {
-	RouteID         int64
-	ModelID         int64
-	IngressProtocol string
+// ModelSelection 是联合操作中由管理员明确选择一并停用的模型。
+type ModelSelection struct {
+	ModelID int64
 }
 
-// Impact 是一次供给写操作在 Model 锁内计算出的影响预览。AffectedOfferings 只表示
-// 潜在影响范围，不表示这些 Offering 会被自动修改。
+// Impact 是一次供给写操作在 Model 锁内计算出的影响预览。
+// AffectedModels 只表示潜在影响范围，不表示这些模型会被自动修改。
 type Impact struct {
 	// Kind 标识操作类型，参与指纹计算，避免同一影响集合跨操作复用指纹。
 	Kind string
-	// AffectedOfferings 是本次操作可能改变客户结果的 Offering 集合。
-	AffectedOfferings []AffectedOffering
+	// AffectedModels 是本次操作可能改变客户结果的模型集合。
+	AffectedModels []AffectedModel
 	// RemainingEnabledBindings 是排除本次失效目标后全局剩余的 enabled Binding 数
 	// （仅 Binding 层操作有意义）。
 	RemainingEnabledBindings int64
@@ -88,18 +69,17 @@ type Impact struct {
 
 // RequiresConfirmation 判断是否存在需要管理员确认的客户影响。
 func (im Impact) RequiresConfirmation() bool {
-	return len(im.AffectedOfferings) > 0
+	return len(im.AffectedModels) > 0
 }
 
 // Fingerprint 由影响预览的相关状态集合计算稳定指纹。指纹只覆盖预览内容本身：
 // 并发变化若不改变影响集合，则无需重新确认；改变影响集合必然改变指纹。
 func (im Impact) Fingerprint() string {
-	lines := make([]string, 0, len(im.AffectedOfferings))
-	for _, ao := range im.AffectedOfferings {
+	lines := make([]string, 0, len(im.AffectedModels))
+	for _, am := range im.AffectedModels {
 		lines = append(lines, fmt.Sprintf(
-			"offering|%d|%s|%d|%s|%s|%s|%s",
-			ao.RouteID, ao.RouteStatus, ao.ModelID, ao.IngressProtocol, ao.PublicModelID,
-			ao.KeptResult, ao.SelectedResult,
+			"model|%d|%s|%s|%s",
+			am.ModelID, am.PublicModelID, am.KeptResult, am.SelectedResult,
 		))
 	}
 	sort.Strings(lines)
@@ -111,11 +91,11 @@ func (im Impact) Fingerprint() string {
 	return hex.EncodeToString(sum[:])
 }
 
-// Confirmation 是写请求携带的二次确认参数。SelectedOfferings 为空表示只修改目标层。
+// Confirmation 是写请求携带的二次确认参数。SelectedModels 为空表示只修改目标层。
 type Confirmation struct {
 	Confirm             bool
 	ExpectedFingerprint string
-	SelectedOfferings   []OfferingSelection
+	SelectedModels      []ModelSelection
 }
 
 // ConfirmationRequired 表示操作需要管理员携带影响指纹二次确认；HTTP 层渲染为 409。
@@ -137,19 +117,19 @@ func Authorize(im Impact, code, message string, c Confirmation) error {
 	if !c.Confirm || c.ExpectedFingerprint != im.Fingerprint() {
 		return &ConfirmationRequired{Code: code, Message: message, Impact: im}
 	}
-	allowed := make(map[offeringKey]struct{}, len(im.AffectedOfferings))
-	for _, ao := range im.AffectedOfferings {
-		allowed[offeringKey{ao.RouteID, ao.ModelID, ao.IngressProtocol}] = struct{}{}
+	allowed := make(map[int64]struct{}, len(im.AffectedModels))
+	for _, am := range im.AffectedModels {
+		allowed[am.ModelID] = struct{}{}
 	}
-	for _, selected := range c.SelectedOfferings {
-		if _, ok := allowed[offeringKey{selected.RouteID, selected.ModelID, selected.IngressProtocol}]; !ok {
+	for _, selected := range c.SelectedModels {
+		if _, ok := allowed[selected.ModelID]; !ok {
 			return &ConfirmationRequired{Code: code, Message: message, Impact: im}
 		}
 	}
 	return nil
 }
 
-// LockModels 按 model_id 升序对给定 Model 行取得 FOR UPDATE 锁（结构支撑串行化）。
+// LockModels 按 model_id 升序对给定 Model 行取得 FOR UPDATE 锁（供给变更串行化）。
 // 空集合是 no-op。调用方必须已处于事务中。
 func LockModels(ctx context.Context, q *sqlc.Queries, modelIDs []int64) error {
 	ids := dedupeSorted(modelIDs)
@@ -176,15 +156,15 @@ func LockModelsForChannel(ctx context.Context, q *sqlc.Queries, channelID int64)
 }
 
 // BindingImpact 在锁内计算停用/解除一条 enabled Binding 的影响：
-// Route 级反查失去最后结构支撑的 Offering + 全局判断是否为最后一条 enabled Binding。
+// 反查会失去最后一条配置支撑的模型，并全局判断这是否是该模型的最后一条 enabled Binding。
 // 调用方必须先确认目标 Binding 当前为 enabled，并已锁定该 Model。
 func BindingImpact(ctx context.Context, q *sqlc.Queries, channelID, modelID int64) (Impact, error) {
-	rows, err := q.ListOfferingsLosingSupport(ctx, sqlc.ListOfferingsLosingSupportParams{
+	rows, err := q.ListModelsLosingConfiguredSupply(ctx, sqlc.ListModelsLosingConfiguredSupplyParams{
 		ChannelID: channelID,
 		ModelID:   pgtype.Int8{Int64: modelID, Valid: true},
 	})
 	if err != nil {
-		return Impact{}, fmt.Errorf("compute binding route impact: %w", err)
+		return Impact{}, fmt.Errorf("compute binding supply impact: %w", err)
 	}
 	remaining, err := q.CountOtherEnabledBindingsForModel(ctx, sqlc.CountOtherEnabledBindingsForModelParams{
 		ModelID:          modelID,
@@ -195,103 +175,115 @@ func BindingImpact(ctx context.Context, q *sqlc.Queries, channelID, modelID int6
 	}
 	return Impact{
 		Kind:                     "channel_model_disable",
-		AffectedOfferings:        affectedFromLosingSupport(rows),
+		AffectedModels:           affectedFromLosingConfigured(rows),
 		RemainingEnabledBindings: remaining,
 	}, nil
 }
 
-// ChannelImpact 在锁内计算暂停 Channel 流量后可能失去最后基础运行候选的 Offering。
-// Binding、Model 与 Offering 配置行均不改写。
-func ChannelImpact(ctx context.Context, q *sqlc.Queries, channelID int64) (Impact, error) {
-	rows, err := q.ListOfferingsLosingRuntimeChannel(ctx, channelID)
+// ChannelBulkImpact 在锁内计算解除/停用某 Channel 全部 enabled Binding 的影响。
+// 与 BindingImpact 的区别只在范围：这里目标渠道上所有绑定同时失效。
+func ChannelBulkImpact(ctx context.Context, q *sqlc.Queries, channelID int64) (Impact, error) {
+	rows, err := q.ListModelsLosingConfiguredSupply(ctx, sqlc.ListModelsLosingConfiguredSupplyParams{
+		ChannelID: channelID,
+	})
 	if err != nil {
-		return Impact{}, fmt.Errorf("compute channel route impact: %w", err)
+		return Impact{}, fmt.Errorf("compute channel binding supply impact: %w", err)
 	}
 	return Impact{
-		Kind:              "channel_disable",
-		AffectedOfferings: affectedFromLosingRuntime(rows),
+		Kind:           "channel_bindings_disable",
+		AffectedModels: affectedFromLosingConfigured(rows),
 	}, nil
 }
 
-// ModelImpact 在锁内计算全局暂停 Model 的客户影响：全部 enabled Offering 与供给范围统计。
-func ModelImpact(ctx context.Context, q *sqlc.Queries, modelID int64) (Impact, error) {
-	offerings, err := q.ListEnabledOfferingsForModel(ctx, modelID)
+// ChannelImpact 在锁内计算暂停 Channel 流量后可能失去最后运行候选的模型。
+// Binding 与 Model 配置行均不改写。
+func ChannelImpact(ctx context.Context, q *sqlc.Queries, channelID int64) (Impact, error) {
+	rows, err := q.ListModelsLosingRuntimeSupply(ctx, channelID)
 	if err != nil {
-		return Impact{}, fmt.Errorf("list enabled offerings for model: %w", err)
+		return Impact{}, fmt.Errorf("compute channel runtime impact: %w", err)
 	}
+	return Impact{
+		Kind:           "channel_disable",
+		AffectedModels: affectedFromLosingRuntime(rows),
+	}, nil
+}
+
+// ModelImpact 在锁内计算全局下架 Model 的客户影响与供给范围统计。
+// 目标模型自身就是唯一受影响对象，所以这里不需要反查：下架即 404。
+func ModelImpact(ctx context.Context, q *sqlc.Queries, modelID int64, publicModelID, displayName string) (Impact, error) {
 	counts, err := q.ModelDisableImpactCounts(ctx, modelID)
 	if err != nil {
-		return Impact{}, fmt.Errorf("count model disable cascade: %w", err)
-	}
-	affected := make([]AffectedOffering, 0, len(offerings))
-	for _, row := range offerings {
-		affected = append(affected, AffectedOffering{
-			RouteID:          row.RouteID,
-			RouteName:        row.RouteName,
-			RouteStatus:      row.RouteStatus,
-			ModelID:          row.ModelID,
-			PublicModelID:    row.PublicModelID,
-			ModelDisplayName: row.ModelDisplayName,
-			IngressProtocol:  row.IngressProtocol,
-			KeptResult:       "404",
-			SelectedResult:   "404",
-		})
+		return Impact{}, fmt.Errorf("count model disable impact: %w", err)
 	}
 	return Impact{
-		Kind:              "model_disable",
-		AffectedOfferings: affected,
-		EnabledBindings:   counts.EnabledBindings,
-		Channels:          counts.Channels,
-		Providers:         counts.Providers,
+		Kind: "model_disable",
+		AffectedModels: []AffectedModel{{
+			ModelID:          modelID,
+			PublicModelID:    publicModelID,
+			ModelDisplayName: displayName,
+			KeptResult:       "404",
+			SelectedResult:   "404",
+		}},
+		EnabledBindings: counts.EnabledBindings,
+		Channels:        counts.Channels,
+		Providers:       counts.Providers,
 	}, nil
 }
 
-// DisableSelectedOfferings 只把管理员明确选择且属于最新影响范围的 Offering 置 disabled。
+// DisableSelectedModels 只停用管理员明确选择且属于最新影响范围的模型。
 // 必须与影响计算处于同一事务、同一 Model 锁内；锁保证集合在提交前不会漂移。
-func DisableSelectedOfferings(ctx context.Context, q *sqlc.Queries, im Impact, c Confirmation, reason string) error {
-	available := make(map[offeringKey]AffectedOffering, len(im.AffectedOfferings))
-	for _, ao := range im.AffectedOfferings {
-		available[offeringKey{ao.RouteID, ao.ModelID, ao.IngressProtocol}] = ao
+func DisableSelectedModels(ctx context.Context, q *sqlc.Queries, im Impact, c Confirmation, reason string) error {
+	available := make(map[int64]AffectedModel, len(im.AffectedModels))
+	for _, am := range im.AffectedModels {
+		available[am.ModelID] = am
 	}
-	seen := make(map[offeringKey]struct{}, len(c.SelectedOfferings))
-	for _, selected := range c.SelectedOfferings {
-		key := offeringKey{selected.RouteID, selected.ModelID, selected.IngressProtocol}
-		if _, duplicate := seen[key]; duplicate {
+	seen := make(map[int64]struct{}, len(c.SelectedModels))
+	for _, selected := range c.SelectedModels {
+		if _, duplicate := seen[selected.ModelID]; duplicate {
 			continue
 		}
-		seen[key] = struct{}{}
-		ao, ok := available[key]
+		seen[selected.ModelID] = struct{}{}
+		am, ok := available[selected.ModelID]
 		if !ok {
-			return fmt.Errorf("selected offering is outside the current impact")
+			return fmt.Errorf("selected model is outside the current impact")
 		}
-		affected, err := q.DisableRouteModelOffering(ctx, sqlc.DisableRouteModelOfferingParams{
-			Reason:          pgtype.Text{String: reason, Valid: true},
-			RouteID:         ao.RouteID,
-			ModelID:         ao.ModelID,
-			IngressProtocol: ao.IngressProtocol,
+		affected, err := q.DisableModelSupply(ctx, sqlc.DisableModelSupplyParams{
+			ID:     am.ModelID,
+			Reason: pgtype.Text{String: reason, Valid: true},
 		})
 		if err != nil {
-			return fmt.Errorf("disable route model offering: %w", err)
+			return fmt.Errorf("disable model supply: %w", err)
 		}
 		if affected == 0 {
-			return fmt.Errorf("offering route=%d model=%d protocol=%s drifted during supply transaction",
-				ao.RouteID, ao.ModelID, ao.IngressProtocol)
+			return fmt.Errorf("model %d drifted during supply transaction", am.ModelID)
 		}
 	}
 	return nil
 }
 
-func affectedFromLosingSupport(rows []sqlc.ListOfferingsLosingSupportRow) []AffectedOffering {
-	out := make([]AffectedOffering, 0, len(rows))
+// EnsureRuntimeSupply 是启用模型的前置守卫：没有可用渠道就不允许 enabled，
+// 否则「enabled 即可调用」这条不变量当场被打破。必须在 Model 锁内调用。
+func EnsureRuntimeSupply(ctx context.Context, q *sqlc.Queries, modelID int64) error {
+	supported, err := q.ModelHasRuntimeSupply(ctx, modelID)
+	if err != nil {
+		return fmt.Errorf("check model runtime supply: %w", err)
+	}
+	if !supported {
+		return ErrNoRuntimeSupply
+	}
+	return nil
+}
+
+// ErrNoRuntimeSupply 表示模型当前没有任何可用渠道，不能启用。
+var ErrNoRuntimeSupply = fmt.Errorf("model has no usable channel")
+
+func affectedFromLosingConfigured(rows []sqlc.ListModelsLosingConfiguredSupplyRow) []AffectedModel {
+	out := make([]AffectedModel, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, AffectedOffering{
-			RouteID:          row.RouteID,
-			RouteName:        row.RouteName,
-			RouteStatus:      row.RouteStatus,
+		out = append(out, AffectedModel{
 			ModelID:          row.ModelID,
 			PublicModelID:    row.PublicModelID,
 			ModelDisplayName: row.ModelDisplayName,
-			IngressProtocol:  row.IngressProtocol,
 			KeptResult:       "503",
 			SelectedResult:   "404",
 		})
@@ -299,28 +291,18 @@ func affectedFromLosingSupport(rows []sqlc.ListOfferingsLosingSupportRow) []Affe
 	return out
 }
 
-func affectedFromLosingRuntime(rows []sqlc.ListOfferingsLosingRuntimeChannelRow) []AffectedOffering {
-	out := make([]AffectedOffering, 0, len(rows))
+func affectedFromLosingRuntime(rows []sqlc.ListModelsLosingRuntimeSupplyRow) []AffectedModel {
+	out := make([]AffectedModel, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, AffectedOffering{
-			RouteID:          row.RouteID,
-			RouteName:        row.RouteName,
-			RouteStatus:      row.RouteStatus,
+		out = append(out, AffectedModel{
 			ModelID:          row.ModelID,
 			PublicModelID:    row.PublicModelID,
 			ModelDisplayName: row.ModelDisplayName,
-			IngressProtocol:  row.IngressProtocol,
 			KeptResult:       "503",
 			SelectedResult:   "404",
 		})
 	}
 	return out
-}
-
-type offeringKey struct {
-	routeID  int64
-	modelID  int64
-	protocol string
 }
 
 func dedupeSorted(ids []int64) []int64 {

@@ -121,7 +121,6 @@ func TestPositiveBalanceGateProtocolResponses(t *testing.T) {
 }
 
 func TestPositiveBalanceGateRunsAfterAdmissionAndFinalizesRejection(t *testing.T) {
-	routeID := int64(9)
 	events := make([]string, 0, 4)
 	session := &orderedAdmissionSession{events: &events}
 	acquirer := &orderedAdmissionAcquirer{events: &events, session: session}
@@ -138,7 +137,7 @@ func TestPositiveBalanceGateRunsAfterAdmissionAndFinalizesRejection(t *testing.T
 		}),
 	))
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-	req = req.WithContext(auth.ContextWithAPIKeyPrincipal(req.Context(), &auth.APIKeyPrincipal{UserID: 42, RouteID: &routeID}))
+	req = req.WithContext(auth.ContextWithAPIKeyPrincipal(req.Context(), &auth.APIKeyPrincipal{UserID: 42}))
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 

@@ -70,8 +70,8 @@ func TestReconcileAllRuntimeControlsRestoresStableEndpointAndChannel(t *testing.
 		t.Fatalf("seed provider: %v", err)
 	}
 	if err := pool.QueryRow(ctx, `INSERT INTO channels (
-		provider_id, name, protocol, adapter_key, credential, status, priority
-	) VALUES ($1, 'primary', 'openai', 'openai', 'sk-runtime-recovery', 'enabled', 10)
+		provider_id, name, protocols, adapter_key, credential, status, priority
+	) VALUES ($1, 'primary', ARRAY['openai']::text[], 'openai', 'sk-runtime-recovery', 'enabled', 10)
 	RETURNING id`, providerID).Scan(&channelID); err != nil {
 		t.Fatalf("seed channel: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestReconcileAllRuntimeControlsRestoresStableEndpointAndChannel(t *testing.
 	if channel.SyncState != "active" || channel.ActiveRevision != 1 || channel.PendingRevision != 0 {
 		t.Fatalf("unexpected restored channel control: %+v", channel)
 	}
-	routeRate, err := controls.ReadControl(ctx, controls.RouteRateLimitControl(), 1)
+	routeRate, err := controls.ReadControl(ctx, controls.RequestRateLimitControl(), 1)
 	if err != nil {
 		t.Fatalf("read restored route rate control: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestReconcileAllRuntimeControlsRestoresStableEndpointAndChannel(t *testing.
 		fmt.Sprintf(`unio_gateway_origin_revision_fence{provider_id="%d",state="active"} 1`, providerID),
 		fmt.Sprintf(`unio_gateway_provider_status_revision_fence{provider_id="%d",state="active"} 1`, providerID),
 		`unio_gateway_runtime_control_recovery_total{result="restored",target="channel_capacity"}`,
-		`unio_gateway_runtime_control_recovery_total{result="restored",target="route_rate"} 1`,
+		`unio_gateway_runtime_control_recovery_total{result="restored",target="request_rate"} 1`,
 	} {
 		if !strings.Contains(metricsBody, want) {
 			t.Fatalf("recovery metrics missing %q\n%s", want, metricsBody)

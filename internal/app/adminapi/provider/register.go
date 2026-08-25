@@ -19,7 +19,6 @@ func Register(r chi.Router, d Deps) {
 		r.Get("/providers/{id}/ops/detail", poh.detail)
 		r.Get("/providers/{id}/ops/channel-catalog", poh.channelCatalog)
 		r.Get("/providers/{id}/ops/model-catalog", poh.modelCatalog)
-		r.Get("/providers/{id}/ops/route-catalog", poh.routeCatalog)
 		r.Get("/providers/{id}/ops/channels", poh.channels)
 		r.Get("/providers/{id}/ops/performance", poh.performance)
 		r.Get("/providers/{id}/ops/errors", poh.errors)

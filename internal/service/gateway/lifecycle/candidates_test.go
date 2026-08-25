@@ -32,7 +32,6 @@ func TestExecutorPrepareCandidatesWithoutRuntimeUsesNeutralSQLOrder(t *testing.T
 		EstimateInputTokens: func(_ context.Context, _ routing.ChatRouteCandidate) (int64, error) {
 			return 1, nil
 		},
-		Mode: "balanced",
 	})
 	if err != nil {
 		t.Fatalf("PrepareCandidates returned error: %v", err)

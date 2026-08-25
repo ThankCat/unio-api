@@ -28,12 +28,11 @@ const (
 type RequestAdmissionInput struct {
 	RequestAdmissionID string
 	Fingerprint        string
-	RouteID            int64
 	UserID             int64
 
 	IntegrityEpoch            string
 	IntegrityRevision         int64
-	RouteRateRevision         int64
+	RequestRateRevision         int64
 	GlobalConcurrencyRevision int64
 
 	RPMLimitOverride         *int64
@@ -45,7 +44,7 @@ type RequestAdmissionInput struct {
 type RequestAdmissionResult struct {
 	Outcome          RequestAdmissionOutcome
 	LimitedDimension string // limited 时为 rpm|rpd|concurrency
-	SyncTarget       string // runtime_sync/stale 时为 route_rate|global_concurrency|circuit_breaker
+	SyncTarget       string // runtime_sync/stale 时为 request_rate|global_concurrency|circuit_breaker
 	LeaseUntilMs     int64
 	RenewIntervalMs  int64
 }
@@ -53,7 +52,7 @@ type RequestAdmissionResult struct {
 func minuteBucket(now time.Time) int64 { return now.Unix() / 60 }
 func dayBucket(now time.Time) int64    { return now.Unix() / 86400 }
 
-// AcquireRequestAdmission 入口一次性取得 route-user RPM/RPD + concurrency 与 request-admission token。
+// AcquireRequestAdmission 入口一次性取得用户级 RPM/RPD + concurrency 与 request-admission token。
 // 真实超限返回 limited（由调用方映射 429）；完整性/控制/基础设施问题返回对应稳定码（映射 503）。
 func (s *Store) AcquireRequestAdmission(ctx context.Context, in RequestAdmissionInput) (result RequestAdmissionResult, err error) {
 	done := s.beginOperation(ctx, operationAcquireRequest)
@@ -67,22 +66,22 @@ func (s *Store) AcquireRequestAdmission(ctx context.Context, in RequestAdmission
 	}
 	now := time.Now()
 	keys := []string{
-		s.keys.admissionRouteRate(),
+		s.keys.admissionRequestRate(),
 		s.keys.admissionGlobalConcurrency(),
 		s.keys.runtimeControlSetting("gateway.circuit_breaker"),
 		s.keys.stateIntegrityMarker(),
 		s.keys.admissionRequest(in.RequestAdmissionID),
-		s.keys.requestRPMBucket(in.RouteID, in.UserID, minuteBucket(now)),
-		s.keys.requestRPDBucket(in.RouteID, in.UserID, dayBucket(now)),
-		s.keys.requestConcurrency(in.RouteID, in.UserID),
+		s.keys.requestRPMBucket(in.UserID, minuteBucket(now)),
+		s.keys.requestRPDBucket(in.UserID, dayBucket(now)),
+		s.keys.requestConcurrency(in.UserID),
 		s.keys.runtimeInfrastructureFault(),
 		s.keys.runtimeReconciliationProof(),
 	}
 	argv := []interface{}{
 		in.RequestAdmissionID, in.Fingerprint,
-		strconv.FormatInt(in.RouteID, 10), strconv.FormatInt(in.UserID, 10),
+		strconv.FormatInt(in.UserID, 10),
 		in.IntegrityEpoch, strconv.FormatInt(in.IntegrityRevision, 10),
-		strconv.FormatInt(in.RouteRateRevision, 10), strconv.FormatInt(in.GlobalConcurrencyRevision, 10),
+		strconv.FormatInt(in.RequestRateRevision, 10), strconv.FormatInt(in.GlobalConcurrencyRevision, 10),
 		requestLimitOverrideArg(in.RPMLimitOverride),
 		requestLimitOverrideArg(in.RPDLimitOverride),
 		requestLimitOverrideArg(in.ConcurrencyLimitOverride),
@@ -144,29 +143,28 @@ const (
 	RequestLifecycleConflict         RequestAdmissionLifecycleOutcome = "conflict"
 )
 
-// RenewRequestAdmission 延长 active token 与 route-user concurrency lease。expected epoch 必须来自
+// RenewRequestAdmission 延长 active token 与用户级 concurrency lease。expected epoch 必须来自
 // 本次调用前的 PostgreSQL 强一致读取；Lua 原子校验 marker 与 token 冻结 epoch 后才允许写入。
 func (s *Store) RenewRequestAdmission(
 	ctx context.Context,
 	requestAdmissionID string,
-	routeID, userID int64,
+	userID int64,
 	integrityEpoch string,
 	integrityRevision int64,
 ) (outcome RequestAdmissionLifecycleOutcome, err error) {
 	done := s.beginOperation(ctx, operationRenewRequest)
 	defer func() { done(string(outcome), err) }()
 
-	if err := validateRequestLifecycleInput(requestAdmissionID, routeID, userID, integrityEpoch, integrityRevision); err != nil {
+	if err := validateRequestLifecycleInput(requestAdmissionID, userID, integrityEpoch, integrityRevision); err != nil {
 		return "", err
 	}
 	keys := []string{
 		s.keys.stateIntegrityMarker(),
 		s.keys.admissionRequest(requestAdmissionID),
-		s.keys.requestConcurrency(routeID, userID),
+		s.keys.requestConcurrency(userID),
 	}
 	res, err := s.renewRequest.Run(ctx, s.client, keys,
 		requestAdmissionID,
-		strconv.FormatInt(routeID, 10),
 		strconv.FormatInt(userID, 10),
 		integrityEpoch,
 		strconv.FormatInt(integrityRevision, 10),
@@ -177,31 +175,30 @@ func (s *Store) RenewRequestAdmission(
 	return parseRequestLifecycleReply(res, "breakerstore renew request admission")
 }
 
-// FinishRequestAdmission 唯一终态：释放 route-user 并发并关闭 token。RPM/RPD 作为已接收请求保留。
+// FinishRequestAdmission 唯一终态：释放用户级并发并关闭 token。RPM/RPD 作为已接收请求保留。
 // 它不再接收任何 token 用量：TPM 不是准入维度，观测由独立的 obs:tpm 分钟桶承担（§8）。
 // expected epoch 必须来自本次调用前的
 // PostgreSQL 强一致读取；marker/token epoch mismatch 时 Lua 保证零写入。
 func (s *Store) FinishRequestAdmission(
 	ctx context.Context,
 	requestAdmissionID string,
-	routeID, userID int64,
+	userID int64,
 	integrityEpoch string,
 	integrityRevision int64,
 ) (outcome RequestAdmissionLifecycleOutcome, err error) {
 	done := s.beginOperation(ctx, operationFinishRequest)
 	defer func() { done(string(outcome), err) }()
 
-	if err := validateRequestLifecycleInput(requestAdmissionID, routeID, userID, integrityEpoch, integrityRevision); err != nil {
+	if err := validateRequestLifecycleInput(requestAdmissionID, userID, integrityEpoch, integrityRevision); err != nil {
 		return "", err
 	}
 	keys := []string{
 		s.keys.stateIntegrityMarker(),
 		s.keys.admissionRequest(requestAdmissionID),
-		s.keys.requestConcurrency(routeID, userID),
+		s.keys.requestConcurrency(userID),
 	}
 	res, err := s.finishRequest.Run(ctx, s.client, keys,
 		requestAdmissionID,
-		strconv.FormatInt(routeID, 10),
 		strconv.FormatInt(userID, 10),
 		integrityEpoch,
 		strconv.FormatInt(integrityRevision, 10),

@@ -19,7 +19,6 @@ type Store interface {
 	ListConsoleBilledRequestTopModels(context.Context, sqlc.ListConsoleBilledRequestTopModelsParams) ([]sqlc.ListConsoleBilledRequestTopModelsRow, error)
 	// 卡片热力条复用用量统计的分桶查询，口径与这里的汇总一致。
 	ListConsoleUsageTimeseries(context.Context, sqlc.ListConsoleUsageTimeseriesParams) ([]sqlc.ListConsoleUsageTimeseriesRow, error)
-	ListConsoleFilterRoutes(context.Context) ([]sqlc.ListConsoleFilterRoutesRow, error)
 	ListConsoleFilterAPIKeys(context.Context, int64) ([]sqlc.ListConsoleFilterAPIKeysRow, error)
 	ListConsoleBilledRequestEndpoints(context.Context, int64) ([]string, error)
 	ListConsoleBilledRequestStreamTypes(context.Context, int64) ([]bool, error)
@@ -28,7 +27,6 @@ type Store interface {
 // ListParams 是当前用户实际扣费请求列表的查询条件。
 type ListParams struct {
 	UserID      int64
-	RouteIDs    []int64
 	APIKeyIDs   []int64
 	Endpoints   []string
 	StreamTypes []string
@@ -47,8 +45,6 @@ type Item struct {
 	RequestID                 string
 	CreatedAt                 time.Time
 	ClientIP                  string
-	RouteID                   *int64
-	RouteName                 string
 	APIKeyID                  int64
 	APIKeyName                string
 	APIKeyPrefix              string
@@ -84,7 +80,6 @@ type Item struct {
 // SummaryParams 是账户累计汇总条件。筛选口径与列表相同；From/To 可空。
 type SummaryParams struct {
 	UserID      int64
-	RouteIDs    []int64
 	APIKeyIDs   []int64
 	Endpoints   []string
 	StreamTypes []string
@@ -158,7 +153,6 @@ type FilterOption struct {
 
 // Filters 是线路目录全量、当前用户的 API Key，以及扣费请求上出现过的端点和类型。
 type Filters struct {
-	Routes      []FilterOption
 	APIKeys     []FilterOption
 	Endpoints   []string
 	StreamTypes []string
@@ -208,7 +202,6 @@ func (s *Service) Summary(ctx context.Context, params SummaryParams) (Summary, *
 	}
 	models, err := s.store.ListConsoleBilledRequestTopModels(ctx, sqlc.ListConsoleBilledRequestTopModelsParams{
 		UserID:      params.UserID,
-		RouteIds:    bounds.RouteIds,
 		ApiKeyIds:   bounds.ApiKeyIds,
 		Endpoints:   bounds.Endpoints,
 		StreamTypes: bounds.StreamTypes,
@@ -296,7 +289,6 @@ func (s *Service) compare(
 		ToTime:      pgtype.Timestamptz{Time: *params.To, Valid: true},
 		Bucket:      bucket,
 		Tz:          tz,
-		RouteIds:    bounds.RouteIds,
 		ApiKeyIds:   bounds.ApiKeyIds,
 		ModelIds:    []string{},
 		Endpoints:   bounds.Endpoints,
@@ -327,10 +319,6 @@ func (s *Service) compare(
 
 // Filters 返回线路目录全量、当前用户的 API Key，以及扣费请求上出现过的端点和类型。
 func (s *Service) Filters(ctx context.Context, userID int64) (Filters, *consoleservice.Error) {
-	routes, err := s.store.ListConsoleFilterRoutes(ctx)
-	if err != nil {
-		return Filters{}, consoleservice.RequestUnavailable("list filter routes", err)
-	}
 	keys, err := s.store.ListConsoleFilterAPIKeys(ctx, userID)
 	if err != nil {
 		return Filters{}, consoleservice.RequestUnavailable("list user api keys", err)
@@ -344,13 +332,9 @@ func (s *Service) Filters(ctx context.Context, userID int64) (Filters, *consoles
 		return Filters{}, consoleservice.RequestUnavailable("list billed request stream types", err)
 	}
 	out := Filters{
-		Routes:      make([]FilterOption, 0, len(routes)),
 		APIKeys:     make([]FilterOption, 0, len(keys)),
 		Endpoints:   make([]string, 0, len(endpoints)),
 		StreamTypes: make([]string, 0, len(streams)),
-	}
-	for _, route := range routes {
-		out.Routes = append(out.Routes, FilterOption{ID: route.ID, Name: route.Name})
 	}
 	for _, key := range keys {
 		out.APIKeys = append(out.APIKeys, FilterOption{ID: key.ID, Name: key.Name})
@@ -377,8 +361,6 @@ func toItem(row sqlc.ListConsoleBilledRequestsRow) Item {
 		RequestID:                 row.RequestID,
 		CreatedAt:                 row.CreatedAt.Time,
 		ClientIP:                  textValue(row.ClientIp),
-		RouteID:                   int8Ptr(row.RouteID),
-		RouteName:                 textValue(row.RouteName),
 		APIKeyID:                  row.ApiKeyID,
 		APIKeyName:                textValue(row.ApiKeyName),
 		APIKeyPrefix:              textValue(row.ApiKeyPrefix),
@@ -424,7 +406,6 @@ func toListSQL(params ListParams) sqlc.ListConsoleBilledRequestsParams {
 	}
 	return sqlc.ListConsoleBilledRequestsParams{
 		UserID:      params.UserID,
-		RouteIds:    emptyInts(params.RouteIDs),
 		ApiKeyIds:   emptyInts(params.APIKeyIDs),
 		Endpoints:   emptyStrings(InternalEndpoints(params.Endpoints)),
 		StreamTypes: emptyStrings(params.StreamTypes),
@@ -441,7 +422,6 @@ func toListSQL(params ListParams) sqlc.ListConsoleBilledRequestsParams {
 func toSummarySQL(params SummaryParams) sqlc.SummarizeConsoleBilledRequestsParams {
 	return sqlc.SummarizeConsoleBilledRequestsParams{
 		UserID:      params.UserID,
-		RouteIds:    emptyInts(params.RouteIDs),
 		ApiKeyIds:   emptyInts(params.APIKeyIDs),
 		Endpoints:   emptyStrings(InternalEndpoints(params.Endpoints)),
 		StreamTypes: emptyStrings(params.StreamTypes),
@@ -454,7 +434,6 @@ func toSummarySQL(params SummaryParams) sqlc.SummarizeConsoleBilledRequestsParam
 func toCountSQL(params ListParams) sqlc.CountConsoleBilledRequestsParams {
 	return sqlc.CountConsoleBilledRequestsParams{
 		UserID:      params.UserID,
-		RouteIds:    emptyInts(params.RouteIDs),
 		ApiKeyIds:   emptyInts(params.APIKeyIDs),
 		Endpoints:   emptyStrings(InternalEndpoints(params.Endpoints)),
 		StreamTypes: emptyStrings(params.StreamTypes),

@@ -16,7 +16,7 @@ func TestRecordTPMObservationsIsIdempotentPerOperationID(t *testing.T) {
 	s, _, _ := newTestStore(t)
 	ctx := context.Background()
 	entries := []TPMObservationEntry{
-		obsEntry(TPMScopeRoute, 4001, 100, TPMObservationDelta{InputTokens: 120, ProvisionalTokens: 120, ObservedAttempts: 1}),
+		obsEntry(TPMScopeUser, 4001, 100, TPMObservationDelta{InputTokens: 120, ProvisionalTokens: 120, ObservedAttempts: 1}),
 		obsEntry(TPMScopeChannel, 4002, 100, TPMObservationDelta{OutputTokens: 30, ProvisionalTokens: 30}),
 	}
 
@@ -30,7 +30,7 @@ func TestRecordTPMObservationsIsIdempotentPerOperationID(t *testing.T) {
 		t.Fatalf("replayed flush applied=%v err=%v, want applied=false", replayed, err)
 	}
 
-	routes, err := s.TPMObservations(ctx, TPMScopeRoute, []int64{4001}, 100)
+	routes, err := s.TPMObservations(ctx, TPMScopeUser, []int64{4001}, 100)
 	if err != nil {
 		t.Fatalf("read route observation: %v", err)
 	}
@@ -51,12 +51,12 @@ func TestRecordTPMObservationsAccumulatesAcrossBatches(t *testing.T) {
 	ctx := context.Background()
 	for _, id := range []string{"acc-1", "acc-2"} {
 		if _, err := s.RecordTPMObservations(ctx, id, []TPMObservationEntry{
-			obsEntry(TPMScopeRoute, 4010, 200, TPMObservationDelta{OutputTokens: 25, ProvisionalTokens: 25}),
+			obsEntry(TPMScopeUser, 4010, 200, TPMObservationDelta{OutputTokens: 25, ProvisionalTokens: 25}),
 		}); err != nil {
 			t.Fatalf("flush %s: %v", id, err)
 		}
 	}
-	got, err := s.TPMObservations(ctx, TPMScopeRoute, []int64{4010}, 200)
+	got, err := s.TPMObservations(ctx, TPMScopeUser, []int64{4010}, 200)
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -100,12 +100,12 @@ func TestCorrectTPMObservationsIsIdempotentAcrossProcesses(t *testing.T) {
 	s, client, namespace := newTestStore(t)
 	ctx := context.Background()
 	if _, err := s.RecordTPMObservations(ctx, "replay-seed", []TPMObservationEntry{
-		obsEntry(TPMScopeRoute, 4030, 400, TPMObservationDelta{OutputTokens: 100, ProvisionalTokens: 100}),
+		obsEntry(TPMScopeUser, 4030, 400, TPMObservationDelta{OutputTokens: 100, ProvisionalTokens: 100}),
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	correction := []TPMObservationEntry{
-		obsEntry(TPMScopeRoute, 4030, 400, TPMObservationDelta{OutputTokens: -40, ProvisionalTokens: -100}),
+		obsEntry(TPMScopeUser, 4030, 400, TPMObservationDelta{OutputTokens: -40, ProvisionalTokens: -100}),
 	}
 	if _, err := s.CorrectTPMObservations(ctx, "route:req-4030", correction); err != nil {
 		t.Fatalf("first correction: %v", err)
@@ -118,7 +118,7 @@ func TestCorrectTPMObservationsIsIdempotentAcrossProcesses(t *testing.T) {
 		t.Fatalf("cross-process replay result=%+v err=%v, want duplicate", result, err)
 	}
 
-	got, err := s.TPMObservations(ctx, TPMScopeRoute, []int64{4030}, 400)
+	got, err := s.TPMObservations(ctx, TPMScopeUser, []int64{4030}, 400)
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -132,12 +132,12 @@ func TestCorrectTPMObservationsSkipsMissingBucket(t *testing.T) {
 	s, client, _ := newTestStore(t)
 	ctx := context.Background()
 	result, err := s.CorrectTPMObservations(ctx, "route:req-expired", []TPMObservationEntry{
-		obsEntry(TPMScopeRoute, 4040, 500, TPMObservationDelta{OutputTokens: -50, ProvisionalTokens: -50}),
+		obsEntry(TPMScopeUser, 4040, 500, TPMObservationDelta{OutputTokens: -50, ProvisionalTokens: -50}),
 	})
 	if err != nil || result.Applied != 0 || result.Expired != 1 {
 		t.Fatalf("expired correction result=%+v err=%v", result, err)
 	}
-	if exists := client.Exists(ctx, s.keys.obsTPMRoute(4040, 500)).Val(); exists != 0 {
+	if exists := client.Exists(ctx, s.keys.obsTPMUser(4040, 500)).Val(); exists != 0 {
 		t.Fatal("correction recreated an expired observation bucket")
 	}
 }
@@ -166,7 +166,7 @@ func TestCorrectTPMObservationsClampsFieldsAtZero(t *testing.T) {
 
 func TestTPMObservationsMissingBucketIsZero(t *testing.T) {
 	s, _, _ := newTestStore(t)
-	got, err := s.TPMObservations(context.Background(), TPMScopeRoute, []int64{4060}, 700)
+	got, err := s.TPMObservations(context.Background(), TPMScopeUser, []int64{4060}, 700)
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestTPMObservationDoesNotLatchInfrastructureFault(t *testing.T) {
 	s, _, _ := newTestStore(t)
 	ctx := context.Background()
 	if _, err := s.RecordTPMObservations(ctx, "latch-check", []TPMObservationEntry{
-		obsEntry(TPMScopeRoute, 4070, 800, TPMObservationDelta{InputTokens: 5, ProvisionalTokens: 5}),
+		obsEntry(TPMScopeUser, 4070, 800, TPMObservationDelta{InputTokens: 5, ProvisionalTokens: 5}),
 	}); err != nil {
 		t.Fatalf("record: %v", err)
 	}

@@ -241,21 +241,6 @@ func (d *chatSettlementDBDeps) seed(t *testing.T) {
 		t.Fatalf("generate api key: %v", err)
 	}
 
-	// 线路必填：先建一条线路供 API Key 绑定（route_id 现为 NOT NULL）。
-	var priceRatio pgtype.Numeric
-	if err := priceRatio.Scan("1"); err != nil {
-		t.Fatalf("scan price ratio: %v", err)
-	}
-	route, err := d.queries.CreateRoute(d.ctx, sqlc.CreateRouteParams{
-		Name:       fmt.Sprintf("chat-settlement-route-%d", suffix),
-		Mode:       "balanced",
-		Status:     "enabled",
-		PriceRatio: priceRatio,
-	})
-	if err != nil {
-		t.Fatalf("create route: %v", err)
-	}
-	d.routeID = route.ID
 
 	apiKey, err := d.queries.CreateAPIKey(d.ctx, sqlc.CreateAPIKeyParams{
 		UserID:    user.ID,
@@ -263,7 +248,6 @@ func (d *chatSettlementDBDeps) seed(t *testing.T) {
 		KeyPrefix: generatedKey.Prefix,
 		KeyHash:   generatedKey.Hash,
 		ExpiresAt: pgtype.Timestamptz{Valid: false},
-		RouteID:   route.ID,
 	})
 	if err != nil {
 		t.Fatalf("create api key: %v", err)
@@ -476,8 +460,8 @@ func insertChatSettlementChannel(t *testing.T, ctx context.Context, pool *pgxpoo
 
 	var id int64
 	err := pool.QueryRow(ctx, `
-			INSERT INTO channels (provider_id, name, protocol, adapter_key, credential, status, priority, response_timeout_ms)
-		VALUES ($1, $2, 'openai', 'openai', $3, $4, $5, $6)
+			INSERT INTO channels (provider_id, name, protocols, adapter_key, credential, status, priority, response_timeout_ms)
+		VALUES ($1, $2, ARRAY['openai']::text[], 'openai', ARRAY[$3]::text[], $4, $5, $6)
 		RETURNING id
 	`, providerID, fmt.Sprintf("chat-settlement-channel-%d", suffix), "sk-chat-settlement-test", "enabled", 10, 30000).Scan(&id)
 	if err != nil {
@@ -1383,10 +1367,12 @@ func TestChatSettlementMultiplierPathComputesAndPinsCost(t *testing.T) {
 		ModelID:              deps.modelID,
 		Currency:             "USD",
 		PricingUnit:          billing.PricingUnitPer1MTokens,
-		UncachedInputPrice:   testNumeric(2_0000000000, -10),
-		CacheReadInputPrice:  testNumeric(2000000000, -10), // 0.2
-		OutputPrice:          testNumeric(10_0000000000, -10),
-		ReasoningOutputPrice: testNumeric(10_0000000000, -10),
+		// 基准价相对渠道成本留足倍数：售价 = 基准价 × 全局售价倍率，
+		// 倍率是环境相关的运行时设置，价差太小会让毛利守卫在低倍率环境下误伤这些用例。
+		UncachedInputPrice:   testNumeric(100_0000000000, -10),
+		CacheReadInputPrice:  testNumeric(10_0000000000, -10),
+		OutputPrice:          testNumeric(500_0000000000, -10),
+		ReasoningOutputPrice: testNumeric(500_0000000000, -10),
 		Status:               "enabled",
 		EffectiveFrom:        pgtype.Timestamptz{Time: time.Now().Add(-time.Hour), Valid: true},
 		EffectiveTo:          pgtype.Timestamptz{Valid: false},
@@ -1398,7 +1384,8 @@ func TestChatSettlementMultiplierPathComputesAndPinsCost(t *testing.T) {
 	mult, err := deps.queries.CreateChannelCostMultiplier(deps.ctx, sqlc.CreateChannelCostMultiplierParams{
 		ChannelID:     deps.channelID,
 		ModelID:       pgtype.Int8{Valid: false},
-		Multiplier:    testNumeric(12, -1), // 1.2
+		// 合并倍率（0.12 × 0.5 = 0.06）必须低于全局售价倍率，否则毛利守卫会拒绝这份配置。
+		Multiplier:    testNumeric(12, -2), // 0.12
 		Status:        "enabled",
 		EffectiveFrom: pgtype.Timestamptz{Time: time.Now().Add(-time.Hour), Valid: true},
 		EffectiveTo:   pgtype.Timestamptz{Valid: false},
@@ -1450,14 +1437,14 @@ func TestChatSettlementMultiplierPathComputesAndPinsCost(t *testing.T) {
 	if !costSnapshot.ChannelRechargeFactorID.Valid || costSnapshot.ChannelRechargeFactorID.Int64 != recharge.ID {
 		t.Fatalf("expected channel_recharge_factor_id %d, got valid=%v value=%d", recharge.ID, costSnapshot.ChannelRechargeFactorID.Valid, costSnapshot.ChannelRechargeFactorID.Int64)
 	}
-	assertNumericEqual(t, costSnapshot.CostMultiplier, testNumeric(12, -1)) // 1.2
+	assertNumericEqual(t, costSnapshot.CostMultiplier, testNumeric(12, -2)) // 0.12
 	assertNumericEqual(t, costSnapshot.RechargeFactor, testNumeric(5, -1))  // 0.5
 
-	// 真实成本单价 = 基准价（model_prices） × 1.2 × 0.5（= ×0.6）。
-	assertNumericEqual(t, costSnapshot.UncachedInputCost, testNumeric(1_2000000000, -10)) // 2.0 × 0.6
-	assertNumericEqual(t, costSnapshot.OutputCost, testNumeric(6_0000000000, -10))        // 10.0 × 0.6
-	assertNumericEqual(t, costSnapshot.CacheReadInputCost, testNumeric(1200000000, -10))  // 0.2 × 0.6 = 0.12
-	assertNumericEqual(t, costSnapshot.ReasoningOutputCost, testNumeric(6_0000000000, -10))
+	// 真实成本单价 = 基准价（model_prices） × 0.12 × 0.5（= ×0.06）。
+	assertNumericEqual(t, costSnapshot.UncachedInputCost, testNumeric(6_0000000000, -10))   // 100.0 × 0.06
+	assertNumericEqual(t, costSnapshot.OutputCost, testNumeric(30_0000000000, -10))         // 500.0 × 0.06
+	assertNumericEqual(t, costSnapshot.CacheReadInputCost, testNumeric(6000000000, -10))    // 10.0 × 0.06 = 0.6
+	assertNumericEqual(t, costSnapshot.ReasoningOutputCost, testNumeric(30_0000000000, -10))
 
 	// 售价快照 price_id 倍率路径为 NULL（无 channel_prices 行可指）。
 	priceSnapshot, err := deps.queries.GetPriceSnapshotByRequest(deps.ctx, deps.requestRecord.ID)
@@ -1472,8 +1459,8 @@ func TestChatSettlementMultiplierPathComputesAndPinsCost(t *testing.T) {
 	if len(billingCalculator.costs) != 1 {
 		t.Fatalf("expected one provider cost calculation, got %d", len(billingCalculator.costs))
 	}
-	assertNumericEqual(t, billingCalculator.costs[0].UncachedInputCost, testNumeric(1_2000000000, -10))
-	assertNumericEqual(t, billingCalculator.costs[0].OutputCost, testNumeric(6_0000000000, -10))
+	assertNumericEqual(t, billingCalculator.costs[0].UncachedInputCost, testNumeric(6_0000000000, -10))
+	assertNumericEqual(t, billingCalculator.costs[0].OutputCost, testNumeric(30_0000000000, -10))
 }
 
 func TestChatSettlementRejectsReplayWithDifferentUsage(t *testing.T) {

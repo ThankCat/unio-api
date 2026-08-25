@@ -114,7 +114,7 @@ func (s *Service) ExecuteNextDiscovery(ctx context.Context) (bool, error) {
 
 	settings := appsettings.AdminBackendChannelModelDiscovery(ctx, s.settings)
 	workCtx, cancel := context.WithTimeout(ctx, settings.Timeout)
-	result, listErr := s.lister.ListChannelModels(workCtx, snapshot.Protocol, snapshot.AdapterKey, corechannel.Runtime{
+	result, listErr := s.lister.ListChannelModels(workCtx, primaryProtocol(snapshot.Protocols), snapshot.AdapterKey, corechannel.Runtime{
 		ID: snapshot.ChannelID, Origin: snapshot.Origin, APIKey: strings.TrimSpace(snapshot.Credential),
 		ProviderSlug: snapshot.ProviderSlug, ResponseTimeout: settings.Timeout,
 	})

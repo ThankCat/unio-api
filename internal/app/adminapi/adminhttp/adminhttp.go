@@ -52,19 +52,15 @@ func WriteData(w http.ResponseWriter, status int, data any) {
 }
 
 // SupplyOfferingSelectionRequest 是供给联合操作中明确选择的一条 Route Offering。
-type SupplyOfferingSelectionRequest struct {
-	RouteID         int64  `json:"route_id"`
-	ModelID         int64  `json:"model_db_id"`
-	IngressProtocol string `json:"ingress_protocol"`
+type SupplyModelSelectionRequest struct {
+	ModelID int64 `json:"model_db_id"`
 }
 
-// SupplyOfferingSelections 转换 HTTP DTO 为领域确认选择。
-func SupplyOfferingSelections(items []SupplyOfferingSelectionRequest) []supply.OfferingSelection {
-	out := make([]supply.OfferingSelection, 0, len(items))
+// SupplyModelSelections 转换 HTTP DTO 为领域确认选择。
+func SupplyModelSelections(items []SupplyModelSelectionRequest) []supply.ModelSelection {
+	out := make([]supply.ModelSelection, 0, len(items))
 	for _, item := range items {
-		out = append(out, supply.OfferingSelection{
-			RouteID: item.RouteID, ModelID: item.ModelID, IngressProtocol: item.IngressProtocol,
-		})
+		out = append(out, supply.ModelSelection{ModelID: item.ModelID})
 	}
 	return out
 }
@@ -109,21 +105,17 @@ func WriteServiceError(w http.ResponseWriter, err error) {
 	_ = httpx.WriteError(w, status, codeStr, message)
 }
 
-// WriteConfirmationRequired 渲染 ADR-0019 供给影响确认（409）。affected_routes 是潜在
-// 影响范围，不代表会被自动修改；跨层修改必须在确认请求中逐项选择。
+// WriteConfirmationRequired 渲染供给影响确认（409）。affected_models 是潜在影响范围，
+// 不代表会被自动修改；连带停用必须在确认请求中逐项选择。
 func WriteConfirmationRequired(w http.ResponseWriter, e *supply.ConfirmationRequired) {
-	routes := make([]map[string]any, 0, len(e.Impact.AffectedOfferings))
-	for _, ao := range e.Impact.AffectedOfferings {
-		routes = append(routes, map[string]any{
-			"route_id":           ao.RouteID,
-			"route_name":         ao.RouteName,
-			"route_status":       ao.RouteStatus,
-			"model_id":           ao.PublicModelID,
-			"model_db_id":        ao.ModelID,
-			"model_display_name": ao.ModelDisplayName,
-			"ingress_protocol":   ao.IngressProtocol,
-			"kept_result":        ao.KeptResult,
-			"selected_result":    ao.SelectedResult,
+	models := make([]map[string]any, 0, len(e.Impact.AffectedModels))
+	for _, am := range e.Impact.AffectedModels {
+		models = append(models, map[string]any{
+			"model_id":           am.PublicModelID,
+			"model_db_id":        am.ModelID,
+			"model_display_name": am.ModelDisplayName,
+			"kept_result":        am.KeptResult,
+			"selected_result":    am.SelectedResult,
 		})
 	}
 	_ = httpx.WriteJSON(w, http.StatusConflict, map[string]any{
@@ -135,7 +127,7 @@ func WriteConfirmationRequired(w http.ResponseWriter, e *supply.ConfirmationRequ
 			"enabled_bindings":           e.Impact.EnabledBindings,
 			"channels":                   e.Impact.Channels,
 			"providers":                  e.Impact.Providers,
-			"affected_routes":            routes,
+			"affected_models":            models,
 		},
 	})
 }

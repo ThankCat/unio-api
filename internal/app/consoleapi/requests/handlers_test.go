@@ -69,7 +69,6 @@ type fakeRequestService struct {
 
 func (s *fakeRequestService) List(_ context.Context, params consolerequests.ListParams) ([]consolerequests.Item, int64, *consoleservice.Error) {
 	s.listParams = params
-	routeID := int64(3)
 	reasoning := "medium"
 	latency := int64(1500)
 	firstToken := int64(400)
@@ -79,8 +78,6 @@ func (s *fakeRequestService) List(_ context.Context, params consolerequests.List
 		RequestID:               "req_safe",
 		CreatedAt:               time.Date(2026, 8, 20, 8, 0, 0, 0, time.UTC),
 		ClientIP:                "203.0.113.10",
-		RouteID:                 &routeID,
-		RouteName:               "Claude",
 		APIKeyID:                9,
 		APIKeyName:              "prod",
 		APIKeyPrefix:            "unio_sk_XhE8wL5D",
@@ -137,7 +134,6 @@ func (s *fakeRequestService) Summary(_ context.Context, params consolerequests.S
 func (s *fakeRequestService) Filters(_ context.Context, userID int64) (consolerequests.Filters, *consoleservice.Error) {
 	s.filtersID = userID
 	return consolerequests.Filters{
-		Routes:      []consolerequests.FilterOption{{ID: 3, Name: "Claude"}},
 		APIKeys:     []consolerequests.FilterOption{{ID: 9, Name: "prod"}},
 		Endpoints:   []string{"/chat/completions"},
 		StreamTypes: []string{"stream"},

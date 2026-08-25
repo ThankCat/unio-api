@@ -26,8 +26,8 @@ const (
 type TPMObservationKind string
 
 const (
-	// TPMScopeRoute 是客户视角：一条线路这一分钟观察到的输入与输出。
-	TPMScopeRoute TPMObservationKind = "route"
+	// TPMScopeUser 是客户视角：一个用户这一分钟观察到的输入与输出。
+	TPMScopeUser TPMObservationKind = "user"
 	// TPMScopeChannel 是上游视角：一个渠道这一分钟观察到的输入与输出。
 	TPMScopeChannel TPMObservationKind = "channel"
 )
@@ -270,8 +270,8 @@ func (s *Store) tpmObservationKey(scope TPMObservationScope) (string, error) {
 		return "", configInvalid("tpm observation minute must be non-negative")
 	}
 	switch scope.Kind {
-	case TPMScopeRoute:
-		return s.keys.obsTPMRoute(scope.ID, scope.Minute), nil
+	case TPMScopeUser:
+		return s.keys.obsTPMUser(scope.ID, scope.Minute), nil
 	case TPMScopeChannel:
 		return s.keys.obsTPMChannel(scope.ID, scope.Minute), nil
 	default:

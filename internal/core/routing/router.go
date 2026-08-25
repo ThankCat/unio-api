@@ -8,7 +8,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 
@@ -54,8 +53,6 @@ var (
 	// ErrModelNotAvailable 表示模型存在但当前用户不允许使用。
 	ErrModelNotAvailable = errors.New("model not available for user")
 
-	// ErrRouteNotConfigured 表示 API Key 绑定的线路缺失或已停用（线路必填，无默认回落）。
-	ErrRouteNotConfigured = errors.New("route not configured")
 
 	// ErrChannelCredentialMissing 表示 channel 未配置上游凭据。
 	ErrChannelCredentialMissing = errors.New("channel credential missing")
@@ -75,8 +72,6 @@ type ChatRouteRequest struct {
 	// Endpoint 是本次请求的 ingress 表面（chat_completions/messages/responses），供审计/日志维度。
 	Endpoint string
 
-	// RouteID 是 API Key 绑定的线路 ID（线路必填，恒有值）；线路缺失或已停用则拒绝请求（无默认回落）。
-	RouteID *int64
 }
 
 // ChatRouteCandidate 表示一个可尝试的 chat 上游候选。
@@ -95,8 +90,6 @@ type ChatRouteCandidate struct {
 	Channel                 channel.Runtime
 	UpstreamModel           string
 
-	// RouteName 是本次请求绑定线路的名称（routes.name），供 access log 的 router 字段使用。
-	RouteName string
 
 	// MaxOutputTokens 是该候选逻辑模型 models.max_output_tokens（0 表示未配置）。
 	// 客户未显式给出输出上限时，authorization 用它（取候选最大值）做保守冻结上界，
@@ -105,7 +98,8 @@ type ChatRouteCandidate struct {
 
 	// ModelPriceID 是计算 SalePrice 所用的模型基准售价行 ID（model_prices.id，供结算审计/快照）。
 	ModelPriceID int64
-	// PriceRatio 是计算 SalePrice 所用的线路价格倍率（routes.price_ratio，供结算审计/快照）。
+	// PriceRatio 是计算 SalePrice 所用的全局售价倍率（供结算审计/快照）。
+	// 模型配了绝对售价时为空：那条路径下售价直接取自模型，没有倍率参与。
 	PriceRatio pgtype.Numeric
 	// SalePrice 是客户最终售价向量 = 模型基准价 × 线路倍率（DEC-026）；同一请求所有候选共享同一售价，
 	// 供保守预授权上界与结算扣费，不随命中哪条渠道变化。
@@ -158,22 +152,18 @@ type ChatRoutePlan struct {
 	// 跨模型共享绑定（§10.1）；候选行天然共享同一个模型，所以这是计划级事实。
 	ModelDBID int64
 
-	// RouteMode 是本次请求解析出的线路策略（balanced/fixed），供 lifecycle 候选排序消费。
-	RouteMode string
 }
 
 // Store 定义 routing 查询候选渠道所需的最小数据库能力。
 type Store interface {
 	ModelExistsByID(ctx context.Context, requestedModelID string) (bool, error)
-	RouteOffersModel(ctx context.Context, arg sqlc.RouteOffersModelParams) (bool, error)
-	UserCanUseModel(ctx context.Context, arg sqlc.UserCanUseModelParams) (bool, error)
-	FindRouteCandidates(ctx context.Context, arg sqlc.FindRouteCandidatesParams) ([]sqlc.FindRouteCandidatesRow, error)
-	GetRouteByID(ctx context.Context, id int64) (sqlc.Route, error)
-	CountRouteChannels(ctx context.Context, routeID int64) (int64, error)
+	FindModelCandidates(ctx context.Context, arg sqlc.FindModelCandidatesParams) ([]sqlc.FindModelCandidatesRow, error)
 }
 
 // ValidateChat 在持久 request 生命周期开始前校验模型产品资格。
-// 它不读取运行时 Channel 健康或容量：通过后即表示 Route 已向该用户承诺该模型。
+// 供给的根是 Model：模型 enabled 即对外可售（该状态由供给不变量保证至少有一条可用渠道），
+// 因此这里只校验协议与模型存在，不再有线路售卖资格与用户级模型策略两道关卡。
+// 运行时能否打通由 PlanChat 的候选筛选负责。
 func (r *Router) ValidateChat(ctx context.Context, req ChatRouteRequest) error {
 	if !IsSupportedProtocol(req.IngressProtocol) {
 		return failure.Wrap(
@@ -182,11 +172,6 @@ func (r *Router) ValidateChat(ctx context.Context, req ChatRouteRequest) error {
 			failure.WithMessage(ErrIngressProtocolInvalid.Error()),
 			failure.WithField("ingress_protocol", req.IngressProtocol),
 		)
-	}
-
-	route, err := r.resolveRoute(ctx, req)
-	if err != nil {
-		return err
 	}
 
 	exists, err := r.store.ModelExistsByID(ctx, req.ModelID)
@@ -205,65 +190,20 @@ func (r *Router) ValidateChat(ctx context.Context, req ChatRouteRequest) error {
 		)
 	}
 
-	offered, err := r.store.RouteOffersModel(ctx, sqlc.RouteOffersModelParams{
-		RouteID:          route.ID,
-		RequestedModelID: req.ModelID,
-		IngressProtocol:  req.IngressProtocol,
-	})
-	if err != nil {
-		return failure.Wrap(
-			failure.CodeRoutingStoreFailed,
-			err,
-			failure.WithMessage("check route model offering"),
-		)
-	}
-	if !offered {
-		return failure.Wrap(
-			failure.CodeRoutingModelNotAvailable,
-			ErrModelNotAvailable,
-			failure.WithMessage(ErrModelNotAvailable.Error()),
-			failure.WithField("route_id", route.ID),
-		)
-	}
-
-	allowed, err := r.store.UserCanUseModel(ctx, sqlc.UserCanUseModelParams{
-		UserID:           req.UserID,
-		RequestedModelID: req.ModelID,
-	})
-	if err != nil {
-		return failure.Wrap(
-			failure.CodeRoutingStoreFailed,
-			err,
-			failure.WithMessage("check user model policy"),
-		)
-	}
-	if !allowed {
-		return failure.Wrap(
-			failure.CodeRoutingModelNotAvailable,
-			ErrModelNotAvailable,
-			failure.WithMessage(ErrModelNotAvailable.Error()),
-		)
-	}
-
 	return nil
 }
 
-// resolvedRoute 是线路解析后的最小事实（策略 + 价格倍率）。
-type resolvedRoute struct {
-	ID         int64
-	Name       string
-	Mode       string
-	PriceRatio pgtype.Numeric
-}
-
-// Router 负责根据 project 和 requested model 选择可用 channel。
+// Router 负责根据 requested model 与入口协议选择可用 channel。
 //
 // 两个全局默认超时可运行时热改，用 atomic 存储（纳秒）：路由热路径每次候选构造都会读取，无锁竞争。
 type Router struct {
 	store                         Store
 	defaultResponseTimeoutNanos   atomic.Int64
 	defaultFirstTokenTimeoutNanos atomic.Int64
-	logger                        *zap.Logger
+	// salePriceRatio 是模型未配置绝对售价时的回退倍率（gateway.model_sale_price_ratio）。
+	// 与超时同样走 atomic 热改：路由热路径每个候选都要读。
+	salePriceRatio atomic.Pointer[pgtype.Numeric]
+	logger         *zap.Logger
 }
 
 // Option 调整 Router 的可选依赖（如日志）。
@@ -309,6 +249,28 @@ func (r *Router) SetDefaultFirstTokenTimeout(d time.Duration) {
 	r.defaultFirstTokenTimeoutNanos.Store(int64(d))
 }
 
+// SetSalePriceRatio 原子替换全局售价倍率（运行时热改入口）。
+// 无效值忽略：宁可继续用上一个已知有效的倍率，也不能让计费落到 0 或负数。
+func (r *Router) SetSalePriceRatio(ratio pgtype.Numeric) {
+	if !ratio.Valid {
+		return
+	}
+	value := ratio
+	r.salePriceRatio.Store(&value)
+}
+
+// currentSalePriceRatio 返回当前售价倍率；未注入时按 1.0（等于直接卖基准价，不会亏本）。
+func (r *Router) currentSalePriceRatio() pgtype.Numeric {
+	if ratio := r.salePriceRatio.Load(); ratio != nil {
+		return *ratio
+	}
+	var one pgtype.Numeric
+	if err := one.Scan("1.0"); err != nil {
+		return pgtype.Numeric{}
+	}
+	return one
+}
+
 func (r *Router) defaultResponseTimeout() time.Duration {
 	return time.Duration(r.defaultResponseTimeoutNanos.Load())
 }
@@ -328,29 +290,7 @@ func (r *Router) PlanChat(ctx context.Context, req ChatRouteRequest) (ChatRouteP
 		)
 	}
 
-	route, err := r.resolveRoute(ctx, req)
-	if err != nil {
-		return ChatRoutePlan{}, err
-	}
-	poolSize, err := r.store.CountRouteChannels(ctx, route.ID)
-	if err != nil {
-		return ChatRoutePlan{}, failure.Wrap(
-			failure.CodeRoutingStoreFailed, err,
-			failure.WithMessage("count route channels"),
-		)
-	}
-	if route.Mode == "fixed" {
-		if poolSize != 1 {
-			return ChatRoutePlan{}, failure.Wrap(
-				failure.CodeRoutingNoAvailableChannel, ErrNoAvailableChannel,
-				failure.WithMessage("fixed route must contain exactly one channel"),
-				failure.WithField("route_id", route.ID),
-				failure.WithField("pool_size", poolSize),
-			)
-		}
-	}
-
-	rows, err := r.findCandidateRows(ctx, req, route)
+	rows, err := r.findCandidateRows(ctx, req)
 	if err != nil {
 		return ChatRoutePlan{}, err
 	}
@@ -358,7 +298,7 @@ func (r *Router) PlanChat(ctx context.Context, req ChatRouteRequest) (ChatRouteP
 	candidates := make([]ChatRouteCandidate, 0, len(rows))
 	marginFiltered := false
 	for _, row := range rows {
-		candidate, err := r.buildChatRouteCandidate(ctx, row, route)
+		candidate, err := r.buildChatRouteCandidate(ctx, row)
 		if err != nil {
 			if failure.CodeOf(err) == failure.CodeRoutingNegativeMargin {
 				marginFiltered = true
@@ -397,9 +337,8 @@ func (r *Router) PlanChat(ctx context.Context, req ChatRouteRequest) (ChatRouteP
 	plan := ChatRoutePlan{
 		RequestedModel: req.ModelID,
 		Candidates:     candidates,
-		PoolSize:       int(poolSize),
+		PoolSize:       len(candidates),
 		ModelDBID:      candidates[0].ModelDBID,
-		RouteMode:      route.Mode,
 	}
 
 	return plan, nil
@@ -415,65 +354,22 @@ func IsSupportedProtocol(protocol string) bool {
 	}
 }
 
-// resolveRoute 把 Key 绑定解析成本次请求的有效线路（候选池 + 策略）。
-// 线路必填、无默认回落：Key 绑定线路缺失或已停用即拒绝请求。
-func (r *Router) resolveRoute(ctx context.Context, req ChatRouteRequest) (resolvedRoute, error) {
-	route, ok, err := r.loadEnabledRoute(ctx, req.RouteID)
-	if err != nil {
-		return resolvedRoute{}, err
-	}
-	if ok {
-		return route, nil
-	}
-
-	return resolvedRoute{}, failure.Wrap(
-		failure.CodeRoutingRouteNotConfigured,
-		ErrRouteNotConfigured,
-		failure.WithMessage(ErrRouteNotConfigured.Error()),
-	)
-}
-
-// loadEnabledRoute 读取指定线路；不存在或已停用返回 ok=false，其他存储错误显式上抛。
-func (r *Router) loadEnabledRoute(ctx context.Context, id *int64) (resolvedRoute, bool, error) {
-	if id == nil {
-		return resolvedRoute{}, false, nil
-	}
-	row, err := r.store.GetRouteByID(ctx, *id)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return resolvedRoute{}, false, nil
-		}
-		return resolvedRoute{}, false, failure.Wrap(
-			failure.CodeRoutingStoreFailed,
-			err,
-			failure.WithMessage("get route by id"),
-		)
-	}
-	if row.Status != "enabled" {
-		return resolvedRoute{}, false, nil
-	}
-	return resolvedRoute{ID: row.ID, Name: row.Name, Mode: row.Mode, PriceRatio: row.PriceRatio}, true, nil
-}
-
-func (r *Router) findCandidateRows(ctx context.Context, req ChatRouteRequest, route resolvedRoute) ([]sqlc.FindRouteCandidatesRow, error) {
-	// TODO(阶段6/production): [GAP-6-005] routing 已支持 user_model_policies 模型 allow-list/deny-list，但尚未表达用户禁用、预算约束或专属 channel 策略；预算约束进入 reservation，用户禁用进入后台管理策略。
-	rows, err := r.store.FindRouteCandidates(ctx, sqlc.FindRouteCandidatesParams{
+func (r *Router) findCandidateRows(ctx context.Context, req ChatRouteRequest) ([]sqlc.FindModelCandidatesRow, error) {
+	rows, err := r.store.FindModelCandidates(ctx, sqlc.FindModelCandidatesParams{
 		RequestedModelID: req.ModelID,
 		IngressProtocol:  req.IngressProtocol,
-		UserID:           req.UserID,
-		RouteID:          route.ID,
 		AtTime:           pgtype.Timestamptz{Time: time.Now(), Valid: true},
 	})
 	if err != nil {
 		return nil, failure.Wrap(
 			failure.CodeRoutingStoreFailed,
 			err,
-			failure.WithMessage("find route candidates"),
+			failure.WithMessage("find model candidates"),
 		)
 	}
 
 	// 模型产品资格已在 request_records 创建前由 ValidateChat 判定。此处只表达运行时供给：
-	// 即使模型、Offering 或用户策略随后并发变化，已接受的请求也按无可用 Channel 收口并保留审计。
+	// 即使模型或渠道绑定随后并发变化，已接受的请求也按无可用 Channel 收口并保留审计。
 	if len(rows) > 0 {
 		return rows, nil
 	}
@@ -509,7 +405,7 @@ func optionalDurationMs(v pgtype.Int8) *time.Duration {
 	return &out
 }
 
-func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindRouteCandidatesRow, route resolvedRoute) (ChatRouteCandidate, error) {
+func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindModelCandidatesRow) (ChatRouteCandidate, error) {
 	// 渠道凭据明文存储（产品决策）：直接取用，仅防御性校验非空（DB 已 NOT NULL + CHECK <> ''）。
 	apiKey := strings.TrimSpace(row.Credential)
 	if apiKey == "" {
@@ -520,8 +416,8 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindRoute
 		)
 	}
 
-	// 客户售价 = 模型基准售价（model_prices）× 线路倍率（routes.price_ratio）（DEC-026）。
-	// 同一请求所有候选共享同一售价，不随命中哪条渠道而变。
+	// 客户售价定在模型上，两级解析：模型配了绝对售价就用它，否则基准价 × 全局售价倍率。
+	// 售价与命中哪条渠道无关，同一请求的所有候选共享同一售价。
 	basePrice := billing.CustomerPriceSnapshot{
 		Currency:                row.BaseCurrency,
 		PricingUnit:             row.BasePricingUnit,
@@ -534,13 +430,29 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindRoute
 		ReasoningOutputPrice:    row.ReasoningOutputPrice,
 		FormulaVersion:          billing.FormulaVersionV1,
 	}
-	salePrice, err := billing.ScaleCustomerPrice(basePrice, route.PriceRatio)
+	ratio := r.currentSalePriceRatio()
+	saleOverride := billing.SaleOverride{
+		UncachedInputPrice:      row.SaleUncachedInputPrice,
+		CacheReadInputPrice:     row.SaleCacheReadInputPrice,
+		CacheWrite5mInputPrice:  row.SaleCacheWrite5mInputPrice,
+		CacheWrite1hInputPrice:  row.SaleCacheWrite1hInputPrice,
+		CacheWrite30mInputPrice: row.SaleCacheWrite30mInputPrice,
+		OutputPrice:             row.SaleOutputPrice,
+		ReasoningOutputPrice:    row.SaleReasoningOutputPrice,
+	}
+	salePrice, err := billing.ResolveCustomerPrice(basePrice, ratio, saleOverride)
 	if err != nil {
 		return ChatRouteCandidate{}, failure.Wrap(
 			failure.CodeBillingInvalidPrice,
 			err,
-			failure.WithMessage("scale customer price by route price_ratio"),
+			failure.WithMessage("resolve model sale price"),
 		)
+	}
+	// 落快照的倍率只在倍率路径下有意义：走绝对售价时留空，表示这个售价不是算出来的，
+	// 避免审计端拿一个没参与计算的倍率去反推基准价。
+	var appliedRatio pgtype.Numeric
+	if !saleOverride.Configured() {
+		appliedRatio = ratio
 	}
 	fastModelPriceServiceTierID := int64(0)
 	fastSalePrice := billing.CustomerPriceSnapshot{}
@@ -558,14 +470,24 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindRoute
 			ReasoningOutputPrice:    row.FastReasoningOutputPrice,
 			FormulaVersion:          billing.FormulaVersionV1,
 		}
-		if scaled, scaleErr := billing.ScaleCustomerPrice(fastBasePrice, route.PriceRatio); scaleErr == nil {
+		// Fast 档同样两级解析，绝对售价列取自该档自己的 service tier 行。
+		fastResolved, fastErr := billing.ResolveCustomerPrice(fastBasePrice, ratio, billing.SaleOverride{
+			UncachedInputPrice:      row.FastSaleUncachedInputPrice,
+			CacheReadInputPrice:     row.FastSaleCacheReadInputPrice,
+			CacheWrite5mInputPrice:  row.FastSaleCacheWrite5mInputPrice,
+			CacheWrite1hInputPrice:  row.FastSaleCacheWrite1hInputPrice,
+			CacheWrite30mInputPrice: row.FastSaleCacheWrite30mInputPrice,
+			OutputPrice:             row.FastSaleOutputPrice,
+			ReasoningOutputPrice:    row.FastSaleReasoningOutputPrice,
+		})
+		if fastErr == nil {
 			fastModelPriceServiceTierID = row.FastModelPriceServiceTierID
-			fastSalePrice = scaled
+			fastSalePrice = fastResolved
 		} else {
 			logging.Warn(r.logger, "routing", "candidate", "fast sale price ignored because it is invalid",
 				zap.Int64("channel_id", row.ChannelID),
 				zap.Int64("model_price_service_tier_id", row.FastModelPriceServiceTierID),
-				zap.Error(scaleErr),
+				zap.Error(fastErr),
 			)
 		}
 	}
@@ -640,7 +562,6 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindRoute
 		Priority:                row.Priority,
 		StickyEnabled:           optionalBool(row.ChannelStickyEnabled),
 		StickyTTL:               optionalDurationMs(row.ChannelStickyTtlMs),
-		RouteName:               route.Name,
 		Channel: channel.Runtime{
 			ID:                row.ChannelID,
 			Name:              row.ChannelName,
@@ -652,11 +573,11 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindRoute
 		},
 		UpstreamModel:                 row.UpstreamModel,
 		ModelPriceID:                  row.ModelPriceID,
-		PriceRatio:                    route.PriceRatio,
+		PriceRatio:                    appliedRatio,
 		SalePrice:                     salePrice,
 		FastModelPriceServiceTierID:   fastModelPriceServiceTierID,
 		FastSalePrice:                 fastSalePrice,
-		LongContextPolicy:             longContextPolicyFromRouteRow(row),
+		LongContextPolicy:             longContextPolicyFromCandidateRow(row),
 		ChannelPriceID:                row.ChannelPriceID,
 		CostBaseModelPriceID:          costBaseModelPriceID,
 		ChannelCostMultiplierID:       channelCostMultiplierID,
@@ -669,7 +590,7 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindRoute
 
 // resolveFastCandidateCost 只验证候选是否具备可锁定的 Fast Provider 成本来源。
 // 返回结果不参与路由过滤、排序或负毛利守卫。
-func resolveFastCandidateCost(row sqlc.FindRouteCandidatesRow, fastBasePrice billing.CustomerPriceSnapshot) (billing.ProviderCostSnapshot, int64, bool) {
+func resolveFastCandidateCost(row sqlc.FindModelCandidatesRow, fastBasePrice billing.CustomerPriceSnapshot) (billing.ProviderCostSnapshot, int64, bool) {
 	if row.ChannelPriceID != 0 {
 		if row.FastChannelPriceServiceTierID == 0 {
 			return billing.ProviderCostSnapshot{}, 0, false
@@ -706,7 +627,7 @@ func resolveFastCandidateCost(row sqlc.FindRouteCandidatesRow, fastBasePrice bil
 //
 // basePrice 是调用方已从 base(model_prices) 列构造的售价向量（与 SalePrice 同源），此处映射为成本向量作基数，
 // 保证售价与成本共用同一 model_prices 基数（DEC-031 核心不变量）。
-func resolveCandidateCost(row sqlc.FindRouteCandidatesRow, basePrice billing.CustomerPriceSnapshot) (cost billing.ProviderCostSnapshot, costBaseModelPriceID, multiplierID, rechargeFactorID int64, err error) {
+func resolveCandidateCost(row sqlc.FindModelCandidatesRow, basePrice billing.CustomerPriceSnapshot) (cost billing.ProviderCostSnapshot, costBaseModelPriceID, multiplierID, rechargeFactorID int64, err error) {
 	if row.ChannelPriceID != 0 {
 		return billing.ProviderCostSnapshot{
 			Currency:               row.CostCurrency,
@@ -743,8 +664,8 @@ func rechargeFactorOrDefault(factor pgtype.Numeric) pgtype.Numeric {
 	return pgtype.Numeric{Int: big.NewInt(1), Exp: 0, Valid: true}
 }
 
-// longContextPolicyFromRouteRow 从候选行的 model_prices 长上下文字段组装策略。
-func longContextPolicyFromRouteRow(row sqlc.FindRouteCandidatesRow) billing.LongContextPolicy {
+// longContextPolicyFromCandidateRow 从候选行的 model_prices 长上下文字段组装策略。
+func longContextPolicyFromCandidateRow(row sqlc.FindModelCandidatesRow) billing.LongContextPolicy {
 	threshold := int64(0)
 	if row.BaseLongContextThreshold.Valid {
 		threshold = row.BaseLongContextThreshold.Int64

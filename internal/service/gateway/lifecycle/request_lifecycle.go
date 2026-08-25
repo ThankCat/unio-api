@@ -83,10 +83,10 @@ func (l *RequestLifecycle) RecordRoutingDecisionFailure(ctx context.Context, in 
 }
 
 // RecordRoutingFailure 保存「已经参与选渠」后的路由失败（如无可用渠道、负毛利全摘除）。
-// 模型不存在 / 用户无权 / 线路未配置 / 协议非法 / 存储故障等资格失败发生在 request_records
-// 创建之前，没有持久请求或路由决策可回顾，只通过 trace、日志与拒绝指标观察。
-func (l *RequestLifecycle) RecordRoutingFailure(ctx context.Context, request requestlog.RequestRecord, routeID *int64, err error) {
-	if l == nil || routeID == nil || err == nil {
+// 模型不存在 / 协议非法 / 存储故障等资格失败发生在 request_records 创建之前，
+// 没有持久请求或路由决策可回顾，只通过 trace、日志与拒绝指标观察。
+func (l *RequestLifecycle) RecordRoutingFailure(ctx context.Context, request requestlog.RequestRecord, err error) {
+	if l == nil || err == nil {
 		return
 	}
 	if !shouldPersistRoutingFailure(err) {
@@ -106,7 +106,7 @@ func (l *RequestLifecycle) RecordRoutingFailure(ctx context.Context, request req
 		l.recordMarginGuard("runtime_rejected")
 	}
 	l.RecordRoutingDecisionFailure(ctx, RoutingDecisionTraceInput{
-		Request: request, RouteID: *routeID, ForceReasons: []string{reason}, MarginGuard: marginGuard,
+		Request: request, ForceReasons: []string{reason}, MarginGuard: marginGuard,
 	}, err)
 }
 
@@ -116,7 +116,6 @@ func shouldPersistRoutingFailure(err error) bool {
 	switch failure.CodeOf(err) {
 	case failure.CodeRoutingModelNotFound,
 		failure.CodeRoutingModelNotAvailable,
-		failure.CodeRoutingRouteNotConfigured,
 		failure.CodeRoutingProtocolInvalid,
 		failure.CodeRoutingStoreFailed:
 		return false
@@ -217,7 +216,7 @@ func (l *RequestLifecycle) AuthorizeNewChat(ctx context.Context, params ChatAuth
 		return ChatAuthorizedRequest{}, err
 	}
 
-	l.publishRequestRecord(ctx, result.RequestRecord, params.Request.RouteID)
+	l.publishRequestRecord(ctx, result.RequestRecord)
 	fields = append(fields,
 		zap.String("request_id", result.RequestRecord.RequestID),
 		zap.Int64("reservation_id", result.Authorization.ReservationID),
@@ -388,7 +387,7 @@ func (l *RequestLifecycle) RecordZeroPriceServed(providerID int64, channelID int
 // CreateRequest 创建用户可见请求记录，并立即推进到 running 状态。
 // request_records.request_id 由服务端生成，用作数据库唯一事实 ID；
 // HTTP X-Request-ID 只作为日志 trace_id，不能直接复用为账务 request_id。
-// reasoning 为归一后的推理强度（协议编排从请求 DTO 提取）；线路快照取自 principal.RouteID，
+// reasoning 为归一后的推理强度（协议编排从请求 DTO 提取）；
 // 客户端 IP 取自 ctx（gateway ClientIP 中间件写入）。
 func (l *RequestLifecycle) CreateRequest(ctx context.Context, principal *auth.APIKeyPrincipal, requestedModelID string, stream bool, reasoning ReasoningInfo) (requestlog.RequestRecord, error) {
 	return l.CreateRequestWithServiceTier(ctx, principal, requestedModelID, stream, reasoning, "")
@@ -426,13 +425,6 @@ func (l *RequestLifecycle) PrepareRequest(ctx context.Context, principal *auth.A
 	logfields.SetDeliveryStatus(ctx, string(requestlog.DeliveryStatusNotStarted))
 	logfields.SetSettlementStatus(ctx, "not_started")
 
-	var routeID *int64
-	if principal != nil {
-		routeID = principal.RouteID
-	}
-	if routeID != nil {
-		logfields.SetRouteID(ctx, *routeID)
-	}
 	var clientIP *string
 	if ip := httpx.ClientIP(ctx); ip != "" {
 		clientIP = &ip
@@ -450,7 +442,6 @@ func (l *RequestLifecycle) PrepareRequest(ctx context.Context, principal *auth.A
 		Endpoint:              l.endpoint,
 		Stream:                stream,
 		StartedAt:             time.Now(),
-		RouteID:               routeID,
 		ReasoningEffort:       reasoning.Effort,
 		ReasoningBudgetTokens: reasoning.BudgetTokens,
 		ClientIP:              clientIP,
@@ -476,7 +467,7 @@ func (l *RequestLifecycle) CreatePreparedRequest(ctx context.Context, params req
 	if err != nil {
 		return requestlog.RequestRecord{}, err
 	}
-	l.publishRequestRecord(ctx, record, params.RouteID)
+	l.publishRequestRecord(ctx, record)
 
 	record, err = l.requestLog.MarkRequestRunning(ctx, record.ID)
 	if err != nil {
@@ -486,12 +477,12 @@ func (l *RequestLifecycle) CreatePreparedRequest(ctx context.Context, params req
 	return record, nil
 }
 
-func (l *RequestLifecycle) publishRequestRecord(ctx context.Context, record requestlog.RequestRecord, routeID *int64) {
+func (l *RequestLifecycle) publishRequestRecord(ctx context.Context, record requestlog.RequestRecord) {
 	logfields.SetRequestID(ctx, record.RequestID)
-	logging.Debug(l.logger, "http", "request", "request record created", l.requestRecordLogFields(ctx, record, routeID)...)
+	logging.Debug(l.logger, "http", "request", "request record created", l.requestRecordLogFields(ctx, record)...)
 }
 
-func (l *RequestLifecycle) requestRecordLogFields(ctx context.Context, record requestlog.RequestRecord, routeID *int64) []zap.Field {
+func (l *RequestLifecycle) requestRecordLogFields(ctx context.Context, record requestlog.RequestRecord) []zap.Field {
 	fields := []zap.Field{
 		zap.String("trace_id", httpx.RequestID(ctx)),
 		zap.String("request_id", record.RequestID),
@@ -501,9 +492,6 @@ func (l *RequestLifecycle) requestRecordLogFields(ctx context.Context, record re
 		zap.String("protocol", string(record.IngressProtocol)),
 		zap.String("endpoint", string(record.Endpoint)),
 		zap.Bool("stream", record.Stream),
-	}
-	if routeID != nil {
-		fields = append(fields, zap.Int64("route_id", *routeID))
 	}
 	return fields
 }
@@ -517,9 +505,6 @@ func (l *RequestLifecycle) requestParamsLogFields(ctx context.Context, params re
 		zap.String("protocol", string(params.IngressProtocol)),
 		zap.String("endpoint", string(params.Endpoint)),
 		zap.Bool("stream", params.Stream),
-	}
-	if params.RouteID != nil {
-		fields = append(fields, zap.Int64("route_id", *params.RouteID))
 	}
 	return fields
 }
@@ -561,7 +546,6 @@ func (l *RequestLifecycle) CreateAttemptForEndpoint(
 	// 覆盖为当前尝试；失败停在某次 attempt 时访问日志即显示最后打过的渠道。
 	logfields.SetUpstreamAttempt(ctx, logfields.UpstreamAttempt{
 		ModelID:    candidate.ModelDBID,
-		Router:     candidate.RouteName,
 		ProviderID: candidate.ProviderID,
 		Provider:   candidate.Channel.ProviderSlug,
 		ChannelID:  candidate.Channel.ID,

@@ -188,8 +188,8 @@ func reconcileRuntimeControls(
 				return breakerstore.ControlTarget{}, false
 			}
 			switch op.SettingKey.String {
-			case appsettings.GatewayRouteRateLimitDefaultsKey:
-				return controls.RouteRateLimitControl(), true
+			case appsettings.GatewayRequestRateLimitDefaultsKey:
+				return controls.RequestRateLimitControl(), true
 			case appsettings.GatewayConcurrencyDefaultsKey:
 				return controls.GlobalConcurrencyControl(), true
 			case appsettings.GatewayCircuitBreakerKey, appsettings.GatewayRoutingBalanceKey:

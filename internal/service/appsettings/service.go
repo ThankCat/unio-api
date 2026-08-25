@@ -23,7 +23,7 @@ type RuntimeControlPublisher interface {
 
 // RuntimeControlStore 提供 setting control 的定位和只读同步状态。
 type RuntimeControlStore interface {
-	RouteRateLimitControl() breakerstore.ControlTarget
+	RequestRateLimitControl() breakerstore.ControlTarget
 	GlobalConcurrencyControl() breakerstore.ControlTarget
 	SettingControl(settingKey string) breakerstore.ControlTarget
 	ReadControl(ctx context.Context, target breakerstore.ControlTarget, expectedRevision int64) (breakerstore.ControlSnapshot, error)
@@ -213,7 +213,7 @@ func (s *Service) SetRawWithResult(ctx context.Context, key string, value json.R
 
 func isRuntimeControlSetting(key string) bool {
 	switch key {
-	case GatewayRouteRateLimitDefaultsKey,
+	case GatewayRequestRateLimitDefaultsKey,
 		GatewayConcurrencyDefaultsKey, GatewayCircuitBreakerKey, GatewayRoutingBalanceKey:
 		return true
 	default:
@@ -223,7 +223,7 @@ func isRuntimeControlSetting(key string) bool {
 
 func canonicalRuntimeSetting(key string, raw json.RawMessage) (json.RawMessage, error) {
 	switch key {
-	case GatewayRouteRateLimitDefaultsKey:
+	case GatewayRequestRateLimitDefaultsKey:
 		settings, err := DecodeRateLimitDefaultsSettings(raw)
 		if err != nil {
 			return nil, err
@@ -312,8 +312,8 @@ func newRuntimeControlToken() (string, error) {
 
 func runtimeControlTarget(store RuntimeControlStore, key string) breakerstore.ControlTarget {
 	switch key {
-	case GatewayRouteRateLimitDefaultsKey:
-		return store.RouteRateLimitControl()
+	case GatewayRequestRateLimitDefaultsKey:
+		return store.RequestRateLimitControl()
 	case GatewayConcurrencyDefaultsKey:
 		return store.GlobalConcurrencyControl()
 	default:

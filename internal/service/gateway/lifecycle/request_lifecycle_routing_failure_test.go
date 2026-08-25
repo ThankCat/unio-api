@@ -19,7 +19,6 @@ func TestShouldPersistRoutingFailure(t *testing.T) {
 	}{
 		{"model not found", failure.CodeRoutingModelNotFound, false},
 		{"model not available", failure.CodeRoutingModelNotAvailable, false},
-		{"route not configured", failure.CodeRoutingRouteNotConfigured, false},
 		{"protocol invalid", failure.CodeRoutingProtocolInvalid, false},
 		{"store failed", failure.CodeRoutingStoreFailed, false},
 		{"no available channel", failure.CodeRoutingNoAvailableChannel, true},
@@ -43,13 +42,12 @@ func TestRecordRoutingFailureSkipsPreSelectionErrors(t *testing.T) {
 	lifecycle := &RequestLifecycle{}
 	lifecycle.SetRoutingTraceRecorder(recorder)
 
-	routeID := int64(9)
 	request := requestlog.RequestRecord{
 		ID: 1, RequestID: "req-unknown-model", RequestedModelID: "openai/does-not-exist",
 		IngressProtocol: requestlog.ProtocolOpenAI, Endpoint: requestlog.EndpointChatCompletions,
 	}
 
-	lifecycle.RecordRoutingFailure(context.Background(), request, &routeID, failure.Wrap(
+	lifecycle.RecordRoutingFailure(context.Background(), request, failure.Wrap(
 		failure.CodeRoutingModelNotFound,
 		errors.New("model not found"),
 		failure.WithMessage("model not found"),
@@ -58,7 +56,7 @@ func TestRecordRoutingFailureSkipsPreSelectionErrors(t *testing.T) {
 		t.Fatalf("model_not_found must not write routing decision traces, got %d", len(store.writes))
 	}
 
-	lifecycle.RecordRoutingFailure(context.Background(), request, &routeID, failure.New(
+	lifecycle.RecordRoutingFailure(context.Background(), request, failure.New(
 		failure.CodeRoutingNoAvailableChannel,
 		failure.WithMessage("no available channel"),
 	))

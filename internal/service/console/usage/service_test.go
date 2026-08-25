@@ -19,7 +19,6 @@ type fakeStore struct {
 	seriesRows   []sqlc.ListConsoleUsageTimeseriesRow
 	seriesErr    error
 	modelParams  sqlc.ListConsoleUsageByModelParams
-	routeRows    []sqlc.ListConsoleUsageByRouteRow
 	trendParams  sqlc.ListConsoleUsageTrendByGroupParams
 	trendRows    []sqlc.ListConsoleUsageTrendByGroupRow
 }
@@ -56,16 +55,8 @@ func (f *fakeStore) ListConsoleUsageByAPIKey(context.Context, sqlc.ListConsoleUs
 	return []sqlc.ListConsoleUsageByAPIKeyRow{{GroupID: 9, GroupName: "prod", RequestCount: 2}}, nil
 }
 
-func (f *fakeStore) ListConsoleUsageByRoute(context.Context, sqlc.ListConsoleUsageByRouteParams) ([]sqlc.ListConsoleUsageByRouteRow, error) {
-	return f.routeRows, nil
-}
-
 func (f *fakeStore) ListConsoleUsageFilterModels(context.Context, int64) ([]sqlc.ListConsoleUsageFilterModelsRow, error) {
 	return []sqlc.ListConsoleUsageFilterModelsRow{{ModelID: "gpt-5.6-terra", DisplayName: "GPT-5.6 Terra"}}, nil
-}
-
-func (f *fakeStore) ListConsoleFilterRoutes(context.Context) ([]sqlc.ListConsoleFilterRoutesRow, error) {
-	return []sqlc.ListConsoleFilterRoutesRow{{ID: 3, Name: "Claude"}}, nil
 }
 
 func (f *fakeStore) ListConsoleFilterAPIKeys(context.Context, int64) ([]sqlc.ListConsoleFilterAPIKeysRow, error) {
@@ -309,28 +300,12 @@ func TestGroupsByModelForwardsFilters(t *testing.T) {
 	}
 }
 
-// 请求和密钥都没有线路时 SQL 归到 id 0，对外要变成空 ID 让前端显示「未指定」。
-func TestGroupsByRouteBlanksFallbackRouteID(t *testing.T) {
-	store := &fakeStore{routeRows: []sqlc.ListConsoleUsageByRouteRow{
-		{GroupID: 0, GroupName: "", RequestCount: 4},
-		{GroupID: 3, GroupName: "Claude", RequestCount: 9},
-	}}
-
-	items, err := NewService(store).Groups(context.Background(), GroupParams{By: GroupByRoute})
-	if err != nil {
-		t.Fatalf("Groups: %v", err)
-	}
-	if items[0].ID != "" || items[1].ID != "3" {
-		t.Fatalf("unexpected route ids: %+v", items)
-	}
-}
-
-func TestFiltersReturnsRoutesKeysAndModels(t *testing.T) {
+func TestFiltersReturnsKeysAndModels(t *testing.T) {
 	filters, err := NewService(&fakeStore{}).Filters(context.Background(), 2)
 	if err != nil {
 		t.Fatalf("Filters: %v", err)
 	}
-	if len(filters.Routes) != 1 || len(filters.APIKeys) != 1 || len(filters.Models) != 1 {
+	if len(filters.APIKeys) != 1 || len(filters.Models) != 1 {
 		t.Fatalf("unexpected filters: %+v", filters)
 	}
 	if filters.Models[0].ID != "gpt-5.6-terra" {

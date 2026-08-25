@@ -17,7 +17,6 @@ type ChannelOpsService interface {
 	PerformanceTimeseries(ctx context.Context, channelID int64, interval string, from, to time.Time) ([]channelops.PerfPoint, error)
 	Errors(ctx context.Context, channelID int64, from, to time.Time, limit, offset int32) ([]channelops.ErrorRow, int64, error)
 	Models(ctx context.Context, channelID int64, from, to time.Time) ([]channelops.ModelRow, error)
-	Routes(ctx context.Context, channelID int64) ([]channelops.RouteRow, error)
 }
 
 type channelOpsHandler struct {
@@ -29,7 +28,7 @@ type channelOpsRowDTO struct {
 	Name                    string                    `json:"name"`
 	Status                  string                    `json:"status"`
 	CreatedAt               string                    `json:"created_at"`
-	Protocol                string                    `json:"protocol"`
+	Protocols               []string                  `json:"protocols"`
 	AdapterKey              string                    `json:"adapter_key"`
 	Origin                  string                    `json:"origin"`
 	Priority                int32                     `json:"priority"`
@@ -43,7 +42,6 @@ type channelOpsRowDTO struct {
 	TimeoutTotal            int64                     `json:"timeout_total"`
 	Latency                 adminhttp.LatencyStatsDTO `json:"latency"`
 	BoundModels             int64                     `json:"bound_models"`
-	BoundRoutes             int64                     `json:"bound_routes"`
 	RecentErrorCode         string                    `json:"recent_error_code"`
 	ConcurrencyLimit        *int32                    `json:"concurrency_limit"`
 	LastTestedAt            *string                   `json:"last_tested_at"`
@@ -156,7 +154,7 @@ func (h *channelOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 			Name:                    row.Name,
 			Status:                  row.Status,
 			CreatedAt:               adminhttp.RFC3339(row.CreatedAt),
-			Protocol:                row.Protocol,
+			Protocols:               row.Protocols,
 			AdapterKey:              row.AdapterKey,
 			Origin:                  row.Origin,
 			Priority:                row.Priority,
@@ -170,7 +168,6 @@ func (h *channelOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 			TimeoutTotal:            row.TimeoutTotal,
 			Latency:                 adminhttp.LatencyStatsFrom(row.Latency),
 			BoundModels:             row.BoundModels,
-			BoundRoutes:             row.BoundRoutes,
 			RecentErrorCode:         row.RecentErrorCode,
 			ConcurrencyLimit:        row.ConcurrencyLimit,
 			LastTestedAt:            adminhttp.RFC3339Ptr(row.LastTestedAt),
@@ -302,30 +299,6 @@ func (h *channelOpsHandler) models(w http.ResponseWriter, r *http.Request) {
 			SuccessRate:      m.SuccessRate,
 			Latency:          adminhttp.LatencyStatsFrom(m.Latency),
 			HasPrice:         m.HasPrice,
-		})
-	}
-	adminhttp.WriteData(w, http.StatusOK, out)
-}
-
-func (h *channelOpsHandler) routes(w http.ResponseWriter, r *http.Request) {
-	id, err := adminhttp.PathID(r)
-	if err != nil {
-		adminhttp.WriteServiceError(w, err)
-		return
-	}
-	rows, err := h.service.Routes(r.Context(), id)
-	if err != nil {
-		adminhttp.WriteServiceError(w, err)
-		return
-	}
-	out := make([]channelOpsRouteDTO, 0, len(rows))
-	for _, rt := range rows {
-		out = append(out, channelOpsRouteDTO{
-			ID:         rt.ID,
-			Name:       rt.Name,
-			Mode:       rt.Mode,
-			Status:     rt.Status,
-			PriceRatio: rt.PriceRatio,
 		})
 	}
 	adminhttp.WriteData(w, http.StatusOK, out)

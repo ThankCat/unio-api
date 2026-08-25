@@ -275,8 +275,8 @@ func (s *Service) disableBinding(ctx context.Context, in UpdateInput, upstreamMo
 	}
 
 	if current.Status == StatusEnabled {
-		if err := supply.DisableSelectedOfferings(ctx, q, impact, in.Confirmation, supply.ReasonBindingDisabled); err != nil {
-			return Binding{}, storeFailed(err, "disable selected offerings")
+		if err := supply.DisableSelectedModels(ctx, q, impact, in.Confirmation, supply.ReasonBindingDisabled); err != nil {
+			return Binding{}, storeFailed(err, "disable selected models")
 		}
 	}
 
@@ -287,7 +287,7 @@ func (s *Service) disableBinding(ctx context.Context, in UpdateInput, upstreamMo
 }
 
 // enableBinding 在一个事务内启用 Binding。Model 可以处于全局暂停状态；该状态只阻断
-// Binding 生效，不改写 Binding 的配置意图。启用 Binding 不自动修改 Offering。
+// Binding 生效，不改写 Binding 的配置意图。启用 Binding 不自动改动模型状态。
 func (s *Service) enableBinding(ctx context.Context, in UpdateInput, upstreamModel string) (Binding, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
@@ -388,8 +388,8 @@ func (s *Service) Delete(ctx context.Context, channelID, modelID int64, confirma
 	}
 
 	if current.Status == StatusEnabled {
-		if err := supply.DisableSelectedOfferings(ctx, q, impact, confirmation, supply.ReasonBindingDisabled); err != nil {
-			return storeFailed(err, "disable selected offerings")
+		if err := supply.DisableSelectedModels(ctx, q, impact, confirmation, supply.ReasonBindingDisabled); err != nil {
+			return storeFailed(err, "disable selected models")
 		}
 	}
 

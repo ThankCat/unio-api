@@ -30,7 +30,6 @@ func TestRouterModelsRequiresAPIKey(t *testing.T) {
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
 			UserID:    42,
-			RouteID:   ptrInt64(7),
 			KeyPrefix: "unio_sk_test",
 		},
 	}
@@ -63,7 +62,6 @@ func TestRouterModelsSuccess(t *testing.T) {
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
 			UserID:    42,
-			RouteID:   ptrInt64(7),
 			KeyPrefix: "unio_sk_test",
 		},
 	}
@@ -113,12 +111,6 @@ func TestRouterModelsSuccess(t *testing.T) {
 		t.Fatal("expected model catalog service to be called")
 	}
 
-	if modelCatalogService.projectID != 42 {
-		t.Fatalf("expected project id %d, got %d", int64(42), modelCatalogService.projectID)
-	}
-	if modelCatalogService.routeID != 7 {
-		t.Fatalf("expected route id 7, got %d", modelCatalogService.routeID)
-	}
 
 	if modelCatalogService.requiredCapabilities != nil {
 		t.Fatalf("expected no capability filter, got %v", modelCatalogService.requiredCapabilities)
@@ -156,7 +148,6 @@ func TestRouterModelsCapabilityFilterParsed(t *testing.T) {
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
 			UserID:    42,
-			RouteID:   ptrInt64(7),
 			KeyPrefix: "unio_sk_test",
 		},
 	}
@@ -189,7 +180,6 @@ func TestRouterModelsServiceError(t *testing.T) {
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
 			UserID:    1,
-			RouteID:   ptrInt64(7),
 			KeyPrefix: "unio_sk_test",
 		},
 	}

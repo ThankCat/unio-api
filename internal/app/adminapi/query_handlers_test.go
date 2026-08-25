@@ -99,12 +99,12 @@ func TestListRequestsForwardsRoutingSampleFilters(t *testing.T) {
 	rqs := &fakeRequestQueryService{}
 	handler := newQueryRouter(t, adminapi.RouterDeps{RequestQueryService: rqs})
 
-	rec := doAdmin(t, handler, http.MethodGet, "/v1/requests?route_id=7&channel_id=4&attempt_id=19&scoring_sample=any", "", true)
+	rec := doAdmin(t, handler, http.MethodGet, "/v1/requests?channel_id=4&attempt_id=19&scoring_sample=any", "", true)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusOK, rec.Code, rec.Body.String())
 	}
 	got := rqs.gotList
-	if got.RouteID == nil || *got.RouteID != 7 || got.ChannelID == nil || *got.ChannelID != 4 ||
+	if got.ChannelID == nil || *got.ChannelID != 4 ||
 		got.AttemptID == nil || *got.AttemptID != 19 || got.ScoringSample != "any" {
 		t.Fatalf("routing sample filters not forwarded: %+v", got)
 	}

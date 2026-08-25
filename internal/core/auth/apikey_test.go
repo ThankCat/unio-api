@@ -132,9 +132,9 @@ func TestAuthenticateAPIKeySpendLimitReached(t *testing.T) {
 
 func TestAuthenticateAPIKeyValid(t *testing.T) {
 	key := validAPIKey()
-	key.RouteRpmLimit = pgtype.Int4{Int32: 10, Valid: true}
-	key.RouteRpdLimit = pgtype.Int4{Int32: 100, Valid: true}
-	key.RouteConcurrencyLimit = pgtype.Int4{Int32: 4, Valid: true}
+	key.UserRpmLimit = pgtype.Int4{Int32: 10, Valid: true}
+	key.UserRpdLimit = pgtype.Int4{Int32: 100, Valid: true}
+	key.UserConcurrencyLimit = pgtype.Int4{Int32: 4, Valid: true}
 	authenticator := NewAPIKeyAuthenticator(&fakeAPIKeyStore{
 		key: key,
 	})

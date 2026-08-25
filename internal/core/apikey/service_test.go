@@ -41,15 +41,11 @@ func TestServiceCreateSuccess(t *testing.T) {
 		UserID:    10,
 		Name:      "test",
 		ExpiresAt: &expiresAt,
-		RouteID:   1,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if store.arg.RouteID != 1 {
-		t.Fatalf("want stored route_id 1, got %d", store.arg.RouteID)
-	}
 
 	if !store.called {
 		t.Fatal("store was not called")
@@ -148,29 +144,6 @@ func TestServiceCreateInvalidName(t *testing.T) {
 	}
 }
 
-func TestServiceCreateInvalidRoute(t *testing.T) {
-	store := &fakeStore{}
-	service := NewService(store)
-
-	// 线路必填：route_id 缺省（0）应被拒，且不落库。
-	created, err := service.Create(context.Background(), CreateParams{
-		UserID: 10,
-		Name:   "test",
-	})
-
-	if created != nil {
-		t.Fatal("want created key to be nil")
-	}
-
-	if !errors.Is(err, ErrInvalidRoute) {
-		t.Fatalf("want ErrInvalidRoute, got %v", err)
-	}
-
-	if store.called {
-		t.Fatal("want store not to be called")
-	}
-}
-
 func TestServiceCreateStoreError(t *testing.T) {
 	storeErr := errors.New("insert api key failed")
 	store := &fakeStore{err: storeErr}
@@ -179,7 +152,6 @@ func TestServiceCreateStoreError(t *testing.T) {
 	created, err := service.Create(context.Background(), CreateParams{
 		UserID:  10,
 		Name:    "test",
-		RouteID: 1,
 	})
 
 	if created != nil {
@@ -203,7 +175,6 @@ func TestServiceCreateWithoutExpiresAt(t *testing.T) {
 		UserID:    10,
 		Name:      "test",
 		ExpiresAt: nil,
-		RouteID:   1,
 	})
 	if err != nil {
 		t.Fatalf("create api key: %v", err)

@@ -1,14 +1,12 @@
 // Package logfields 提供按请求传播的结构化日志字段。
 //
 // 设计动机：HTTP 访问日志在中间件最外层写出，但 user/api_key（认证中间件）
-// 和 request_id/model/route/provider/channel（gateway）是在更内层才确定的。
+// 和 request_id/model/provider/channel（gateway）是在更内层才确定的。
 // 通过在请求最外层安装一个可变 *Fields 指针并由下游填充，外层日志即可拿到全量字段。
 //
 // 字段语义：
 //   - model：API 模型字符串（CreateRequest，来自请求体 models.model_id）
 //   - model_id：模型表数字主键 models.id（CreateAttempt）
-//   - route_id：线路数字 ID（CreateRequest，API Key 绑定）
-//   - router：线路名 routes.name（CreateAttempt，随候选透传）
 //   - provider_id / provider：服务商数字 ID / providers.slug（CreateAttempt）
 //   - channel_id / channel：渠道数字 ID / channels.name（CreateAttempt）
 //
@@ -40,9 +38,6 @@ type Fields struct {
 	model         string
 	modelID       int64
 	hasModelID    bool
-	routeID       int64
-	hasRouteID    bool
-	router        string
 	providerID    int64
 	hasProviderID bool
 	provider      string
@@ -319,33 +314,9 @@ func (f *Fields) SetModelID(modelID int64) {
 	f.hasModelID = true
 }
 
-// SetRouteID 记录线路数字 ID（产品语义上的「线路」，非渠道）。
-func (f *Fields) SetRouteID(routeID int64) {
-	if f == nil {
-		return
-	}
-
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.routeID = routeID
-	f.hasRouteID = true
-}
-
-// SetRouter 记录线路名 routes.name。
-func (f *Fields) SetRouter(router string) {
-	if f == nil {
-		return
-	}
-
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.router = router
-}
-
 // UpstreamAttempt 是一次上游尝试写入 access log 的路由维度。
 type UpstreamAttempt struct {
 	ModelID    int64
-	Router     string
 	ProviderID int64
 	Provider   string // providers.slug
 	ChannelID  int64
@@ -363,9 +334,6 @@ func (f *Fields) SetUpstreamAttempt(a UpstreamAttempt) {
 	if a.ModelID != 0 {
 		f.modelID = a.ModelID
 		f.hasModelID = true
-	}
-	if a.Router != "" {
-		f.router = a.Router
 	}
 	f.providerID = a.ProviderID
 	f.hasProviderID = a.ProviderID != 0
@@ -405,12 +373,6 @@ func (f *Fields) ZapFields() []zap.Field {
 	}
 	if f.hasModelID {
 		fields = append(fields, zap.Int64("model_id", f.modelID))
-	}
-	if f.hasRouteID {
-		fields = append(fields, zap.Int64("route_id", f.routeID))
-	}
-	if f.router != "" {
-		fields = append(fields, zap.String("route_name", f.router))
 	}
 	if f.hasProviderID {
 		fields = append(fields, zap.Int64("provider_id", f.providerID))
@@ -609,13 +571,6 @@ func SetCompletion(ctx context.Context, level string, errorCode string) {
 func SetModel(ctx context.Context, model string) {
 	if f, ok := FromContext(ctx); ok {
 		f.SetModel(model)
-	}
-}
-
-// SetRouteID 在 ctx 存在 Fields 时记录线路 ID；否则静默忽略。
-func SetRouteID(ctx context.Context, routeID int64) {
-	if f, ok := FromContext(ctx); ok {
-		f.SetRouteID(routeID)
 	}
 }
 

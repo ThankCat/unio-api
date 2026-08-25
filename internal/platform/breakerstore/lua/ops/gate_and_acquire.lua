@@ -16,7 +16,6 @@ local integrity_marker = KEYS[10]
 local request_admission_key = KEYS[11]
 local fault_latch = KEYS[12]
 local instance_proof = KEYS[13]
-local route_channel_rpd_key = KEYS[14]
 
 local permit_id = ARGV[1]
 local fingerprint = ARGV[2]
@@ -84,7 +83,6 @@ if redis.call('EXISTS', permit_key) == 1 then
     redis.call('HGET', permit_key, 'permit_ttl_ms'),
     redis.call('HGET', permit_key, 'renew_ms'),
     redis.call('HGET', permit_key, 'terminal_ttl_ms'),
-    redis.call('HGET', permit_key, 'route_channel_rpd_bucket'),
   }
 end
 
@@ -360,8 +358,6 @@ redis.call(
   provider_id,
   'channel_id',
   channel_id,
-  'route_id',
-  redis.call('HGET', request_admission_key, 'route_id') or '0',
   'origin_revision',
   origin_revision,
   'status_revision',
@@ -406,8 +402,6 @@ redis.call(
   'false',
   'first_token_eligible',
   'false',
-  'route_channel_rpd_bucket',
-  route_channel_rpd_key,
   'permit_ttl_ms',
   permit_ttl_ms,
   'renew_ms',
@@ -432,5 +426,4 @@ return {
   permit_ttl_ms,
   renew_ms,
   terminal_ttl_ms,
-  route_channel_rpd_key,
 }

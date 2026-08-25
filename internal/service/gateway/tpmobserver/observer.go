@@ -49,7 +49,7 @@ type MetricsRecorder interface {
 }
 
 // Scope 标识一个被跟踪的观测主体。
-// Route 维度按客户请求跟踪，Channel 维度按单个 attempt 跟踪；Key 同时作为跨进程幂等键的一部分。
+// User 维度按客户请求跟踪，Channel 维度按单个 attempt 跟踪；Key 同时作为跨进程幂等键的一部分。
 type Scope struct {
 	Kind breakerstore.TPMObservationKind
 	ID   int64
@@ -60,7 +60,7 @@ func (s Scope) valid() bool {
 	if s.ID <= 0 || s.Key == "" {
 		return false
 	}
-	return s.Kind == breakerstore.TPMScopeRoute || s.Kind == breakerstore.TPMScopeChannel
+	return s.Kind == breakerstore.TPMScopeUser || s.Kind == breakerstore.TPMScopeChannel
 }
 
 func (s Scope) correctionScope() string {

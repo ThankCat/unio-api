@@ -183,7 +183,7 @@ func responsesSafeMessage(code string) string {
 // vs 桥接 chat tokenizer）。allowDirect=false（CompactHistory 等强制桥接）退回纯 chat 桥接能力与估算。
 // 与 chatcompletions 一致按 stream 选择 Stream/NonStream 变体，避免仅支持一种模式的候选误选/误排。
 // stickyChannelID 是会话粘性既有绑定渠道（0=无），非 0 时置顶该渠道（大 uncache 缺口 P0）。
-func (s *ResponsesService) prepareResponsesCandidates(ctx context.Context, req gatewayapi.ResponsesRequest, candidates []routing.ChatRouteCandidate, mode string, stream bool, allowDirect bool, stickyChannelID int64) (lifecycle.CandidatePlan, error) {
+func (s *ResponsesService) prepareResponsesCandidates(ctx context.Context, req gatewayapi.ResponsesRequest, candidates []routing.ChatRouteCandidate, stream bool, allowDirect bool, stickyChannelID int64) (lifecycle.CandidatePlan, error) {
 	var capabilities []lifecycle.AdapterCapability
 	if allowDirect {
 		capabilities = []lifecycle.AdapterCapability{lifecycle.AdapterCapabilityResponsesServeTokenizer}
@@ -206,7 +206,6 @@ func (s *ResponsesService) prepareResponsesCandidates(ctx context.Context, req g
 		Candidates:          candidates,
 		Capabilities:        capabilities,
 		EstimateInputTokens: s.responsesInputTokenEstimator(req, allowDirect),
-		Mode:                mode,
 		StickyChannelID:     stickyChannelID,
 	})
 }

@@ -11,33 +11,41 @@ import (
 
 // fakeCatalogStore 是 catalog service 单测用的可用模型查询替身。
 type fakeCatalogStore struct {
-	rows      []sqlc.ListAvailableModelsForUserRow
-	err       error
-	lastInput sqlc.ListAvailableModelsForUserParams
+	rows          []sqlc.ListAvailableModelsRow
+	protocolRows  []sqlc.ListModelProtocolsRow
+	err           error
+	protocolErr   error
+	calls         int
+	protocolCalls int
 }
 
-func (s *fakeCatalogStore) ListAvailableModelsForUser(_ context.Context, in sqlc.ListAvailableModelsForUserParams) ([]sqlc.ListAvailableModelsForUserRow, error) {
-	s.lastInput = in
+func (s *fakeCatalogStore) ListAvailableModels(_ context.Context) ([]sqlc.ListAvailableModelsRow, error) {
+	s.calls++
 	return s.rows, s.err
+}
+
+func (s *fakeCatalogStore) ListModelProtocols(_ context.Context) ([]sqlc.ListModelProtocolsRow, error) {
+	s.protocolCalls++
+	return s.protocolRows, s.protocolErr
 }
 
 func TestListAvailableModelsMapsCapabilities(t *testing.T) {
 	store := &fakeCatalogStore{
-		rows: []sqlc.ListAvailableModelsForUserRow{
+		rows: []sqlc.ListAvailableModelsRow{
 			{ModelID: "openai/gpt-4.1", OwnedBy: "openai", CapabilityKeys: []string{"text.input", "text.output", "tools.function"}},
 			{ModelID: "deepseek/deepseek-chat", OwnedBy: "deepseek", CapabilityKeys: nil},
 		},
 	}
 
-	models, err := NewService(store).ListAvailableModels(context.Background(), 42, 7, nil)
+	models, err := NewService(store).ListAvailableModels(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("list available models: %v", err)
 	}
 	if len(models) != 2 {
 		t.Fatalf("expected 2 models, got %d", len(models))
 	}
-	if store.lastInput.UserID != 42 || store.lastInput.RouteID != 7 {
-		t.Fatalf("expected user 42 / route 7, got user %d / route %d", store.lastInput.UserID, store.lastInput.RouteID)
+	if store.calls != 1 || store.protocolCalls != 1 {
+		t.Fatalf("expected one call to each store method, got models=%d protocols=%d", store.calls, store.protocolCalls)
 	}
 
 	if models[0].ID != "openai/gpt-4.1" {
@@ -58,14 +66,14 @@ func TestListAvailableModelsMapsCapabilities(t *testing.T) {
 
 func TestListAvailableModelsCapabilityFilterAND(t *testing.T) {
 	store := &fakeCatalogStore{
-		rows: []sqlc.ListAvailableModelsForUserRow{
+		rows: []sqlc.ListAvailableModelsRow{
 			{ModelID: "has-both", OwnedBy: "x", CapabilityKeys: []string{"image.input", "tools.function", "text.output"}},
 			{ModelID: "has-one", OwnedBy: "x", CapabilityKeys: []string{"image.input"}},
 			{ModelID: "has-none", OwnedBy: "x", CapabilityKeys: []string{"text.output"}},
 		},
 	}
 
-	models, err := NewService(store).ListAvailableModels(context.Background(), 42, 7, []string{"image.input", "tools.function"})
+	models, err := NewService(store).ListAvailableModels(context.Background(), []string{"image.input", "tools.function"})
 	if err != nil {
 		t.Fatalf("list available models: %v", err)
 	}
@@ -80,13 +88,13 @@ func TestListAvailableModelsCapabilityFilterAND(t *testing.T) {
 
 func TestListAvailableModelsEmptyFilterReturnsAll(t *testing.T) {
 	store := &fakeCatalogStore{
-		rows: []sqlc.ListAvailableModelsForUserRow{
+		rows: []sqlc.ListAvailableModelsRow{
 			{ModelID: "a", OwnedBy: "x", CapabilityKeys: []string{"text.output"}},
 			{ModelID: "b", OwnedBy: "x", CapabilityKeys: nil},
 		},
 	}
 
-	models, err := NewService(store).ListAvailableModels(context.Background(), 42, 7, []string{})
+	models, err := NewService(store).ListAvailableModels(context.Background(), []string{})
 	if err != nil {
 		t.Fatalf("list available models: %v", err)
 	}
@@ -98,7 +106,7 @@ func TestListAvailableModelsEmptyFilterReturnsAll(t *testing.T) {
 func TestListAvailableModelsStoreError(t *testing.T) {
 	store := &fakeCatalogStore{err: errors.New("db down")}
 
-	_, err := NewService(store).ListAvailableModels(context.Background(), 42, 7, nil)
+	_, err := NewService(store).ListAvailableModels(context.Background(), nil)
 	if err == nil {
 		t.Fatal("expected error when store fails")
 	}

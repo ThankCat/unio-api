@@ -25,7 +25,7 @@ func TestCorrectionsDistributeOutputByObservedWeight(t *testing.T) {
 	w.addOutput(100, 300)
 	w.addOutput(101, 700)
 
-	entries, expired := w.corrections(breakerstore.TPMScopeRoute, 7, 480, 1100, 0)
+	entries, expired := w.corrections(breakerstore.TPMScopeUser, 7, 480, 1100, 0)
 	if expired != 0 {
 		t.Fatalf("expired = %d, want 0", expired)
 	}
@@ -71,7 +71,7 @@ func TestCorrectionsDropMinutesOutsideLookback(t *testing.T) {
 	w.addOutput(50, 40)
 	w.addOutput(120, 60)
 
-	entries, expired := w.corrections(breakerstore.TPMScopeRoute, 9, 100, 100, 100)
+	entries, expired := w.corrections(breakerstore.TPMScopeUser, 9, 100, 100, 100)
 	if expired != 1 {
 		t.Fatalf("expired = %d, want 1 (minute 50 is outside the lookback window)", expired)
 	}

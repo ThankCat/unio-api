@@ -24,7 +24,6 @@ type fakeStore struct {
 	seriesParams  sqlc.ListConsoleUsageTimeseriesParams
 	topModels     []sqlc.ListConsoleBilledRequestTopModelsRow
 	topParams     sqlc.ListConsoleBilledRequestTopModelsParams
-	routes        []sqlc.ListConsoleFilterRoutesRow
 	keys          []sqlc.ListConsoleFilterAPIKeysRow
 	keysUserID    int64
 	endpoints     []string
@@ -57,10 +56,6 @@ func (f *fakeStore) ListConsoleUsageTimeseries(_ context.Context, arg sqlc.ListC
 	return f.series, nil
 }
 
-func (f *fakeStore) ListConsoleFilterRoutes(context.Context) ([]sqlc.ListConsoleFilterRoutesRow, error) {
-	return f.routes, nil
-}
-
 func (f *fakeStore) ListConsoleFilterAPIKeys(_ context.Context, userID int64) ([]sqlc.ListConsoleFilterAPIKeysRow, error) {
 	f.keysUserID = userID
 	return f.keys, nil
@@ -84,8 +79,6 @@ func TestListMapsCustomerSafeFieldsAndScopesToUser(t *testing.T) {
 			RequestID:               "req_safe",
 			CreatedAt:               pgtype.Timestamptz{Time: started, Valid: true},
 			ClientIp:                pgtype.Text{String: "203.0.113.10", Valid: true},
-			RouteID:                 pgtype.Int8{Int64: 3, Valid: true},
-			RouteName:               pgtype.Text{String: "Claude", Valid: true},
 			ApiKeyID:                9,
 			ApiKeyName:              pgtype.Text{String: "prod", Valid: true},
 			ApiKeyPrefix:            pgtype.Text{String: "unio_sk_XhE8wL5D", Valid: true},
@@ -119,7 +112,6 @@ func TestListMapsCustomerSafeFieldsAndScopesToUser(t *testing.T) {
 		From:     &started,
 		Limit:    20,
 		Offset:   0,
-		RouteIDs: []int64{3},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -137,7 +129,7 @@ func TestListMapsCustomerSafeFieldsAndScopesToUser(t *testing.T) {
 	if item.Endpoint != "/chat/completions" {
 		t.Fatalf("endpoint = %q", item.Endpoint)
 	}
-	if item.APIKeyName != "prod" || item.RouteName != "Claude" {
+	if item.APIKeyName != "prod" {
 		t.Fatalf("item = %+v", item)
 	}
 	if item.APIKeyPrefix != "unio_sk_XhE8wL5D" || item.APIKeyPlaintext == nil || *item.APIKeyPlaintext == "" {
@@ -364,38 +356,6 @@ func TestSummarySkipsCompareWithoutTimeWindow(t *testing.T) {
 	}
 	if summary.Previous != nil || summary.Series != nil {
 		t.Fatalf("expected no compare data, got previous=%+v series=%+v", summary.Previous, summary.Series)
-	}
-}
-
-func TestFiltersExposeCatalogRoutesAndPublicEndpoints(t *testing.T) {
-	store := &fakeStore{
-		routes: []sqlc.ListConsoleFilterRoutesRow{
-			{ID: 3, Name: "Claude"},
-			{ID: 4, Name: "GPT"},
-		},
-		keys:      []sqlc.ListConsoleFilterAPIKeysRow{{ID: 9, Name: "prod"}},
-		endpoints: []string{"chat_completions", "messages"},
-		streams:   []bool{true, false},
-	}
-
-	filters, err := requests.NewService(store).Filters(context.Background(), 7)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(filters.Routes) != 2 || filters.Routes[0].ID != 3 || filters.Routes[1].Name != "GPT" {
-		t.Fatalf("routes = %+v", filters.Routes)
-	}
-	if store.keysUserID != 7 {
-		t.Fatalf("keys user = %d", store.keysUserID)
-	}
-	if len(filters.APIKeys) != 1 || filters.APIKeys[0].Name != "prod" {
-		t.Fatalf("keys = %+v", filters.APIKeys)
-	}
-	if len(filters.Endpoints) != 2 || filters.Endpoints[0] != "/chat/completions" || filters.Endpoints[1] != "/messages" {
-		t.Fatalf("endpoints = %#v", filters.Endpoints)
-	}
-	if len(filters.StreamTypes) != 2 || filters.StreamTypes[0] != "stream" || filters.StreamTypes[1] != "sync" {
-		t.Fatalf("stream types = %#v", filters.StreamTypes)
 	}
 }
 

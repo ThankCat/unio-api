@@ -205,8 +205,6 @@ type AttemptPermit struct {
 
 	ProviderID            int64
 	ChannelID             int64
-	RouteID               int64
-	RouteChannelRPDBucket string
 
 	OriginRevision         int64
 	ProviderStatusRevision int64
@@ -383,7 +381,7 @@ type CandidateSnapshot struct {
 type SnapshotManyResult struct {
 	Candidates                []CandidateSnapshot
 	IntegrityRevision         int64
-	RouteRateRevision         int64
+	RequestRateRevision         int64
 	GlobalConcurrencyRevision int64
 	CircuitBreakerRevision    int64
 	RoutingBalance            RoutingBalanceSnapshot

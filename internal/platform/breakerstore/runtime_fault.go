@@ -203,7 +203,7 @@ func (s *Store) ClearRuntimeInfrastructureFaultAfterReconciliation(
 	keys := []string{
 		s.keys.runtimeInfrastructureFault(),
 		s.keys.stateIntegrityMarker(),
-		s.keys.admissionRouteRate(),
+		s.keys.admissionRequestRate(),
 		s.keys.admissionGlobalConcurrency(),
 		s.keys.runtimeControlSetting("gateway.circuit_breaker"),
 		s.keys.runtimeControlSetting("gateway.routing_balance"),

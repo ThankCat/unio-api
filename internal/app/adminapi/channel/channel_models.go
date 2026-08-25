@@ -53,15 +53,15 @@ type updateChannelModelRequest struct {
 	VerificationItemID *int64 `json:"verification_item_id"`
 	// ConfirmSupplyImpact + ExpectedImpactFingerprint 是停用触发 Offering 联动时的
 	// ADR-0019 影响确认与显式 Offering 选择；首次请求缺省，收到 409 后携带最新指纹重试。
-	ConfirmSupplyImpact       bool                                       `json:"confirm_supply_impact"`
-	ExpectedImpactFingerprint string                                     `json:"expected_impact_fingerprint"`
-	SelectedOfferings         []adminhttp.SupplyOfferingSelectionRequest `json:"selected_offerings"`
+	ConfirmSupplyImpact       bool                                    `json:"confirm_supply_impact"`
+	ExpectedImpactFingerprint string                                  `json:"expected_impact_fingerprint"`
+	SelectedModels            []adminhttp.SupplyModelSelectionRequest `json:"selected_models"`
 }
 
 type deleteChannelModelRequest struct {
-	ConfirmSupplyImpact       bool                                       `json:"confirm_supply_impact"`
-	ExpectedImpactFingerprint string                                     `json:"expected_impact_fingerprint"`
-	SelectedOfferings         []adminhttp.SupplyOfferingSelectionRequest `json:"selected_offerings"`
+	ConfirmSupplyImpact       bool                                    `json:"confirm_supply_impact"`
+	ExpectedImpactFingerprint string                                  `json:"expected_impact_fingerprint"`
+	SelectedModels            []adminhttp.SupplyModelSelectionRequest `json:"selected_models"`
 }
 
 type channelModelsHandler struct {
@@ -143,7 +143,7 @@ func (h *channelModelsHandler) update(w http.ResponseWriter, r *http.Request) {
 		Confirmation: supply.Confirmation{
 			Confirm:             req.ConfirmSupplyImpact,
 			ExpectedFingerprint: req.ExpectedImpactFingerprint,
-			SelectedOfferings:   adminhttp.SupplyOfferingSelections(req.SelectedOfferings),
+			SelectedModels:      adminhttp.SupplyModelSelections(req.SelectedModels),
 		},
 	})
 	if err != nil {
@@ -175,7 +175,7 @@ func (h *channelModelsHandler) delete(w http.ResponseWriter, r *http.Request) {
 	confirmation := supply.Confirmation{
 		Confirm:             req.ConfirmSupplyImpact || adminhttp.BoolQuery(r, "confirm_supply_impact"),
 		ExpectedFingerprint: req.ExpectedImpactFingerprint,
-		SelectedOfferings:   adminhttp.SupplyOfferingSelections(req.SelectedOfferings),
+		SelectedModels:      adminhttp.SupplyModelSelections(req.SelectedModels),
 	}
 	if confirmation.ExpectedFingerprint == "" {
 		confirmation.ExpectedFingerprint = adminhttp.QueryString(r, "expected_impact_fingerprint")

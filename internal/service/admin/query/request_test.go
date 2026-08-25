@@ -28,7 +28,6 @@ type fakeRequestStore struct {
 	costSnapErr  error
 	priceSnap    sqlc.PriceSnapshot
 	priceSnapErr error
-	route        sqlc.Route
 	routeErr     error
 
 	listRows []sqlc.ListRequestRecordsPageRow
@@ -68,10 +67,6 @@ func (f *fakeRequestStore) GetCostSnapshotByRequest(context.Context, int64) (sql
 func (f *fakeRequestStore) GetPriceSnapshotByRequest(context.Context, int64) (sqlc.PriceSnapshot, error) {
 	return f.priceSnap, f.priceSnapErr
 }
-func (f *fakeRequestStore) GetRouteByID(context.Context, int64) (sqlc.Route, error) {
-	return f.route, f.routeErr
-}
-
 func baseRecord() sqlc.RequestRecord {
 	now := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
 	return sqlc.RequestRecord{
@@ -294,12 +289,10 @@ func TestRequestServiceListMapsTotal(t *testing.T) {
 
 func TestRequestServiceListForwardsRoutingSampleFilters(t *testing.T) {
 	store := &fakeRequestStore{}
-	routeID := int64(7)
 	channelID := int64(4)
 	attemptID := int64(19)
 
 	_, _, err := query.NewRequestService(store).List(context.Background(), query.RequestListParams{
-		RouteID:       &routeID,
 		ChannelID:     &channelID,
 		AttemptID:     &attemptID,
 		ScoringSample: "any",
@@ -309,7 +302,7 @@ func TestRequestServiceListForwardsRoutingSampleFilters(t *testing.T) {
 		t.Fatalf("List: %v", err)
 	}
 	for name, got := range map[string]sqlc.ListRequestRecordsPageParams{"list": store.listGot} {
-		if !got.RouteID.Valid || got.RouteID.Int64 != routeID || !got.ChannelID.Valid || got.ChannelID.Int64 != channelID ||
+		if !got.ChannelID.Valid || got.ChannelID.Int64 != channelID ||
 			!got.AttemptID.Valid || got.AttemptID.Int64 != attemptID || !got.ScoringSample.Valid || got.ScoringSample.String != "any" {
 			t.Fatalf("%s filters = %+v", name, got)
 		}
@@ -321,12 +314,10 @@ func TestRequestServiceListForwardsRoutingSampleFilters(t *testing.T) {
 
 func TestRequestServiceListCountsOnlyEmptyPageBeyondFirst(t *testing.T) {
 	store := &fakeRequestStore{total: 42}
-	routeID := int64(7)
 	channelID := int64(4)
 	attemptID := int64(19)
 
 	items, total, err := query.NewRequestService(store).List(context.Background(), query.RequestListParams{
-		RouteID:       &routeID,
 		ChannelID:     &channelID,
 		AttemptID:     &attemptID,
 		ScoringSample: "any",
@@ -343,7 +334,7 @@ func TestRequestServiceListCountsOnlyEmptyPageBeyondFirst(t *testing.T) {
 		t.Fatal("CountRequestRecords was not called for an empty page beyond the first")
 	}
 	got := store.countGot
-	if !got.RouteID.Valid || got.RouteID.Int64 != routeID || !got.ChannelID.Valid || got.ChannelID.Int64 != channelID ||
+	if !got.ChannelID.Valid || got.ChannelID.Int64 != channelID ||
 		!got.AttemptID.Valid || got.AttemptID.Int64 != attemptID || !got.ScoringSample.Valid || got.ScoringSample.String != "any" {
 		t.Fatalf("count filters = %+v", got)
 	}
@@ -380,7 +371,6 @@ func TestRequestServiceListMapsRoutingSampleLocation(t *testing.T) {
 			ID:                  1,
 			RequestID:           "req_sample",
 			Status:              "failed",
-			RouteID:             pgtype.Int8{Int64: 7, Valid: true},
 			ScoringAttemptID:    19,
 			ScoringDimensions:   []string{"ttft", "error"},
 			ScoringErrorFailure: true,
@@ -393,7 +383,7 @@ func TestRequestServiceListMapsRoutingSampleLocation(t *testing.T) {
 		t.Fatalf("List: %v", err)
 	}
 	item := items[0]
-	if item.RouteID == nil || *item.RouteID != 7 || item.ScoringAttemptID == nil || *item.ScoringAttemptID != 19 ||
+	if item.ScoringAttemptID == nil || *item.ScoringAttemptID != 19 ||
 		len(item.ScoringDimensions) != 2 || !item.ScoringErrorFailure {
 		t.Fatalf("routing sample location = %+v", item)
 	}

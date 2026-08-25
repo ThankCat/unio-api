@@ -43,10 +43,8 @@ func TestLoggerEmitsUnifiedFields(t *testing.T) {
 		logfields.SetIdentity(req.Context(), 7, 100)
 		logfields.SetRequestID(req.Context(), "req_abc")
 		logfields.SetModel(req.Context(), "openai/gpt-4.1")
-		logfields.SetRouteID(req.Context(), 2)
 		logfields.SetUpstreamAttempt(req.Context(), logfields.UpstreamAttempt{
 			ModelID:    99,
-			Router:     "default-route",
 			ProviderID: 9123,
 			Provider:   "openai",
 			ChannelID:  123,
@@ -83,8 +81,6 @@ func TestLoggerEmitsUnifiedFields(t *testing.T) {
 		"api_key_id":    float64(100),
 		"model":         "openai/gpt-4.1",
 		"model_id":      float64(99),
-		"route_id":      float64(2),
-		"route_name":    "default-route",
 		"provider_id":   float64(9123),
 		"provider_slug": "openai",
 		"channel_id":    float64(123),

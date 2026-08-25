@@ -89,8 +89,8 @@ func createLedgerTestUser(t *testing.T, ctx context.Context, pool *pgxpool.Pool)
 
 	var userID int64
 	err := pool.QueryRow(ctx, `
-		INSERT INTO users (email, password_hash, display_name)
-		VALUES ($1, $2, $3)
+		INSERT INTO users (uid, email, password_hash, display_name)
+		VALUES (gen_random_uuid(), $1, $2, $3)
 		RETURNING id
 	`, email, "test-password-hash", "Ledger Test User").Scan(&userID)
 	if err != nil {
@@ -100,32 +100,24 @@ func createLedgerTestUser(t *testing.T, ctx context.Context, pool *pgxpool.Pool)
 	return userID
 }
 
-// createLedgerTestAPIKey 创建 ledger service 请求测试需要的线路和 API Key。
-func createLedgerTestAPIKey(t *testing.T, ctx context.Context, pool *pgxpool.Pool, userID int64) (int64, int64) {
+// createLedgerTestAPIKey 创建 ledger service 请求测试需要的 API Key。
+func createLedgerTestAPIKey(t *testing.T, ctx context.Context, pool *pgxpool.Pool, userID int64) int64 {
 	t.Helper()
 
 	suffix := time.Now().UnixNano()
 
-	var routeID int64
-	if err := pool.QueryRow(ctx, `
-		INSERT INTO routes (name, mode, status, price_ratio)
-		VALUES ($1, 'balanced', 'enabled', 1)
-		RETURNING id
-	`, fmt.Sprintf("ledger-route-%d", suffix)).Scan(&routeID); err != nil {
-		t.Fatalf("insert ledger test route: %v", err)
-	}
 
 	var apiKeyID int64
 	err := pool.QueryRow(ctx, `
-		INSERT INTO api_keys (user_id, name, key_prefix, key_hash, route_id)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO api_keys (user_id, name, key_prefix, key_hash)
+		VALUES ($1, $2, $3, $4)
 		RETURNING id
-	`, userID, "ledger test key", "sk-test", fmt.Sprintf("ledger-key-hash-%d", suffix), routeID).Scan(&apiKeyID)
+	`, userID, "ledger test key", "sk-test", fmt.Sprintf("ledger-key-hash-%d", suffix)).Scan(&apiKeyID)
 	if err != nil {
 		t.Fatalf("insert ledger test api key: %v", err)
 	}
 
-	return apiKeyID, routeID
+	return apiKeyID
 }
 
 // createLedgerTestRequestRecord 创建 ledger service 预授权测试需要的 request record。
@@ -133,7 +125,7 @@ func createLedgerTestRequestRecord(t *testing.T, ctx context.Context, pool *pgxp
 	t.Helper()
 
 	suffix := time.Now().UnixNano()
-	apiKeyID, _ := createLedgerTestAPIKey(t, ctx, pool, userID)
+	apiKeyID := createLedgerTestAPIKey(t, ctx, pool, userID)
 
 	var requestRecordID int64
 	err := pool.QueryRow(ctx, `
@@ -547,12 +539,9 @@ func TestConcurrentCreateRequestAndPreAuthorizeRollsBackTemporarilyReservedLoser
 			defer cleanup()
 
 			userID := createLedgerTestUser(t, ctx, pool)
-			apiKeyID, routeID := createLedgerTestAPIKey(t, ctx, pool, userID)
+			apiKeyID := createLedgerTestAPIKey(t, ctx, pool, userID)
 			defer func() {
 				cleanupLedgerTestUser(t, context.Background(), pool, userID)
-				if _, err := pool.Exec(context.Background(), `DELETE FROM routes WHERE id = $1`, routeID); err != nil {
-					t.Errorf("delete ledger test route: %v", err)
-				}
 			}()
 
 			if _, err := service.Credit(ctx, CreditParams{
@@ -576,7 +565,6 @@ func TestConcurrentCreateRequestAndPreAuthorizeRollsBackTemporarilyReservedLoser
 						IngressProtocol:      requestlog.ProtocolOpenAI,
 						Endpoint:             requestlog.EndpointChatCompletions,
 						StartedAt:            time.Now().UTC(),
-						RouteID:              &routeID,
 						RequestedServiceTier: servicetier.TierStandard,
 					},
 					EstimatedAmount:      numeric(2),
@@ -733,12 +721,9 @@ func TestCreateRequestAndPreAuthorizeRollsBackInsufficientBalance(t *testing.T) 
 			defer cleanup()
 
 			userID := createLedgerTestUser(t, ctx, pool)
-			apiKeyID, routeID := createLedgerTestAPIKey(t, ctx, pool, userID)
+			apiKeyID := createLedgerTestAPIKey(t, ctx, pool, userID)
 			defer func() {
 				cleanupLedgerTestUser(t, context.Background(), pool, userID)
-				if _, err := pool.Exec(context.Background(), `DELETE FROM routes WHERE id = $1`, routeID); err != nil {
-					t.Errorf("delete ledger test route: %v", err)
-				}
 			}()
 
 			if tt.createBalanceRow {
@@ -762,7 +747,6 @@ func TestCreateRequestAndPreAuthorizeRollsBackInsufficientBalance(t *testing.T) 
 					IngressProtocol:      requestlog.ProtocolOpenAI,
 					Endpoint:             requestlog.EndpointChatCompletions,
 					StartedAt:            time.Now().UTC(),
-					RouteID:              &routeID,
 					RequestedServiceTier: servicetier.TierStandard,
 				},
 				EstimatedAmount:      numeric(1),

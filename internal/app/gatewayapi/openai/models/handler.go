@@ -12,7 +12,7 @@ import (
 
 // ModelCatalogService 定义 /v1/models handler 依赖的模型目录能力。
 type ModelCatalogService interface {
-	ListAvailableModels(ctx context.Context, userID, routeID int64, requiredCapabilities []string) ([]modelcatalog.Model, error)
+	ListAvailableModels(ctx context.Context, requiredCapabilities []string) ([]modelcatalog.Model, error)
 }
 
 // modelsHandler 处理 OpenAI-compatible models API。
@@ -33,30 +33,27 @@ type modelsResponse struct {
 
 // modelResponse 表示 OpenAI-compatible 单个模型响应。
 //
-// Capabilities 是 Unio 扩展的 cap-tags 数组（OpenAI 标准字段之外，SDK 忽略未知字段不受影响），
-// 让客户预检模型能力；未声明能力的模型为空数组。
+// Capabilities 与 Protocols 是 Unio 扩展字段（OpenAI 标准字段之外，SDK 忽略未知字段不受影响）：
+// 前者让客户预检模型能力，后者告知该模型可用哪些入口协议调用。均可能为空数组。
 type modelResponse struct {
 	ID           string   `json:"id"`
 	Object       string   `json:"object"`
 	OwnedBy      string   `json:"owned_by"`
 	Capabilities []string `json:"capabilities"`
+	Protocols    []string `json:"protocols"`
 }
 
 // handleModels 返回当前可用模型列表的 OpenAI-compatible 响应。
 func (h *modelsHandler) handleModels(w http.ResponseWriter, r *http.Request) {
-	apiKeyPrincipal, ok := auth.APIKeyPrincipalFromContext(r.Context())
+	_, ok := auth.APIKeyPrincipalFromContext(r.Context())
 	if !ok {
 		_ = httpx.WriteError(w, http.StatusUnauthorized, "unauthorized", "missing api key")
 		return
 	}
 
 	requiredCapabilities := parseCapabilityFilter(r.URL.Query().Get("capability"))
-	if apiKeyPrincipal.RouteID == nil {
-		_ = httpx.WriteError(w, http.StatusUnauthorized, "unauthorized", "api key has no route")
-		return
-	}
 
-	models, err := h.service.ListAvailableModels(r.Context(), apiKeyPrincipal.UserID, *apiKeyPrincipal.RouteID, requiredCapabilities)
+	models, err := h.service.ListAvailableModels(r.Context(), requiredCapabilities)
 	if err != nil {
 		_ = httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "list models failed")
 		return
@@ -68,11 +65,16 @@ func (h *modelsHandler) handleModels(w http.ResponseWriter, r *http.Request) {
 		if capabilities == nil {
 			capabilities = []string{}
 		}
+		protocols := model.Protocols
+		if protocols == nil {
+			protocols = []string{}
+		}
 		data = append(data, modelResponse{
 			ID:           model.ID,
 			Object:       "model",
 			OwnedBy:      model.OwnedBy,
 			Capabilities: capabilities,
+			Protocols:    protocols,
 		})
 	}
 

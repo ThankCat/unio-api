@@ -206,7 +206,6 @@ func (h *customerOpsHandler) apiKeysTable(w http.ResponseWriter, r *http.Request
 	for _, k := range rows {
 		out = append(out, apiKeyOpsRowDTO{
 			ID: k.ID, Name: k.Name, KeyPrefix: k.KeyPrefix, KeyPlaintext: k.KeyPlaintext, UserID: k.UserID, Status: k.Status,
-			RouteID: int64Value(k.RouteID), RouteName: k.RouteName, RoutePriceRatio: k.RoutePriceRatio, SpendLimit: k.SpendLimit, SpentTotal: k.SpentTotal,
 			RequestTotal: k.RequestTotal, Succeeded: k.Succeeded, SuccessRate: k.SuccessRate,
 			ConsumptionUSD: k.ConsumptionUSD, LastUsedAt: adminhttp.RFC3339Ptr(k.LastUsedAt), ExpiresAt: adminhttp.RFC3339Ptr(k.ExpiresAt),
 		})

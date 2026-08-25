@@ -323,7 +323,7 @@ func (s *Service) RotateCredentialAndTest(ctx context.Context, in adminchannel.R
 
 func probeSnapshotFromRow(row sqlc.GetChannelProbeSnapshotRow) probeSnapshot {
 	return probeSnapshot{
-		ChannelID: row.ChannelID, ProviderID: row.ProviderID, Protocol: row.Protocol, AdapterKey: row.AdapterKey,
+		ChannelID: row.ChannelID, ProviderID: row.ProviderID, Protocol: primaryProtocol(row.Protocols), AdapterKey: row.AdapterKey,
 		Credential: row.Credential, CredentialValid: row.CredentialValid, ConfigRevision: row.ConfigRevision,
 		ProviderSlug: row.ProviderSlug, Origin: row.Origin,
 		OriginRevision: row.OriginRevision, ProviderStatusRevision: row.StatusRevision,
@@ -332,7 +332,7 @@ func probeSnapshotFromRow(row sqlc.GetChannelProbeSnapshotRow) probeSnapshot {
 
 func probeSnapshotFromRotation(row sqlc.PrepareChannelCredentialRotationRow) probeSnapshot {
 	return probeSnapshot{
-		ChannelID: row.ChannelID, ProviderID: row.ProviderID, Protocol: row.Protocol, AdapterKey: row.AdapterKey,
+		ChannelID: row.ChannelID, ProviderID: row.ProviderID, Protocol: primaryProtocol(row.Protocols), AdapterKey: row.AdapterKey,
 		Credential: row.Credential, CredentialValid: row.CredentialValid, ConfigRevision: row.ConfigRevision,
 		ProviderSlug: row.ProviderSlug, Origin: row.Origin,
 		OriginRevision: row.OriginRevision, ProviderStatusRevision: row.StatusRevision,
@@ -749,4 +749,13 @@ func notFound(message string) error {
 
 func storeFailed(cause error, message string) error {
 	return failure.Wrap(failure.CodeAdminStoreFailed, cause, failure.WithMessage(message))
+}
+
+// primaryProtocol 取渠道主协议（protocols 首项）。
+// 连通性探测只需一个协议形态：同一把凭据的可达性不随入口形态变化。
+func primaryProtocol(protocols []string) string {
+	if len(protocols) == 0 {
+		return ""
+	}
+	return protocols[0]
 }

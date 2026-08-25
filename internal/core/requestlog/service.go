@@ -78,7 +78,6 @@ type CreateRequestParams struct {
 	Stream           bool
 	StartedAt        time.Time
 	// 批二富化（均可空）：线路快照 / 归一推理强度 + 原始预算 / 客户端 IP。
-	RouteID               *int64
 	ReasoningEffort       *string
 	ReasoningBudgetTokens *int32
 	ClientIP              *string

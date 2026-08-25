@@ -66,7 +66,7 @@ type BalanceScore struct {
 	CandidateChannelCapacityRevision int64
 	RuntimeChannelCapacityRevision   int64
 	ChannelCapacityRevisionCurrent   bool
-	RouteRateLimitsRevision          int64
+	RequestRateLimitsRevision        int64
 	GlobalConcurrencyRevision        int64
 	CircuitBreakerRevision           int64
 	RoutingBalanceRevision           int64

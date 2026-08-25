@@ -48,7 +48,6 @@ func (l *RequestLifecycle) requestLogContext(ctx context.Context, request reques
 func candidateLogContext(candidate routing.ChatRouteCandidate) []zap.Field {
 	fields := []zap.Field{
 		zap.Int64("model_id", candidate.ModelDBID),
-		zap.String("route_name", candidate.RouteName),
 		zap.Int64("provider_id", candidate.ProviderID),
 		zap.String("provider_slug", candidate.Channel.ProviderSlug),
 		zap.Int64("channel_id", candidate.Channel.ID),

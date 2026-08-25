@@ -16,7 +16,6 @@ type ProviderOpsService interface {
 	Detail(ctx context.Context, providerID int64, from, to time.Time) (providerops.Detail, error)
 	ChannelCatalog(ctx context.Context, providerID int64) ([]providerops.ChannelCatalogRow, error)
 	ModelCatalog(ctx context.Context, providerID int64) ([]providerops.ModelCatalogRow, error)
-	RouteCatalog(ctx context.Context, providerID int64) ([]providerops.RouteCatalogRow, error)
 	Channels(ctx context.Context, providerID int64, from, to time.Time) ([]providerops.ChannelRow, error)
 	PerformanceTimeseries(ctx context.Context, providerID int64, interval string, from, to time.Time) ([]providerops.PerfPoint, error)
 	Errors(ctx context.Context, providerID int64, from, to time.Time, limit, offset int32) ([]providerops.ErrorRow, int64, error)
@@ -39,7 +38,6 @@ type providerOpsRowDTO struct {
 	BalanceStatus  string  `json:"balance_status"`
 	ChannelTotal   int64   `json:"channel_total"`
 	ModelsCount    int64   `json:"models_count"`
-	RoutesCount    int64   `json:"routes_count"`
 }
 
 type providerOpsDetailDTO struct {
@@ -69,13 +67,6 @@ type providerOpsChannelCatalogDTO struct {
 type providerOpsModelCatalogDTO struct {
 	ModelID     string `json:"model_id"`
 	DisplayName string `json:"display_name"`
-}
-
-type providerOpsRouteCatalogDTO struct {
-	ID     int64  `json:"id"`
-	Name   string `json:"name"`
-	Status string `json:"status"`
-	Mode   string `json:"mode"`
 }
 
 type providerOpsChannelDTO struct {
@@ -112,7 +103,6 @@ func (h *providerOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 		"name":       {},
 		"channels":   {},
 		"models":     {},
-		"routes":     {},
 		"created_at": {},
 		"status":     {},
 	}, "name", false)
@@ -147,7 +137,7 @@ func providerOpsRowDTOFrom(row providerops.Row) providerOpsRowDTO {
 		OriginRevision: row.OriginRevision, Status: row.Status, StatusRevision: row.StatusRevision,
 		CreatedAt: adminhttp.RFC3339(row.CreatedAt), ChannelTotal: row.ChannelTotal,
 		BalanceUSD: row.BalanceUSD, BalanceStatus: row.BalanceStatus,
-		ModelsCount: row.ModelsCount, RoutesCount: row.RoutesCount,
+		ModelsCount: row.ModelsCount,
 	}
 }
 
@@ -218,24 +208,6 @@ func (h *providerOpsHandler) modelCatalog(w http.ResponseWriter, r *http.Request
 	out := make([]providerOpsModelCatalogDTO, 0, len(rows))
 	for _, m := range rows {
 		out = append(out, providerOpsModelCatalogDTO{ModelID: m.ModelID, DisplayName: m.DisplayName})
-	}
-	adminhttp.WriteData(w, http.StatusOK, out)
-}
-
-func (h *providerOpsHandler) routeCatalog(w http.ResponseWriter, r *http.Request) {
-	id, err := adminhttp.PathID(r)
-	if err != nil {
-		adminhttp.WriteServiceError(w, err)
-		return
-	}
-	rows, err := h.service.RouteCatalog(r.Context(), id)
-	if err != nil {
-		adminhttp.WriteServiceError(w, err)
-		return
-	}
-	out := make([]providerOpsRouteCatalogDTO, 0, len(rows))
-	for _, rt := range rows {
-		out = append(out, providerOpsRouteCatalogDTO{ID: rt.ID, Name: rt.Name, Status: rt.Status, Mode: rt.Mode})
 	}
 	adminhttp.WriteData(w, http.StatusOK, out)
 }

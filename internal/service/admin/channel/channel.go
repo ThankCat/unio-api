@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -27,7 +28,7 @@ import (
 )
 
 const (
-	// ProtocolOpenAI / ProtocolAnthropic 是 channel 对外协议族，与 channels.protocol 的 DB 约束一致。
+	// ProtocolOpenAI / ProtocolAnthropic 是 channel 对外协议族，与 channels.protocols 的 DB 约束一致。
 	ProtocolOpenAI    = "openai"
 	ProtocolAnthropic = "anthropic"
 
@@ -48,7 +49,6 @@ type Store interface {
 	UpdateChannel(ctx context.Context, arg sqlc.UpdateChannelParams) (sqlc.Channel, error)
 	DeleteChannelCascade(ctx context.Context, id int64) (int64, error)
 	ArchiveChannel(ctx context.Context, id int64) (int64, error)
-	ListRoutesReferencingChannel(ctx context.Context, channelID int64) ([]sqlc.ListRoutesReferencingChannelRow, error)
 	CountEnabledBindingsByChannel(ctx context.Context, channelID int64) (int64, error)
 	RestoreChannel(ctx context.Context, id int64) (int64, error)
 }
@@ -105,7 +105,7 @@ type Channel struct {
 	// RuntimeSyncPending 表示 PostgreSQL 已保存，但 revision 对应的 Redis control 尚未确认 active。
 	RuntimeSyncPending  bool
 	Name                string
-	Protocol            string
+	Protocols           []string
 	AdapterKey          string
 	Origin              string
 	SupportsOpenAIFast  bool
@@ -175,11 +175,14 @@ type ListResult struct {
 
 // CreateInput 是创建 channel 的入参；Credential 为明文上游凭据，落库前加密。
 //
-// AdapterKey 可选：留空时默认为 Protocol 同名的忠实透传 adapter（见 Create 注释）。
+// Protocols 是该渠道对外提供的入口协议集合（至少一个）：一把上游凭据往往同时能以
+// OpenAI 与 Anthropic 两种形态服务，声明几个就都能被路由命中。
+// AdapterKey 必填：它决定用哪个适配器与上游对话，留空曾默认取协议同名的忠实透传 adapter，
+// 但那会让「忘填」和「确实要忠实透传」变成同一个输入，出问题时无法区分意图。
 type CreateInput struct {
 	ProviderID          int64
 	Name                string
-	Protocol            string
+	Protocols           []string
 	AdapterKey          string
 	SupportsOpenAIFast  bool
 	Credential          string
@@ -388,7 +391,10 @@ func (s *Service) Get(ctx context.Context, id int64) (Channel, error) {
 // Create 创建 channel：校验复合键在 registry 注册、provider 与请求状态合法，再保存凭据和配置。
 func (s *Service) Create(ctx context.Context, in CreateInput) (Channel, error) {
 	name := strings.TrimSpace(in.Name)
-	protocol := strings.TrimSpace(in.Protocol)
+	protocols, err := normalizeProtocols(in.Protocols)
+	if err != nil {
+		return Channel{}, err
+	}
 	adapterKey := strings.TrimSpace(in.AdapterKey)
 	status := strings.TrimSpace(in.Status)
 
@@ -398,17 +404,11 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Channel, error) {
 	if name == "" {
 		return Channel{}, invalidArgument("name", "name is required")
 	}
-	if err := validateProtocol(protocol); err != nil {
-		return Channel{}, err
+	if in.SupportsOpenAIFast && !slices.Contains(protocols, ProtocolOpenAI) {
+		return Channel{}, invalidArgument("supports_openai_fast", "OpenAI Fast 只对提供 OpenAI 协议的渠道有效")
 	}
-	if in.SupportsOpenAIFast && protocol != ProtocolOpenAI {
-		return Channel{}, invalidArgument("supports_openai_fast", "OpenAI Fast is only available for OpenAI channels")
-	}
-	// adapter_key 可选：留空默认为该协议的忠实透传 adapter。忠实 adapter 的注册键与协议同名
-	// （openai→"openai"、anthropic→"anthropic"），故普通 OpenAI/Anthropic 兼容上游免填即可；
-	// 仅需特殊方言/Drop 策略（如直连 DeepSeek 原厂）的上游才显式指定 adapter_key。
 	if adapterKey == "" {
-		adapterKey = protocol
+		return Channel{}, invalidArgument("adapter_key", "adapter_key is required")
 	}
 	if err := validateStatus(status); err != nil {
 		return Channel{}, err
@@ -434,14 +434,10 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Channel, error) {
 		return Channel{}, invalidArgument("credential", "credential is required")
 	}
 
-	// 关 GAP-6-003：复合键必须被当前进程 adapter registry 支持，避免写入不可运行绑定。
-	if !s.registry.HasAny(protocol, adapterKey) {
-		return Channel{}, failure.New(
-			failure.CodeAdminAdapterBindingUnsupported,
-			failure.WithMessage("(protocol, adapter_key) is not registered in adapter registry"),
-			failure.WithField("protocol", protocol),
-			failure.WithField("adapter_key", adapterKey),
-		)
+	// 每个声明的协议都必须与 adapter_key 组成 registry 里注册过的组合：
+	// 只要有一个组合缺适配器，该协议入口就是不可运行的，宁可整条拒绝也不留半可用渠道。
+	if err := s.validateProtocolAdapterCombos(protocols, adapterKey); err != nil {
+		return Channel{}, err
 	}
 
 	provider, err := s.store.GetProvider(ctx, in.ProviderID)
@@ -462,7 +458,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Channel, error) {
 	row, err := s.store.CreateChannel(ctx, sqlc.CreateChannelParams{
 		ProviderID:          in.ProviderID,
 		Name:                name,
-		Protocol:            protocol,
+		Protocols:           protocols,
 		AdapterKey:          adapterKey,
 		Credential:          strings.TrimSpace(in.Credential),
 		Status:              status,
@@ -533,7 +529,7 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Channel, error) {
 	if in.SupportsOpenAIFast != nil {
 		desiredSupportsOpenAIFast = *in.SupportsOpenAIFast
 	}
-	if desiredSupportsOpenAIFast && cur.Protocol != ProtocolOpenAI {
+	if desiredSupportsOpenAIFast && !slices.Contains(cur.Protocols, ProtocolOpenAI) {
 		return Channel{}, invalidArgument("supports_openai_fast", "OpenAI Fast is only available for OpenAI channels")
 	}
 	in.SupportsOpenAIFast = &desiredSupportsOpenAIFast
@@ -623,13 +619,15 @@ func (s *Service) disableChannelWithLinkage(ctx context.Context, in UpdateInput,
 	}
 	if err := supply.Authorize(impact,
 		"channel_disable_confirmation_required",
-		"pausing this channel may leave affected route offerings with no runtime candidate and return 503; confirm with the impact fingerprint",
+		"停用该渠道后，下列模型将没有可用渠道、客户调用会得到 503；可勾选一并停用这些模型，或保留等渠道恢复",
 		in.Confirmation,
 	); err != nil {
 		return Channel{}, err
 	}
-	if len(in.Confirmation.SelectedOfferings) > 0 {
-		return Channel{}, invalidArgument("selected_offerings", "pausing channel traffic cannot modify route offerings")
+	// 勾选的模型一并停用：否则它们会停在「列表里有、一调 503」的状态，
+	// 这正是供给不变量要避免的。不勾选也合法，表示管理员接受短期 503 等渠道恢复。
+	if err := supply.DisableSelectedModels(ctx, q, impact, in.Confirmation, supply.ReasonChannelDisabled); err != nil {
+		return Channel{}, storeFailed(err, "disable selected models")
 	}
 
 	row, err := q.UpdateChannel(ctx, sqlc.UpdateChannelParams{
@@ -706,13 +704,13 @@ func (s *Service) updateWithPublishedCapacity(
 				}
 				if authErr := supply.Authorize(impact,
 					"channel_disable_confirmation_required",
-					"pausing this channel may leave affected route offerings with no runtime candidate and return 503; confirm with the impact fingerprint",
+					"停用该渠道后，下列模型将没有可用渠道、客户调用会得到 503；可勾选一并停用这些模型，或保留等渠道恢复",
 					in.Confirmation,
 				); authErr != nil {
 					return authErr
 				}
-				if len(in.Confirmation.SelectedOfferings) > 0 {
-					return invalidArgument("selected_offerings", "pausing channel traffic cannot modify route offerings")
+				if disableErr := supply.DisableSelectedModels(ctx, qtx, impact, in.Confirmation, supply.ReasonChannelDisabled); disableErr != nil {
+					return storeFailed(disableErr, "disable selected models")
 				}
 			}
 			if _, updateErr := qtx.UpdateChannel(ctx, sqlc.UpdateChannelParams{
@@ -857,23 +855,12 @@ func (s *Service) Delete(ctx context.Context, id int64) error {
 	return nil
 }
 
-// Archive 只归档已显式移出所有 Route 池的渠道，不静默拆线或替换。
+// Archive 归档渠道。前置要求：渠道上不得有 enabled 的模型绑定——
+// 归档是「这条渠道以后不用了」，必须先把它对模型供给的贡献显式撤掉，不静默拆绑。
 func (s *Service) Archive(ctx context.Context, id int64) error {
 	if id <= 0 {
 		return invalidArgument("id", "channel id must be positive")
 	}
-	affectedRoutes, err := s.store.ListRoutesReferencingChannel(ctx, id)
-	if err != nil {
-		return storeFailed(err, "check channel archive route impact")
-	}
-	if len(affectedRoutes) > 0 {
-		return conflict(fmt.Sprintf(
-			"remove channel from route %q (%d) before archiving it",
-			affectedRoutes[0].Name, affectedRoutes[0].ID,
-		))
-	}
-	// 归档前置（ADR-0019）：archived Channel 下不得存在 enabled Binding；
-	// 先经影响预览停用全部 enabled Binding，再归档。
 	enabledBindings, err := s.store.CountEnabledBindingsByChannel(ctx, id)
 	if err != nil {
 		return storeFailed(err, "check channel archive binding impact")
@@ -932,7 +919,7 @@ func toChannel(c sqlc.Channel) Channel {
 		ConfigRevision:      c.ConfigRevision,
 		CapacityRevision:    c.CapacityRevision,
 		Name:                c.Name,
-		Protocol:            c.Protocol,
+		Protocols:           c.Protocols,
 		AdapterKey:          c.AdapterKey,
 		SupportsOpenAIFast:  c.SupportsOpenaiFast,
 		Credential:          c.Credential,
@@ -980,7 +967,7 @@ func toChannelRow(c sqlc.ListChannelsPageRow) Channel {
 		ConfigRevision:      c.ConfigRevision,
 		CapacityRevision:    c.CapacityRevision,
 		Name:                c.Name,
-		Protocol:            c.Protocol,
+		Protocols:           c.Protocols,
 		AdapterKey:          c.AdapterKey,
 		SupportsOpenAIFast:  c.SupportsOpenaiFast,
 		Origin:              c.Origin,
@@ -1101,6 +1088,46 @@ func int8Param(id int64) pgtype.Int8 {
 		return pgtype.Int8{}
 	}
 	return pgtype.Int8{Int64: id, Valid: true}
+}
+
+// normalizeProtocols 去空去重、校验取值并保持声明顺序（首项作为主协议，用于探测等单协议场景）。
+func normalizeProtocols(protocols []string) ([]string, error) {
+	out := make([]string, 0, len(protocols))
+	seen := make(map[string]struct{}, len(protocols))
+	for _, raw := range protocols {
+		p := strings.TrimSpace(raw)
+		if p == "" {
+			continue
+		}
+		if err := validateProtocol(p); err != nil {
+			return nil, err
+		}
+		if _, dup := seen[p]; dup {
+			continue
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+	}
+	if len(out) == 0 {
+		return nil, invalidArgument("protocols", "至少要选一个入口协议")
+	}
+	return out, nil
+}
+
+// validateProtocolAdapterCombos 逐个校验 (protocol, adapter_key) 是否在 adapter registry 注册。
+func (s *Service) validateProtocolAdapterCombos(protocols []string, adapterKey string) error {
+	for _, protocol := range protocols {
+		if s.registry.HasAny(protocol, adapterKey) {
+			continue
+		}
+		return failure.New(
+			failure.CodeAdminAdapterBindingUnsupported,
+			failure.WithMessage("(protocol, adapter_key) is not registered in adapter registry"),
+			failure.WithField("protocol", protocol),
+			failure.WithField("adapter_key", adapterKey),
+		)
+	}
+	return nil
 }
 
 func validateProtocol(protocol string) error {

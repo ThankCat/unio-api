@@ -12,7 +12,6 @@ type RoutingDecisionDTO struct {
 	RequestRecordID  int64                  `json:"request_record_id"`
 	RequestID        string                 `json:"request_id"`
 	RequestStatus    string                 `json:"request_status"`
-	RouteID          int64                  `json:"route_id"`
 	Mode             string                 `json:"mode"`
 	RequestedModelID string                 `json:"requested_model_id"`
 	Protocol         string                 `json:"protocol"`
@@ -50,7 +49,7 @@ type RoutingTraceSummaryDTO struct {
 func NewRoutingDecisionDTO(d routingtrace.Decision) RoutingDecisionDTO {
 	return RoutingDecisionDTO{
 		ID: d.ID, RequestRecordID: d.RequestRecordID, RequestID: d.RequestID,
-		RequestStatus: d.RequestStatus, RouteID: d.RouteID, Mode: d.Mode,
+		RequestStatus: d.RequestStatus, Mode: d.Mode,
 		RequestedModelID: d.RequestedModelID, Protocol: d.Protocol, Endpoint: d.Endpoint,
 		TraceStatus: d.TraceStatus, SchemaVersion: d.SchemaVersion, AlgorithmVersion: d.AlgorithmVersion,
 		Summary: RoutingTraceSummaryDTO{

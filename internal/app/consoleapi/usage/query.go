@@ -18,10 +18,6 @@ var allowedStreamTypes = map[string]struct{}{
 
 // parseFilters 解析与请求中心口径相同的筛选条件，外加用量统计特有的模型筛选。
 func parseFilters(r *http.Request) (consoleusage.Filters, *consoleservice.Error) {
-	routeIDs, err := parseInt64Values(r, "route_id")
-	if err != nil {
-		return consoleusage.Filters{}, err
-	}
 	apiKeyIDs, err := parseInt64Values(r, "api_key_id")
 	if err != nil {
 		return consoleusage.Filters{}, err
@@ -35,7 +31,6 @@ func parseFilters(r *http.Request) (consoleusage.Filters, *consoleservice.Error)
 		return consoleusage.Filters{}, err
 	}
 	return consoleusage.Filters{
-		RouteIDs:    routeIDs,
 		APIKeyIDs:   apiKeyIDs,
 		ModelIDs:    parseStringValues(r, "model_id"),
 		Endpoints:   endpoints,

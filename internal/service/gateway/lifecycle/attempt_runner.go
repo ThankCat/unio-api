@@ -330,7 +330,7 @@ scan:
 					}
 					if candIdx+1 < len(params.Candidates) {
 						result.RoutingFallback = true
-						l.RecordBalanceFallback(routeIDOf(params.Principal), skipReason)
+						l.RecordBalanceFallback(candidate.ModelDBID, skipReason)
 					}
 					continue
 				}
@@ -462,7 +462,7 @@ scan:
 							params.Sticky.PreserveOnTemporaryBypass(ctx, candidate.Channel.ID, string(admission.Reason))
 						}
 						if candIdx+1 < len(params.Candidates) {
-							l.RecordBalanceFallback(routeIDOf(params.Principal), skipReason)
+							l.RecordBalanceFallback(candidate.ModelDBID, skipReason)
 						}
 						continue
 					}
@@ -562,7 +562,7 @@ scan:
 				if candIdx+1 < len(params.Candidates) {
 					result.RoutingFallback = true
 					category, _ := adapter.UpstreamCategoryOf(err)
-					l.RecordBalanceFallback(routeIDOf(params.Principal), "upstream_"+string(category))
+					l.RecordBalanceFallback(candidate.ModelDBID, "upstream_"+string(category))
 					l.LogRoutingFallback(
 						ctx, requestRecord, attemptRecord, candidate,
 						FailureCodeOrFallback(err, "upstream_retryable"), true, false, false, "",
@@ -575,7 +575,7 @@ scan:
 			l.LogUpstreamAttemptResult(ctx, requestRecord, attemptRecord, candidate, false, timingFacts, responseFacts, AttemptStreamStats{}, nil, false, false)
 
 			l.RecordRoutingSelected(candidate.ProviderID, candidate.Channel.ID, params.RequestedModelID)
-			l.RecordBalanceSelected(routeIDOf(params.Principal), candidate.Channel.ID)
+			l.RecordBalanceSelected(candidate.ModelDBID, candidate.Channel.ID)
 
 			// 非流式成功请求的账务事实必须在 settlement 事务内一起提交，不能先返回响应再异步扣费。
 			settleCtx, settleSpan := StartGatewaySpan(ctx, "gateway.settlement")

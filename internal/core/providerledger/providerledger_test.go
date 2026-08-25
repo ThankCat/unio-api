@@ -107,8 +107,8 @@ func TestProviderProbeAccountingOnlyDebitsKnownCost(t *testing.T) {
 		t.Fatalf("insert model: %v", err)
 	}
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO channels (provider_id, name, protocol, adapter_key, credential, status, priority)
-		VALUES ($1, $2, 'openai', 'openai', 'test-secret', 'enabled', 0) RETURNING id
+		INSERT INTO channels (provider_id, name, protocols, adapter_key, credential, status, priority)
+		VALUES ($1, $2, ARRAY['openai']::text[], 'openai', 'test-secret', 'enabled', 0) RETURNING id
 	`, providerID, fmt.Sprintf("provider-probe-channel-%d", suffix)).Scan(&channelID); err != nil {
 		t.Fatalf("insert channel: %v", err)
 	}

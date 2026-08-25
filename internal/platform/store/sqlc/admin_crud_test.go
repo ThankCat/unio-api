@@ -3,6 +3,7 @@ package sqlc_test
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -74,7 +75,7 @@ func TestChannelCRUDQueries(t *testing.T) {
 	created, err := queries.CreateChannel(ctx, sqlc.CreateChannelParams{
 		ProviderID:          providerID,
 		Name:                "primary",
-		Protocol:            "openai",
+		Protocols:           []string{"openai"},
 		AdapterKey:          "openai",
 		Credential:          "sk-admin-create",
 		Status:              "enabled",
@@ -99,7 +100,7 @@ func TestChannelCRUDQueries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get channel: %v", err)
 	}
-	if got.ID != created.ID || got.Protocol != "openai" || got.AdapterKey != "openai" {
+	if got.ID != created.ID || !slices.Equal(got.Protocols, []string{"openai"}) || got.AdapterKey != "openai" {
 		t.Fatalf("unexpected channel read: %+v", got)
 	}
 	if got.Credential != "sk-admin-create" {
@@ -119,7 +120,7 @@ func TestChannelCRUDQueries(t *testing.T) {
 		t.Fatalf("unexpected updated channel: %+v", updated)
 	}
 	// protocol / adapter_key 不可在 UpdateChannel 修改，应保持原值。
-	if updated.Protocol != "openai" || updated.AdapterKey != "openai" {
+	if !slices.Equal(updated.Protocols, []string{"openai"}) || updated.AdapterKey != "openai" {
 		t.Fatalf("update must not change protocol/adapter_key: %+v", updated)
 	}
 
@@ -184,7 +185,7 @@ func TestChannelCredentialRotationRevisionCAS(t *testing.T) {
 	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("credential-cas-%d", suffix), "enabled")
 	created, err := queries.CreateChannel(ctx, sqlc.CreateChannelParams{
 		ProviderID: providerID, Name: "credential-cas",
-		Protocol: "openai", AdapterKey: "openai", Credential: "sk-old", Status: "enabled", Priority: 10,
+		Protocols: []string{"openai"}, AdapterKey: "openai", Credential: "sk-old", Status: "enabled", Priority: 10,
 	})
 	if err != nil {
 		t.Fatalf("create channel: %v", err)

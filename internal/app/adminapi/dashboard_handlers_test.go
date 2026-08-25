@@ -37,7 +37,7 @@ func (s *fakeDashboardService) Radar(_ context.Context, from, to time.Time) (das
 
 func (s *fakeDashboardService) Breakdown(_ context.Context, dimension string, _, _ time.Time) ([]dashboard.BreakdownRow, error) {
 	switch dimension {
-	case dashboard.BreakdownProvider, dashboard.BreakdownRoute, dashboard.BreakdownChannel, dashboard.BreakdownModel:
+	case dashboard.BreakdownProvider, dashboard.BreakdownChannel, dashboard.BreakdownModel:
 		return []dashboard.BreakdownRow{}, nil
 	default:
 		return nil, failure.New(failure.CodeAdminInvalidArgument, failure.WithMessage("bad dimension"))

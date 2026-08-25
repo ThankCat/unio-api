@@ -11,8 +11,6 @@ type itemDTO struct {
 	RequestID                 string   `json:"request_id"`
 	CreatedAt                 string   `json:"created_at"`
 	ClientIP                  string   `json:"client_ip"`
-	RouteID                   *int64   `json:"route_id"`
-	RouteName                 string   `json:"route_name"`
 	APIKeyID                  int64    `json:"api_key_id"`
 	APIKeyName                string   `json:"api_key_name"`
 	APIKeyPrefix              string   `json:"api_key_prefix"`
@@ -136,7 +134,6 @@ func toSummaryPointDTOs(points []consolerequests.Point) []summaryPointDTO {
 }
 
 type filtersData struct {
-	Routes      []consolerequests.FilterOption `json:"routes"`
 	APIKeys     []consolerequests.FilterOption `json:"api_keys"`
 	Endpoints   []string                       `json:"endpoints"`
 	StreamTypes []string                       `json:"stream_types"`
@@ -152,8 +149,6 @@ func toItemDTO(item consolerequests.Item) itemDTO {
 		RequestID:                 item.RequestID,
 		CreatedAt:                 createdAt,
 		ClientIP:                  item.ClientIP,
-		RouteID:                   item.RouteID,
-		RouteName:                 item.RouteName,
 		APIKeyID:                  item.APIKeyID,
 		APIKeyName:                item.APIKeyName,
 		APIKeyPrefix:              item.APIKeyPrefix,

@@ -270,9 +270,9 @@ func newPermitGuardRunner(log requestlog.Service) (
 	manager := NewAttemptPermitManager(store, attemptRuntimeFactsStub{
 		integrity: integrity,
 		admission: runtimefacts.AdmissionRevisions{
-			Integrity:       integrity,
-			RouteRateLimits: 1,
-			Concurrency:     1,
+			Integrity:         integrity,
+			RequestRateLimits: 1,
+			Concurrency:       1,
 		},
 		routing: runtimefacts.RoutingRevisions{
 			Integrity:      integrity,

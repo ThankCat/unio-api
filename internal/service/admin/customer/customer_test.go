@@ -168,13 +168,6 @@ func (f *fakeAPIKeyStore) SetAPIKeySpendLimit(_ context.Context, arg sqlc.SetAPI
 	}, nil
 }
 
-func (f *fakeAPIKeyStore) SetAPIKeyRoute(_ context.Context, arg sqlc.SetAPIKeyRouteParams) (sqlc.SetAPIKeyRouteRow, error) {
-	return sqlc.SetAPIKeyRouteRow{
-		ID:      arg.ID,
-		RouteID: arg.RouteID,
-	}, nil
-}
-
 func (f *fakeAPIKeyStore) SetAPIKeyName(_ context.Context, arg sqlc.SetAPIKeyNameParams) (sqlc.SetAPIKeyNameRow, error) {
 	return sqlc.SetAPIKeyNameRow{ID: arg.ID, Name: arg.Name}, nil
 }
@@ -191,12 +184,10 @@ func TestAPIKeyServiceCreateReturnsPlaintextAndSetsSpendLimit(t *testing.T) {
 	svc := NewAPIKeyService(store)
 
 	limit := "20.50"
-	routeID := int64(7)
 	got, err := svc.Create(context.Background(), APIKeyCreateParams{
 		UserID:     100,
 		Name:       "ci",
 		SpendLimit: &limit,
-		RouteID:    &routeID,
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -219,25 +210,8 @@ func TestAPIKeyServiceCreateRejectsEmptyName(t *testing.T) {
 	store := &fakeAPIKeyStore{user: sqlc.GetUserByIDRow{ID: 100}}
 	svc := NewAPIKeyService(store)
 
-	routeID := int64(7)
-	if _, err := svc.Create(context.Background(), APIKeyCreateParams{UserID: 100, Name: "  ", RouteID: &routeID}); failure.CodeOf(err) != failure.CodeAdminInvalidArgument {
+	if _, err := svc.Create(context.Background(), APIKeyCreateParams{UserID: 100, Name: "  "}); failure.CodeOf(err) != failure.CodeAdminInvalidArgument {
 		t.Fatalf("expected admin_invalid_argument, got %v", failure.CodeOf(err))
-	}
-}
-
-func TestAPIKeyServiceCreateRequiresRoute(t *testing.T) {
-	store := &fakeAPIKeyStore{user: sqlc.GetUserByIDRow{ID: 100}}
-	svc := NewAPIKeyService(store)
-
-	// 线路必填：缺失 route_id（nil）应被拒为 admin_invalid_argument，且不落库。
-	if _, err := svc.Create(context.Background(), APIKeyCreateParams{UserID: 100, Name: "ci"}); failure.CodeOf(err) != failure.CodeAdminInvalidArgument {
-		t.Fatalf("expected admin_invalid_argument for missing route, got %v", failure.CodeOf(err))
-	}
-
-	// 非正数 route_id 同样拒绝。
-	zero := int64(0)
-	if _, err := svc.Create(context.Background(), APIKeyCreateParams{UserID: 100, Name: "ci", RouteID: &zero}); failure.CodeOf(err) != failure.CodeAdminInvalidArgument {
-		t.Fatalf("expected admin_invalid_argument for non-positive route, got %v", failure.CodeOf(err))
 	}
 }
 

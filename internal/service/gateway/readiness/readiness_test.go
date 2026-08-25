@@ -76,7 +76,7 @@ func TestCheckerRequiresMatchingReadyEpochAndControls(t *testing.T) {
 		t.Fatalf("ready=%v reason=%q", ready, reason)
 	}
 	if store.input.Epoch != "00112233445566778899aabbccddeeff" || store.input.EpochRevision != 7 ||
-		store.input.RouteRateLimitRevision != 2 ||
+		store.input.RequestRateLimitRevision != 2 ||
 		store.input.ConcurrencyRevision != 3 ||
 		store.input.CircuitBreakerRevision != 4 || store.input.RoutingBalanceRevision != 5 {
 		t.Fatalf("unexpected readiness input: %+v", store.input)
@@ -95,7 +95,7 @@ func TestCheckerFailsClosedByLayer(t *testing.T) {
 		{name: "recovering epoch", row: recoveringRow(t), store: &storeStub{}, reason: "epoch_not_ready"},
 		{name: "invalid route rate revision", row: func() sqlc.GetGatewayRuntimeReadinessSnapshotRow {
 			row := readyRow(t)
-			row.RouteRateLimitDefaultsRevision = 0
+			row.RequestRateLimitDefaultsRevision = 0
 			return row
 		}(), store: &storeStub{}, reason: "control_revision_invalid"},
 		{name: "invalid concurrency revision", row: func() sqlc.GetGatewayRuntimeReadinessSnapshotRow {
@@ -235,9 +235,9 @@ func readyRow(t *testing.T) sqlc.GetGatewayRuntimeReadinessSnapshotRow {
 	}
 	return sqlc.GetGatewayRuntimeReadinessSnapshotRow{
 		RuntimeStateEpochValue: raw, RuntimeStateEpochRevision: 7,
-		RouteRateLimitDefaultsRevision: 2,
-		ConcurrencyDefaultsRevision:    3,
-		CircuitBreakerRevision:         4, RoutingBalanceRevision: 5,
+		RequestRateLimitDefaultsRevision: 2,
+		ConcurrencyDefaultsRevision:      3,
+		CircuitBreakerRevision:           4, RoutingBalanceRevision: 5,
 		RuntimeOperationsReconciled: true,
 	}
 }

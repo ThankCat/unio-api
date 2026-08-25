@@ -2,7 +2,6 @@
 SELECT
     t.id,
     t.request_record_id,
-    t.route_id,
     t.mode,
     t.requested_model_id,
     t.protocol,

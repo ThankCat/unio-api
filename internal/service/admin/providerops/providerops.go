@@ -18,7 +18,6 @@ type Store interface {
 	ProviderOpsDetail(ctx context.Context, arg sqlc.ProviderOpsDetailParams) (sqlc.ProviderOpsDetailRow, error)
 	ProviderOpsChannelCatalog(ctx context.Context, providerID int64) ([]sqlc.ProviderOpsChannelCatalogRow, error)
 	ProviderOpsModelCatalog(ctx context.Context, providerID int64) ([]sqlc.ProviderOpsModelCatalogRow, error)
-	ProviderOpsRouteCatalog(ctx context.Context, providerID int64) ([]sqlc.ProviderOpsRouteCatalogRow, error)
 	ProviderOpsChannels(ctx context.Context, arg sqlc.ProviderOpsChannelsParams) ([]sqlc.ProviderOpsChannelsRow, error)
 	ProviderOpsPerformanceTimeseries(ctx context.Context, arg sqlc.ProviderOpsPerformanceTimeseriesParams) ([]sqlc.ProviderOpsPerformanceTimeseriesRow, error)
 	ProviderOpsErrors(ctx context.Context, arg sqlc.ProviderOpsErrorsParams) ([]sqlc.ProviderOpsErrorsRow, error)
@@ -49,7 +48,6 @@ type Row struct {
 	BalanceStatus  string
 	ChannelTotal   int64
 	ModelsCount    int64
-	RoutesCount    int64
 }
 
 // Detail 是详情页概览（含 attempt/延迟/Token/利润/TPS 等运维指标）。
@@ -82,14 +80,6 @@ type ChannelCatalogRow struct {
 type ModelCatalogRow struct {
 	ModelID     string
 	DisplayName string
-}
-
-// RouteCatalogRow 是列表 Tip 线路行。
-type RouteCatalogRow struct {
-	ID     int64
-	Name   string
-	Status string
-	Mode   string
 }
 
 // ChannelRow 是抽屉渠道 Tab 行（精简）。
@@ -175,7 +165,6 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 			BalanceStatus:  r.BalanceStatus,
 			ChannelTotal:   r.ChannelTotal,
 			ModelsCount:    r.ModelsCount,
-			RoutesCount:    r.RoutesCount,
 		})
 	}
 	return out, total, nil
@@ -242,19 +231,6 @@ func (s *Service) ModelCatalog(ctx context.Context, providerID int64) ([]ModelCa
 	out := make([]ModelCatalogRow, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, ModelCatalogRow{ModelID: r.ModelID, DisplayName: r.DisplayName})
-	}
-	return out, nil
-}
-
-// RouteCatalog 返回引用本服务商渠道的线路清单（列表 Tip）。
-func (s *Service) RouteCatalog(ctx context.Context, providerID int64) ([]RouteCatalogRow, error) {
-	rows, err := s.store.ProviderOpsRouteCatalog(ctx, providerID)
-	if err != nil {
-		return nil, opsutil.StoreFailed(err, "provider ops route catalog")
-	}
-	out := make([]RouteCatalogRow, 0, len(rows))
-	for _, r := range rows {
-		out = append(out, RouteCatalogRow{ID: r.ID, Name: r.Name, Status: r.Status, Mode: r.Mode})
 	}
 	return out, nil
 }

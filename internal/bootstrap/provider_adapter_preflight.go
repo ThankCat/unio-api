@@ -54,23 +54,27 @@ func (p *ProviderAdapterPreflight) ValidateEnabledChannelBindings(ctx context.Co
 		)
 	}
 
+	// 逐协议校验：多协议渠道的每个入口都要有对应适配器，缺一个就是半可用状态，
+	// 启动期直接拒绝比运行期在某个协议上偶发 503 更容易定位。
 	for _, row := range rows {
-		if !p.registry.HasAny(row.Protocol, row.AdapterKey) {
-			return capabilityMissingError(row)
+		for _, protocol := range row.Protocols {
+			if !p.registry.HasAny(protocol, row.AdapterKey) {
+				return capabilityMissingError(row, protocol)
+			}
 		}
 	}
 
 	return nil
 }
 
-func capabilityMissingError(row sqlc.ListEnabledChannelAdaptersRow) error {
+func capabilityMissingError(row sqlc.ListEnabledChannelAdaptersRow, protocol string) error {
 	return failure.Wrap(
 		failure.CodeBootstrapProviderAdapterCapabilityMissing,
 		ErrProviderAdapterCapabilityMissing,
 		failure.WithMessage("channel adapter capability missing"),
 		failure.WithField("channel_id", row.ChannelID),
 		failure.WithField("provider_slug", row.ProviderSlug),
-		failure.WithField("protocol", row.Protocol),
+		failure.WithField("protocol", protocol),
 		failure.WithField("adapter_key", row.AdapterKey),
 		failure.WithField("capability", "binding"),
 	)

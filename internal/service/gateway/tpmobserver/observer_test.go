@@ -68,7 +68,7 @@ func minuteOf(sec int) time.Time {
 func TestObserverAggregatesOneBatchPerScopeAndMinute(t *testing.T) {
 	store := &storeStub{}
 	observer := newTestObserver(t, store)
-	route := Scope{Kind: breakerstore.TPMScopeRoute, ID: 5, Key: "req-1"}
+	route := Scope{Kind: breakerstore.TPMScopeUser, ID: 5, Key: "req-1"}
 
 	observer.Input(route, minuteOf(10), 100)
 	observer.Output(route, minuteOf(10), 20)
@@ -104,7 +104,7 @@ func TestObserverAggregatesOneBatchPerScopeAndMinute(t *testing.T) {
 func TestObserverRecordsInputOnlyOncePerScope(t *testing.T) {
 	store := &storeStub{}
 	observer := newTestObserver(t, store)
-	route := Scope{Kind: breakerstore.TPMScopeRoute, ID: 5, Key: "req-2"}
+	route := Scope{Kind: breakerstore.TPMScopeUser, ID: 5, Key: "req-2"}
 
 	observer.Input(route, minuteOf(10), 100)
 	observer.Input(route, minuteOf(12), 250)
@@ -120,7 +120,7 @@ func TestObserverRecordsInputOnlyOncePerScope(t *testing.T) {
 func TestObserverRetriesFailedBatchWithStableOperationID(t *testing.T) {
 	store := &storeStub{recordErrs: []error{errors.New("redis timeout")}}
 	observer := newTestObserver(t, store)
-	route := Scope{Kind: breakerstore.TPMScopeRoute, ID: 5, Key: "req-3"}
+	route := Scope{Kind: breakerstore.TPMScopeUser, ID: 5, Key: "req-3"}
 
 	observer.Input(route, minuteOf(10), 100)
 	observer.flushOnce(context.Background())
@@ -138,7 +138,7 @@ func TestObserverRetriesFailedBatchWithStableOperationID(t *testing.T) {
 func TestObserverDropsObservationsWhenQueueIsFull(t *testing.T) {
 	store := &storeStub{}
 	observer := New(store, Options{FlushInterval: time.Hour, QueueCapacity: 1})
-	route := Scope{Kind: breakerstore.TPMScopeRoute, ID: 5, Key: "req-4"}
+	route := Scope{Kind: breakerstore.TPMScopeUser, ID: 5, Key: "req-4"}
 
 	// 队列容量为 1：第二条起必须被丢弃而不是阻塞客户响应。
 	observer.Input(route, minuteOf(10), 10)
@@ -220,7 +220,7 @@ func TestFinalizeAppliesCorrectionOncePerScope(t *testing.T) {
 
 func TestNilObserverIsSafeNoOp(t *testing.T) {
 	var observer *Observer
-	scope := Scope{Kind: breakerstore.TPMScopeRoute, ID: 1, Key: "req"}
+	scope := Scope{Kind: breakerstore.TPMScopeUser, ID: 1, Key: "req"}
 	observer.Input(scope, minuteOf(1), 10)
 	observer.Output(scope, minuteOf(1), 10)
 	observer.Finalize(scope, minuteOf(1), usage.Facts{}, true)

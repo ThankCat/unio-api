@@ -32,7 +32,7 @@ func (s *fakeRuntimeControlStore) SettingControl(string) breakerstore.ControlTar
 	return breakerstore.ControlTarget{}
 }
 
-func (s *fakeRuntimeControlStore) RouteRateLimitControl() breakerstore.ControlTarget {
+func (s *fakeRuntimeControlStore) RequestRateLimitControl() breakerstore.ControlTarget {
 	s.routeTargetCalls++
 	return breakerstore.ControlTarget{}
 }
@@ -64,7 +64,7 @@ func (s *fakeRuntimeControlStore) ReconcileControl(ctx context.Context, target b
 
 func TestCriticalSettingUsesDurablePublisher(t *testing.T) {
 	q := newFakeQueries()
-	q.data[GatewayRouteRateLimitDefaultsKey] = encodeRateLimitDefaultsSettings(DefaultRateLimitDefaultsSettings())
+	q.data[GatewayRequestRateLimitDefaultsKey] = encodeRateLimitDefaultsSettings(DefaultRateLimitDefaultsSettings())
 	store := newTestStore(q)
 	publisher := &fakeRuntimeControlPublisher{result: runtimecontrol.PublishResult{
 		State: runtimecontrol.PublishCommitted, ActiveRevision: 2,
@@ -72,7 +72,7 @@ func TestCriticalSettingUsesDurablePublisher(t *testing.T) {
 	runtimeStore := &fakeRuntimeControlStore{}
 	service := NewServiceWithRuntimeControl(store, publisher, runtimeStore)
 
-	result, err := service.SetRawWithResult(context.Background(), GatewayRouteRateLimitDefaultsKey, json.RawMessage(`{"rpd":5,"rpm":120}`))
+	result, err := service.SetRawWithResult(context.Background(), GatewayRequestRateLimitDefaultsKey, json.RawMessage(`{"rpd":5,"rpm":120}`))
 	if err != nil {
 		t.Fatalf("set critical setting: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestCriticalSettingUsesDurablePublisher(t *testing.T) {
 	if req.CurrentRevision != 1 || req.NextRevision != 2 || req.Kind != runtimecontrol.KindAppSetting {
 		t.Fatalf("unexpected publish request: %+v", req)
 	}
-	if req.SettingKey == nil || *req.SettingKey != GatewayRouteRateLimitDefaultsKey ||
+	if req.SettingKey == nil || *req.SettingKey != GatewayRequestRateLimitDefaultsKey ||
 		runtimeStore.routeTargetCalls != 1 {
 		t.Fatalf("route setting used wrong runtime control: request=%+v store=%+v", req, runtimeStore)
 	}
@@ -174,7 +174,7 @@ func TestDedicatedControlSettingIsHiddenAndRejectsGenericWrite(t *testing.T) {
 
 func TestRestoreCriticalRuntimeControlsInstallsAllValidatedSettings(t *testing.T) {
 	q := newFakeQueries()
-	q.data[GatewayRouteRateLimitDefaultsKey] = encodeRateLimitDefaultsSettings(DefaultRateLimitDefaultsSettings())
+	q.data[GatewayRequestRateLimitDefaultsKey] = encodeRateLimitDefaultsSettings(DefaultRateLimitDefaultsSettings())
 	q.data[GatewayConcurrencyDefaultsKey] = encodeConcurrencyDefaultsSettings(DefaultConcurrencyDefaultsSettings())
 	q.data[GatewayCircuitBreakerKey] = encodeCircuitBreakerSettings(DefaultCircuitBreakerSettings())
 	q.data[GatewayRoutingBalanceKey] = encodeRoutingBalanceSettings(DefaultRoutingBalanceSettings())
@@ -190,7 +190,7 @@ func TestRestoreCriticalRuntimeControlsInstallsAllValidatedSettings(t *testing.T
 
 func TestRestoreCriticalRuntimeControlsRejectsLegacyShape(t *testing.T) {
 	q := newFakeQueries()
-	q.data[GatewayRouteRateLimitDefaultsKey] = []byte(`{"rpm":60,"rpd":0,"failure_policy":"fail_open"}`)
+	q.data[GatewayRequestRateLimitDefaultsKey] = []byte(`{"rpm":60,"rpd":0,"failure_policy":"fail_open"}`)
 	q.data[GatewayConcurrencyDefaultsKey] = encodeConcurrencyDefaultsSettings(DefaultConcurrencyDefaultsSettings())
 	q.data[GatewayCircuitBreakerKey] = encodeCircuitBreakerSettings(DefaultCircuitBreakerSettings())
 	q.data[GatewayRoutingBalanceKey] = encodeRoutingBalanceSettings(DefaultRoutingBalanceSettings())

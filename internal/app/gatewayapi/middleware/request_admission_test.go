@@ -70,10 +70,9 @@ func (a *acquirerStub) Acquire(_ context.Context, identity requestadmission.Iden
 }
 
 func TestRequestAdmissionCurrentRouteMatrix(t *testing.T) {
-	routeID := int64(9)
 	concurrencyLimit := int64(4)
 	principal := &auth.APIKeyPrincipal{
-		APIKeyID: 1, UserID: 8, RouteID: &routeID, ConcurrencyLimit: &concurrencyLimit,
+		APIKeyID: 1, UserID: 8, ConcurrencyLimit: &concurrencyLimit,
 	}
 	tests := []struct {
 		method   string
@@ -119,7 +118,7 @@ func TestRequestAdmissionCurrentRouteMatrix(t *testing.T) {
 			if rec.Code != http.StatusNoContent {
 				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 			}
-			if acquirer.calls != 1 || acquirer.identity.Scope != tt.method+" "+tt.scope || acquirer.identity.RouteID != 9 || acquirer.identity.UserID != 8 {
+			if acquirer.calls != 1 || acquirer.identity.Scope != tt.method+" "+tt.scope || acquirer.identity.UserID != 8 {
 				t.Fatalf("acquire calls=%d identity=%+v", acquirer.calls, acquirer.identity)
 			}
 			if acquirer.identity.ConcurrencyLimitOverride == nil || *acquirer.identity.ConcurrencyLimitOverride != 4 {
@@ -133,8 +132,7 @@ func TestRequestAdmissionCurrentRouteMatrix(t *testing.T) {
 }
 
 func TestRequestAdmissionDeniedMapsProtocolAndSkipsFinish(t *testing.T) {
-	routeID := int64(9)
-	principal := &auth.APIKeyPrincipal{UserID: 8, RouteID: &routeID}
+	principal := &auth.APIKeyPrincipal{UserID: 8}
 	tests := []struct {
 		name       string
 		protocol   RequestAdmissionProtocol
@@ -166,8 +164,7 @@ func TestRequestAdmissionDeniedMapsProtocolAndSkipsFinish(t *testing.T) {
 }
 
 func TestRequestAdmissionStoreFailureReturns503WithoutCallingHandler(t *testing.T) {
-	routeID := int64(9)
-	principal := &auth.APIKeyPrincipal{UserID: 8, RouteID: &routeID}
+	principal := &auth.APIKeyPrincipal{UserID: 8}
 	acquirer := &acquirerStub{err: breakerstore.ErrStoreUnavailable}
 	transportCalls := 0
 	handler := RequestAdmission(acquirer, RequestAdmissionOptions{

@@ -133,8 +133,8 @@ type Metrics struct {
 	providerChannelSeries      *metricSeriesLimiter
 	providerSeries             *metricSeriesLimiter
 	channelSeries              *metricSeriesLimiter
-	routeChannelSeries         *metricSeriesLimiter
-	routeSeries                *metricSeriesLimiter
+	modelChannelSeries         *metricSeriesLimiter
+	modelSeries                *metricSeriesLimiter
 	breakerSeries              *metricSeriesLimiter
 
 	httpRequestsTotal   *prometheus.CounterVec
@@ -232,8 +232,8 @@ func New() *Metrics {
 		providerChannelSeries:      newMetricSeriesLimiter(maxBusinessMetricSeries),
 		providerSeries:             newMetricSeriesLimiter(maxBusinessMetricSeries),
 		channelSeries:              newMetricSeriesLimiter(maxBusinessMetricSeries),
-		routeChannelSeries:         newMetricSeriesLimiter(maxBusinessMetricSeries),
-		routeSeries:                newMetricSeriesLimiter(maxBusinessMetricSeries),
+		modelChannelSeries:         newMetricSeriesLimiter(maxBusinessMetricSeries),
+		modelSeries:                newMetricSeriesLimiter(maxBusinessMetricSeries),
 		breakerSeries:              newMetricSeriesLimiter(maxBusinessMetricSeries),
 
 		httpRequestsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -357,12 +357,12 @@ func New() *Metrics {
 		}, []string{"mode"}),
 		routingBalanceSelected: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "unio_gateway_routing_balance_selected_total",
-			Help: "Actual successful route/channel selections.",
-		}, []string{"route", "channel"}),
+			Help: "Actual successful model/channel selections.",
+		}, []string{"model", "channel"}),
 		routingBalanceFallback: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "unio_gateway_routing_balance_fallback_total",
-			Help: "In-route fallback transitions by bounded reason.",
-		}, []string{"route", "reason"}),
+			Help: "Within-model channel fallback transitions by bounded reason.",
+		}, []string{"model", "reason"}),
 		routingBalanceLoadSkew: prometheus.NewHistogram(prometheus.HistogramOpts{
 			Name:    "unio_gateway_routing_balance_load_skew",
 			Help:    "Difference between maximum and minimum normalized candidate weights.",
@@ -547,8 +547,8 @@ func New() *Metrics {
 		}, []string{"provider_id", "channel_id", "protocol", "endpoint", "mode"}),
 		balancedFinalWeight: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "unio_gateway_balanced_final_weight",
-			Help: "Latest balanced-routing final weight by route and channel business ID.",
-		}, []string{"route_id", "channel_id"}),
+			Help: "Latest balanced-routing final weight by model and channel business ID.",
+		}, []string{"model_id", "channel_id"}),
 	}
 
 	registry.MustRegister(
@@ -792,17 +792,17 @@ func (m *Metrics) ObserveRoutingBalance(mode, result string, poolSize, candidate
 	}
 }
 
-func (m *Metrics) IncRoutingBalanceSelected(route, channel string) {
-	route, channel = boundedMetricPair(m.routeChannelSeries, route, channel)
-	m.routingBalanceSelected.WithLabelValues(route, channel).Inc()
+func (m *Metrics) IncRoutingBalanceSelected(model, channel string) {
+	model, channel = boundedMetricPair(m.modelChannelSeries, model, channel)
+	m.routingBalanceSelected.WithLabelValues(model, channel).Inc()
 }
 
-func (m *Metrics) IncRoutingBalanceFallback(route, reason string) {
-	route = boundedMetricID(m.routeSeries, route)
+func (m *Metrics) IncRoutingBalanceFallback(model, reason string) {
+	model = boundedMetricID(m.modelSeries, model)
 	if reason == "" {
 		reason = "unknown"
 	}
-	m.routingBalanceFallback.WithLabelValues(route, reason).Inc()
+	m.routingBalanceFallback.WithLabelValues(model, reason).Inc()
 }
 
 func (m *Metrics) IncRoutingCapacityRead(result string) {
@@ -1012,12 +1012,12 @@ func (m *Metrics) ObserveUpstreamTiming(
 	}
 }
 
-func (m *Metrics) SetBalancedFinalWeight(routeID, channelID string, weight float64) {
-	routeID, channelID = boundedMetricPair(m.routeChannelSeries, routeID, channelID)
+func (m *Metrics) SetBalancedFinalWeight(modelID, channelID string, weight float64) {
+	modelID, channelID = boundedMetricPair(m.modelChannelSeries, modelID, channelID)
 	if weight < 0 {
 		weight = 0
 	}
-	m.balancedFinalWeight.WithLabelValues(routeID, channelID).Set(weight)
+	m.balancedFinalWeight.WithLabelValues(modelID, channelID).Set(weight)
 }
 
 func boundedMetricID(limiter *metricSeriesLimiter, id string) string {

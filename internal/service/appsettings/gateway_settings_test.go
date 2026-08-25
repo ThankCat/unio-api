@@ -12,7 +12,7 @@ func TestGatewaySettingsRegistered(t *testing.T) {
 	reg := DefaultRegistry()
 	keys := []string{
 		GatewayCircuitBreakerKey,
-		GatewayRouteRateLimitDefaultsKey,
+		GatewayRequestRateLimitDefaultsKey,
 		GatewayStreamIdleTimeoutKey,
 		GatewayChannelCooldownKey,
 		GatewayCredential401ThresholdKey,

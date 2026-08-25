@@ -24,10 +24,6 @@ WITH filtered_page AS (
           WHERE le.request_record_id = r.id AND le.currency = 'USD'
       ) > 0
       AND (
-          COALESCE(cardinality(sqlc.narg(route_ids)::bigint[]), 0) = 0
-          OR COALESCE(r.route_id, ak.route_id) = ANY(sqlc.narg(route_ids)::bigint[])
-      )
-      AND (
           COALESCE(cardinality(sqlc.narg(api_key_ids)::bigint[]), 0) = 0
           OR r.api_key_id = ANY(sqlc.narg(api_key_ids)::bigint[])
       )
@@ -108,8 +104,6 @@ SELECT
     r.request_id,
     r.created_at,
     r.client_ip,
-    rt.id AS route_id,
-    rt.name AS route_name,
     r.api_key_id,
     ak.name AS api_key_name,
     ak.key_prefix AS api_key_prefix,
@@ -160,7 +154,6 @@ FROM filtered_page fp
 JOIN request_records r ON r.id = fp.id
 JOIN usage_records ur ON ur.request_record_id = r.id
 LEFT JOIN api_keys ak ON ak.id = r.api_key_id
-LEFT JOIN routes rt ON rt.id = COALESCE(r.route_id, ak.route_id)
 LEFT JOIN models m ON m.model_id = r.requested_model_id
 LEFT JOIN price_snapshots ps ON ps.request_record_id = r.id
 ORDER BY
@@ -233,10 +226,6 @@ WHERE r.user_id = sqlc.arg(user_id)
       WHERE le.request_record_id = r.id AND le.currency = 'USD'
   ) > 0
   AND (
-      COALESCE(cardinality(sqlc.narg(route_ids)::bigint[]), 0) = 0
-      OR COALESCE(r.route_id, ak.route_id) = ANY(sqlc.narg(route_ids)::bigint[])
-  )
-  AND (
       COALESCE(cardinality(sqlc.narg(api_key_ids)::bigint[]), 0) = 0
       OR r.api_key_id = ANY(sqlc.narg(api_key_ids)::bigint[])
   )
@@ -275,7 +264,6 @@ WITH windowed AS MATERIALIZED (
         r.gateway_first_token_at,
         r.requested_model_id,
         r.ingress_protocol,
-        r.route_id,
         r.api_key_id,
         r.endpoint,
         r.request_id,
@@ -418,10 +406,6 @@ LEFT JOIN price_snapshots ps ON ps.request_record_id = w.id
 LEFT JOIN api_keys ak ON ak.id = w.api_key_id
 LEFT JOIN models m ON m.model_id = w.requested_model_id
 WHERE (
-      COALESCE(cardinality(sqlc.narg(route_ids)::bigint[]), 0) = 0
-      OR COALESCE(w.route_id, ak.route_id) = ANY(sqlc.narg(route_ids)::bigint[])
-  )
-  AND (
       COALESCE(cardinality(sqlc.narg(api_key_ids)::bigint[]), 0) = 0
       OR w.api_key_id = ANY(sqlc.narg(api_key_ids)::bigint[])
   )
@@ -455,7 +439,6 @@ WITH windowed AS MATERIALIZED (
         r.stream,
         r.requested_model_id,
         r.ingress_protocol,
-        r.route_id,
         r.api_key_id,
         r.endpoint,
         r.request_id,
@@ -488,10 +471,6 @@ billed AS (
     LEFT JOIN api_keys ak ON ak.id = w.api_key_id
     LEFT JOIN models m ON m.model_id = w.requested_model_id
     WHERE (
-          COALESCE(cardinality(sqlc.narg(route_ids)::bigint[]), 0) = 0
-          OR COALESCE(w.route_id, ak.route_id) = ANY(sqlc.narg(route_ids)::bigint[])
-      )
-      AND (
           COALESCE(cardinality(sqlc.narg(api_key_ids)::bigint[]), 0) = 0
           OR w.api_key_id = ANY(sqlc.narg(api_key_ids)::bigint[])
       )
@@ -542,12 +521,6 @@ FROM top t
 LEFT JOIN models m ON m.model_id = t.requested_model_id
 LEFT JOIN latest l ON l.requested_model_id = t.requested_model_id
 ORDER BY t.request_count DESC, t.requested_model_id ASC;
-
--- name: ListConsoleFilterRoutes :many
--- 线路筛选项来自线路目录全量，不按用户历史请求聚合。
-SELECT rt.id, rt.name
-FROM routes rt
-ORDER BY rt.name, rt.id;
 
 -- name: ListConsoleFilterAPIKeys :many
 -- 密钥筛选项来自当前用户的 API Key 目录，不按请求历史聚合。

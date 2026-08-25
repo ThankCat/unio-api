@@ -381,7 +381,7 @@ scan:
 					}
 					if candIdx+1 < len(params.Candidates) {
 						result.RoutingFallback = true
-						l.RecordBalanceFallback(routeIDOf(params.Principal), skipReason)
+						l.RecordBalanceFallback(candidate.ModelDBID, skipReason)
 					}
 					continue
 				}
@@ -479,7 +479,7 @@ scan:
 				}
 
 				l.RecordRoutingSelected(candidate.ProviderID, candidate.Channel.ID, params.RequestedModelID)
-				l.RecordBalanceSelected(routeIDOf(params.Principal), candidate.Channel.ID)
+				l.RecordBalanceSelected(candidate.ModelDBID, candidate.Channel.ID)
 
 				settlementCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 				defer cancel()
@@ -991,7 +991,7 @@ scan:
 				if candIdx+1 < len(params.Candidates) {
 					result.RoutingFallback = true
 					category, _ := adapter.UpstreamCategoryOf(err)
-					l.RecordBalanceFallback(routeIDOf(params.Principal), "upstream_"+string(category))
+					l.RecordBalanceFallback(candidate.ModelDBID, "upstream_"+string(category))
 					l.LogRoutingFallback(
 						ctx, requestRecord, attemptRecord, candidate,
 						FailureCodeOrFallback(err, "upstream_retryable"), true, false, false, "",

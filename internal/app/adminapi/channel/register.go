@@ -28,7 +28,6 @@ func Register(r chi.Router, d Deps) {
 		r.Get("/channels/{id}/ops/performance", coh.performance)
 		r.Get("/channels/{id}/ops/errors", coh.errors)
 		r.Get("/channels/{id}/ops/models", coh.models)
-		r.Get("/channels/{id}/ops/routes", coh.routes)
 	}
 
 	// Channel breaker 只读运行态 + 显式复位（Redis 全局 breaker）。静态 /ops 段置于 /{id} 之前。

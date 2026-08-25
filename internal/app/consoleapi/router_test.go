@@ -302,7 +302,6 @@ func (stubRequestService) Summary(context.Context, consolerequests.SummaryParams
 
 func (stubRequestService) Filters(context.Context, int64) (consolerequests.Filters, *consoleservice.Error) {
 	return consolerequests.Filters{
-		Routes:    []consolerequests.FilterOption{},
 		APIKeys:   []consolerequests.FilterOption{},
 		Endpoints: []string{},
 	}, nil
