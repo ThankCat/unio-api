@@ -114,7 +114,7 @@ func (p *Publisher) Publish(ctx context.Context, req PublishRequest) (PublishRes
 	if err != nil {
 		op, err = q.GetRuntimeControlOperationByToken(ctx, req.Token)
 		if err != nil {
-			return PublishResult{}, failure.Wrap(failure.CodeRequestLogStoreFailed, err, failure.WithMessage("runtimecontrol: create or load operation"))
+			return PublishResult{}, failure.Wrap(failure.CodeRuntimeControlStoreFailed, err, failure.WithMessage("runtimecontrol: create or load operation"))
 		}
 	}
 	if !sameOperation(op, req, payloadHash) {
@@ -181,7 +181,7 @@ func (p *Publisher) Publish(ctx context.Context, req PublishRequest) (PublishRes
 	// 3) CAS operation preparing→prepared。
 	if _, err := q.MarkRuntimeControlOperationPrepared(ctx, sqlc.MarkRuntimeControlOperationPreparedParams{Token: req.Token, PayloadHash: payloadHash}); err != nil {
 		_ = p.abort(ctx, q, req, payloadHash)
-		return PublishResult{}, failure.Wrap(failure.CodeRequestLogStoreFailed, err, failure.WithMessage("runtimecontrol: mark prepared"))
+		return PublishResult{}, failure.Wrap(failure.CodeRuntimeControlStoreFailed, err, failure.WithMessage("runtimecontrol: mark prepared"))
 	}
 
 	// 4) 业务事务：提交业务行 + operation→db_committed。
@@ -208,7 +208,7 @@ func (p *Publisher) Publish(ctx context.Context, req PublishRequest) (PublishRes
 func (p *Publisher) commitBusiness(ctx context.Context, req PublishRequest, payloadHash string) error {
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
-		return failure.Wrap(failure.CodeRequestLogStoreFailed, err, failure.WithMessage("runtimecontrol: begin business tx"))
+		return failure.Wrap(failure.CodeRuntimeControlStoreFailed, err, failure.WithMessage("runtimecontrol: begin business tx"))
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
@@ -218,13 +218,13 @@ func (p *Publisher) commitBusiness(ctx context.Context, req PublishRequest, payl
 	qtx := sqlc.New(tx)
 	rows, err := qtx.MarkRuntimeControlOperationDBCommitted(ctx, sqlc.MarkRuntimeControlOperationDBCommittedParams{Token: req.Token, PayloadHash: payloadHash})
 	if err != nil {
-		return failure.Wrap(failure.CodeRequestLogStoreFailed, err, failure.WithMessage("runtimecontrol: mark db_committed"))
+		return failure.Wrap(failure.CodeRuntimeControlStoreFailed, err, failure.WithMessage("runtimecontrol: mark db_committed"))
 	}
 	if rows != 1 {
 		return failure.New(failure.CodeConfigInvalid, failure.WithMessage("runtimecontrol: operation not in prepared state"))
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return failure.Wrap(failure.CodeRequestLogStoreFailed, err, failure.WithMessage("runtimecontrol: commit business tx"))
+		return failure.Wrap(failure.CodeRuntimeControlStoreFailed, err, failure.WithMessage("runtimecontrol: commit business tx"))
 	}
 	return nil
 }

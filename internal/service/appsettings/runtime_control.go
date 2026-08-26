@@ -71,7 +71,7 @@ func restoreCriticalRuntimeControlsObserved(
 	for _, key := range runtimeControlSettingKeys {
 		record, err := settings.Record(ctx, key)
 		if err != nil {
-			return failure.Wrap(failure.CodeRequestLogStoreFailed, err, failure.WithMessage("appsettings: read runtime control setting"))
+			return failure.Wrap(failure.CodeAppSettingsStoreFailed, err, failure.WithMessage("appsettings: read runtime control setting"))
 		}
 		payload, err := canonicalRuntimeSetting(key, record.Value)
 		if err != nil {

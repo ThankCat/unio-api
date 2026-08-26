@@ -229,7 +229,7 @@ func (publisher *ProviderFencePublisher) commitBusiness(ctx context.Context, req
 	}
 	rows, err := sqlc.New(tx).MarkProviderRoutingOperationDBCommitted(ctx, sqlc.MarkProviderRoutingOperationDBCommittedParams{Token: request.Token, PayloadHash: payloadHash})
 	if err != nil || rows != 1 {
-		return failure.Wrap(failure.CodeRequestLogStoreFailed, err, failure.WithMessage("runtimecontrol: mark provider routing db_committed"))
+		return failure.Wrap(failure.CodeRuntimeControlStoreFailed, err, failure.WithMessage("runtimecontrol: mark provider routing db_committed"))
 	}
 	return tx.Commit(ctx)
 }

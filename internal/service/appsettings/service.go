@@ -150,7 +150,7 @@ func (s *Service) SetRawWithResult(ctx context.Context, key string, value json.R
 	}
 	record, err := s.store.Record(ctx, key)
 	if err != nil {
-		return SettingWriteResult{}, failure.Wrap(failure.CodeRequestLogStoreFailed, err, failure.WithMessage("appsettings: read critical setting"))
+		return SettingWriteResult{}, failure.Wrap(failure.CodeAppSettingsStoreFailed, err, failure.WithMessage("appsettings: read critical setting"))
 	}
 	currentCanonical, currentErr := canonicalRuntimeSetting(key, record.Value)
 	if currentErr == nil && bytes.Equal(currentCanonical, canonical) {

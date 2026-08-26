@@ -211,7 +211,6 @@ const (
 	// CodeAPIKeyInvalidName 表示创建 API Key 时 name 非法。
 	CodeAPIKeyInvalidName Code = "apikey_invalid_name"
 
-
 	// CodeAPIKeyGenerateFailed 表示 API Key 随机密钥生成失败。
 	CodeAPIKeyGenerateFailed Code = "apikey_generate_failed"
 
@@ -253,7 +252,6 @@ const (
 
 	// CodeRoutingNoAvailableChannel 表示模型存在但没有可用 channel。
 	CodeRoutingNoAvailableChannel Code = "routing_no_available_channel"
-
 
 	// CodeRoutingStoreFailed 表示 routing 查询存储失败。
 	CodeRoutingStoreFailed Code = "routing_store_failed"
@@ -431,6 +429,14 @@ const (
 
 	// CodeRequestLogInvalidStateTransition 表示 request/attempt 状态转移不合法。
 	CodeRequestLogInvalidStateTransition Code = "requestlog_invalid_state_transition"
+)
+
+const (
+	// CodeAppSettingsStoreFailed 表示 app_settings 读写失败。
+	CodeAppSettingsStoreFailed Code = "appsettings_store_failed"
+
+	// CodeRuntimeControlStoreFailed 表示 runtime control 发布过程中的存储操作失败。
+	CodeRuntimeControlStoreFailed Code = "runtimecontrol_store_failed"
 )
 
 const (
