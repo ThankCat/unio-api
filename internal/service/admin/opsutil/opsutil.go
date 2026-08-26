@@ -44,6 +44,17 @@ func TextValue(t pgtype.Text) string {
 	return t.String
 }
 
+// TextPtr 取 pgtype.Text 值，NULL → nil。
+// 与 TextValue 的区别在于保留「没有值」和「值是空串」的差异——
+// 前者在 JSON 里应当是 null，后者是 ""。
+func TextPtr(t pgtype.Text) *string {
+	if !t.Valid {
+		return nil
+	}
+	value := t.String
+	return &value
+}
+
 // TimeValue 取 pgtype.Timestamptz 值，NULL → nil。
 func TimeValue(t pgtype.Timestamptz) *time.Time {
 	if !t.Valid {

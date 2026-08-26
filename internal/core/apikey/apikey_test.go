@@ -122,3 +122,22 @@ func TestVerifyLegacyFormatKey(t *testing.T) {
 		t.Fatal("expected legacy-format key to still verify against its hash")
 	}
 }
+
+// 尾段是掩码展示的一半依据，它必须真的来自明文末尾，且不能把整串泄露出去。
+func TestGenerateExposesOnlyTheLastFourChars(t *testing.T) {
+	key, err := apikey.Generate()
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+
+	if len(key.Suffix) != 4 {
+		t.Fatalf("suffix = %q, want 4 chars", key.Suffix)
+	}
+	if !strings.HasSuffix(key.Plaintext, key.Suffix) {
+		t.Fatalf("suffix %q is not the tail of %q", key.Suffix, key.Plaintext)
+	}
+	// 前缀 8 位 + 尾段 4 位之外的部分绝不能被这两个字段拼出来。
+	if len(key.Prefix)+len(key.Suffix) >= len(key.Plaintext) {
+		t.Fatalf("prefix+suffix must stay shorter than the plaintext")
+	}
+}

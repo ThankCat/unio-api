@@ -10,6 +10,9 @@ import (
 const (
 	keyPrefix       = "sk_unio_"
 	prefixRandomLen = 8
+	// suffixLen 是掩码展示时露出的尾部位数。
+	// 加上 8 位前缀共暴露 12 位，明文仍余 44 位随机（约 227 bit 熵）。
+	suffixLen = 4
 	// randomLen 是明文 key 随机部分的字符数。
 	//
 	// 取 48 是为了和 OpenAI 传统 key（sk- 后跟 48 字符）的随机段等长：用户往 SDK 里
@@ -35,6 +38,10 @@ type Key struct {
 	// 示例格式：sk_unio_<前 8 位 random>
 	Prefix string
 
+	// Suffix 是明文末 4 位，仅供掩码展示拼出尾段（sk_unio_xxxxxxxx⋯⋯abcd）。
+	// 尾部往往比前缀更容易被记住——SDK 报错与日志截断通常留的是尾巴。
+	Suffix string
+
 	// Hash 是明文 key 的哈希值，用于数据库存储和认证匹配。
 	// 示例格式：64 位十六进制字符串。
 	Hash string
@@ -52,6 +59,7 @@ func Generate() (Key, error) {
 	return Key{
 		Plaintext: plaintext,
 		Prefix:    Prefix(plaintext),
+		Suffix:    Suffix(plaintext),
 		Hash:      Hash(plaintext),
 	}, nil
 }
@@ -93,6 +101,15 @@ func Prefix(plaintext string) string {
 	}
 
 	return plaintext[:prefixLength]
+}
+
+// Suffix 返回明文末 4 位。明文短于 4 位时原样返回（只可能出现在构造异常的入参上）。
+func Suffix(plaintext string) string {
+	if len(plaintext) <= suffixLen {
+		return plaintext
+	}
+
+	return plaintext[len(plaintext)-suffixLen:]
 }
 
 // Hash 返回 API Key 的 SHA-256 哈希值，用于数据库持久化。

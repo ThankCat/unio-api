@@ -17,6 +17,7 @@ SELECT
     k.id,
     k.name,
     k.key_prefix,
+    k.key_suffix,
     k.spend_limit,
     k.spent_total,
     k.last_used_at,
@@ -132,6 +133,7 @@ SELECT
     k.id,
     k.name,
     k.key_prefix,
+    k.key_suffix,
     k.spend_limit,
     k.spent_total,
     k.last_used_at,
@@ -228,17 +230,18 @@ LIMIT sqlc.arg(row_limit);
 
 -- name: CreateConsoleAPIKey :one
 -- 用户自助创建密钥。只存 prefix 与 hash；明文由调用方放进创建响应，之后无处可取。
-INSERT INTO api_keys (user_id, name, key_prefix, key_hash, expires_at, spend_limit)
+INSERT INTO api_keys (user_id, name, key_prefix, key_suffix, key_hash, expires_at, spend_limit)
 VALUES (
     sqlc.arg(user_id),
     sqlc.arg(name),
     sqlc.arg(key_prefix),
+    sqlc.arg(key_suffix),
     sqlc.arg(key_hash),
     sqlc.narg(expires_at),
     sqlc.narg(spend_limit)
 )
 RETURNING
-    id, name, key_prefix, spend_limit, spent_total,
+    id, name, key_prefix, key_suffix, spend_limit, spent_total,
     last_used_at, expires_at, disabled_at, revoked_at, created_at, updated_at;
 
 -- name: UpdateConsoleAPIKey :one
@@ -256,7 +259,7 @@ WHERE id = sqlc.arg(id)
   AND user_id = sqlc.arg(user_id)
   AND revoked_at IS NULL
 RETURNING
-    id, name, key_prefix, spend_limit, spent_total,
+    id, name, key_prefix, key_suffix, spend_limit, spent_total,
     last_used_at, expires_at, disabled_at, revoked_at, created_at, updated_at;
 
 -- name: RevokeConsoleAPIKey :one
@@ -267,7 +270,7 @@ WHERE id = sqlc.arg(id)
   AND user_id = sqlc.arg(user_id)
   AND revoked_at IS NULL
 RETURNING
-    id, name, key_prefix, spend_limit, spent_total,
+    id, name, key_prefix, key_suffix, spend_limit, spent_total,
     last_used_at, expires_at, disabled_at, revoked_at, created_at, updated_at;
 
 -- name: DeleteConsoleAPIKey :execrows

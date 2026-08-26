@@ -24,6 +24,8 @@ type ApiKey struct {
 	SpendLimit pgtype.Numeric
 	SpentTotal pgtype.Numeric
 	UserID     int64
+	// API Key 明文末 4 位，仅供掩码展示时拼出尾段。NULL 表示该 key 建于本列之前。认证不使用此列。
+	KeySuffix pgtype.Text
 }
 
 type AppSetting struct {

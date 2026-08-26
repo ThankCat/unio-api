@@ -12,6 +12,7 @@ type keyDTO struct {
 	ID              int64            `json:"id"`
 	Name            string           `json:"name"`
 	KeyPrefix       string           `json:"key_prefix"`
+	KeySuffix       *string          `json:"key_suffix"`
 	Status          string           `json:"status"`
 	SpendLimit      *string          `json:"spend_limit"`
 	SpentTotal      string           `json:"spent_total"`
@@ -68,6 +69,7 @@ func toKeyDTO(key consoleapikeys.Key) keyDTO {
 		ID:              key.ID,
 		Name:            key.Name,
 		KeyPrefix:       key.KeyPrefix,
+		KeySuffix:       key.KeySuffix,
 		Status:          key.Status,
 		SpendLimit:      key.SpendLimit,
 		SpentTotal:      key.SpentTotal,

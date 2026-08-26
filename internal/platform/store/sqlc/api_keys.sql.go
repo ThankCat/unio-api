@@ -63,17 +63,18 @@ func (q *Queries) CountConsoleAPIKeys(ctx context.Context, arg CountConsoleAPIKe
 }
 
 const createConsoleAPIKey = `-- name: CreateConsoleAPIKey :one
-INSERT INTO api_keys (user_id, name, key_prefix, key_hash, expires_at, spend_limit)
+INSERT INTO api_keys (user_id, name, key_prefix, key_suffix, key_hash, expires_at, spend_limit)
 VALUES (
     $1,
     $2,
     $3,
     $4,
     $5,
-    $6
+    $6,
+    $7
 )
 RETURNING
-    id, name, key_prefix, spend_limit, spent_total,
+    id, name, key_prefix, key_suffix, spend_limit, spent_total,
     last_used_at, expires_at, disabled_at, revoked_at, created_at, updated_at
 `
 
@@ -81,6 +82,7 @@ type CreateConsoleAPIKeyParams struct {
 	UserID     int64
 	Name       string
 	KeyPrefix  string
+	KeySuffix  pgtype.Text
 	KeyHash    string
 	ExpiresAt  pgtype.Timestamptz
 	SpendLimit pgtype.Numeric
@@ -90,6 +92,7 @@ type CreateConsoleAPIKeyRow struct {
 	ID         int64
 	Name       string
 	KeyPrefix  string
+	KeySuffix  pgtype.Text
 	SpendLimit pgtype.Numeric
 	SpentTotal pgtype.Numeric
 	LastUsedAt pgtype.Timestamptz
@@ -106,6 +109,7 @@ func (q *Queries) CreateConsoleAPIKey(ctx context.Context, arg CreateConsoleAPIK
 		arg.UserID,
 		arg.Name,
 		arg.KeyPrefix,
+		arg.KeySuffix,
 		arg.KeyHash,
 		arg.ExpiresAt,
 		arg.SpendLimit,
@@ -115,6 +119,7 @@ func (q *Queries) CreateConsoleAPIKey(ctx context.Context, arg CreateConsoleAPIK
 		&i.ID,
 		&i.Name,
 		&i.KeyPrefix,
+		&i.KeySuffix,
 		&i.SpendLimit,
 		&i.SpentTotal,
 		&i.LastUsedAt,
@@ -208,6 +213,7 @@ SELECT
     k.id,
     k.name,
     k.key_prefix,
+    k.key_suffix,
     k.spend_limit,
     k.spent_total,
     k.last_used_at,
@@ -254,6 +260,7 @@ type GetConsoleAPIKeyRow struct {
 	ID              int64
 	Name            string
 	KeyPrefix       string
+	KeySuffix       pgtype.Text
 	SpendLimit      pgtype.Numeric
 	SpentTotal      pgtype.Numeric
 	LastUsedAt      pgtype.Timestamptz
@@ -279,6 +286,7 @@ func (q *Queries) GetConsoleAPIKey(ctx context.Context, arg GetConsoleAPIKeyPara
 		&i.ID,
 		&i.Name,
 		&i.KeyPrefix,
+		&i.KeySuffix,
 		&i.SpendLimit,
 		&i.SpentTotal,
 		&i.LastUsedAt,
@@ -453,6 +461,7 @@ SELECT
     k.id,
     k.name,
     k.key_prefix,
+    k.key_suffix,
     k.spend_limit,
     k.spent_total,
     k.last_used_at,
@@ -517,6 +526,7 @@ type ListConsoleAPIKeysRow struct {
 	ID              int64
 	Name            string
 	KeyPrefix       string
+	KeySuffix       pgtype.Text
 	SpendLimit      pgtype.Numeric
 	SpentTotal      pgtype.Numeric
 	LastUsedAt      pgtype.Timestamptz
@@ -563,6 +573,7 @@ func (q *Queries) ListConsoleAPIKeys(ctx context.Context, arg ListConsoleAPIKeys
 			&i.ID,
 			&i.Name,
 			&i.KeyPrefix,
+			&i.KeySuffix,
 			&i.SpendLimit,
 			&i.SpentTotal,
 			&i.LastUsedAt,
@@ -591,7 +602,7 @@ WHERE id = $1
   AND user_id = $2
   AND revoked_at IS NULL
 RETURNING
-    id, name, key_prefix, spend_limit, spent_total,
+    id, name, key_prefix, key_suffix, spend_limit, spent_total,
     last_used_at, expires_at, disabled_at, revoked_at, created_at, updated_at
 `
 
@@ -604,6 +615,7 @@ type RevokeConsoleAPIKeyRow struct {
 	ID         int64
 	Name       string
 	KeyPrefix  string
+	KeySuffix  pgtype.Text
 	SpendLimit pgtype.Numeric
 	SpentTotal pgtype.Numeric
 	LastUsedAt pgtype.Timestamptz
@@ -622,6 +634,7 @@ func (q *Queries) RevokeConsoleAPIKey(ctx context.Context, arg RevokeConsoleAPIK
 		&i.ID,
 		&i.Name,
 		&i.KeyPrefix,
+		&i.KeySuffix,
 		&i.SpendLimit,
 		&i.SpentTotal,
 		&i.LastUsedAt,
@@ -736,7 +749,7 @@ WHERE id = $9
   AND user_id = $10
   AND revoked_at IS NULL
 RETURNING
-    id, name, key_prefix, spend_limit, spent_total,
+    id, name, key_prefix, key_suffix, spend_limit, spent_total,
     last_used_at, expires_at, disabled_at, revoked_at, created_at, updated_at
 `
 
@@ -757,6 +770,7 @@ type UpdateConsoleAPIKeyRow struct {
 	ID         int64
 	Name       string
 	KeyPrefix  string
+	KeySuffix  pgtype.Text
 	SpendLimit pgtype.Numeric
 	SpentTotal pgtype.Numeric
 	LastUsedAt pgtype.Timestamptz
@@ -788,6 +802,7 @@ func (q *Queries) UpdateConsoleAPIKey(ctx context.Context, arg UpdateConsoleAPIK
 		&i.ID,
 		&i.Name,
 		&i.KeyPrefix,
+		&i.KeySuffix,
 		&i.SpendLimit,
 		&i.SpentTotal,
 		&i.LastUsedAt,

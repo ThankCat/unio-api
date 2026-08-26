@@ -76,6 +76,8 @@ type Key struct {
 	ID        int64
 	Name      string
 	KeyPrefix string
+	// KeySuffix 为 nil 表示这把 key 建于记录尾段之前，展示层退化成只有前缀的掩码。
+	KeySuffix *string
 	Status    string
 	// SpendLimit 为 nil 表示不限额。
 	SpendLimit *string
@@ -317,6 +319,7 @@ func (s *Service) Get(ctx context.Context, params GetParams) (Detail, *consolese
 		ID:              row.ID,
 		Name:            row.Name,
 		KeyPrefix:       row.KeyPrefix,
+		KeySuffix:       opsutil.TextPtr(row.KeySuffix),
 		Status:          s.deriveStatus(row.DisabledAt, row.RevokedAt, row.ExpiresAt),
 		SpendLimit:      opsutil.NumericStringPtr(row.SpendLimit),
 		SpentTotal:      opsutil.NumericString(row.SpentTotal),
@@ -354,6 +357,7 @@ func (s *Service) Create(ctx context.Context, params CreateParams) (CreatedKey, 
 		UserID:     params.UserID,
 		Name:       name,
 		KeyPrefix:  generated.Prefix,
+		KeySuffix:  pgtype.Text{String: generated.Suffix, Valid: true},
 		KeyHash:    generated.Hash,
 		ExpiresAt:  timestamptzNarg(params.ExpiresAt),
 		SpendLimit: spendLimit,
@@ -367,6 +371,7 @@ func (s *Service) Create(ctx context.Context, params CreateParams) (CreatedKey, 
 			ID:              row.ID,
 			Name:            row.Name,
 			KeyPrefix:       row.KeyPrefix,
+			KeySuffix:       opsutil.TextPtr(row.KeySuffix),
 			Status:          s.deriveStatus(row.DisabledAt, row.RevokedAt, row.ExpiresAt),
 			SpendLimit:      opsutil.NumericStringPtr(row.SpendLimit),
 			SpentTotal:      opsutil.NumericString(row.SpentTotal),
@@ -528,6 +533,7 @@ func (s *Service) keyFromListRow(row sqlc.ListConsoleAPIKeysRow) Key {
 		ID:              row.ID,
 		Name:            row.Name,
 		KeyPrefix:       row.KeyPrefix,
+		KeySuffix:       opsutil.TextPtr(row.KeySuffix),
 		Status:          s.deriveStatus(row.DisabledAt, row.RevokedAt, row.ExpiresAt),
 		SpendLimit:      opsutil.NumericStringPtr(row.SpendLimit),
 		SpentTotal:      opsutil.NumericString(row.SpentTotal),
