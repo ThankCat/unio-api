@@ -56,17 +56,44 @@ func newPublisherTest(t *testing.T) (*pgxpool.Pool, *breakerstore.Store, string)
 }
 
 // seedSetting 插入一条测试 app_settings 行（key 必须是 runtime_control_operations CHECK 允许的四项之一），
-// 返回 key；t.Cleanup 负责删除。
+// 返回 key。
+//
+// 这四个 key 同时是运行态控制的必需配置，而本测试连的是开发库：直接删掉它们会让
+// RestoreCriticalRuntimeControls 每 30 秒失败一次，跑一次测试就把开发环境打瘫。
+// 所以 Cleanup 按「原来有就还原、原来没有才删」处理。
 func seedSetting(t *testing.T, pool *pgxpool.Pool, key, value string) string {
 	t.Helper()
 	ctx := context.Background()
+
+	var (
+		prevValue    []byte
+		prevRevision int64
+		prevDesc     string
+	)
+	existed := true
+	if err := pool.QueryRow(ctx,
+		`SELECT value, revision, description FROM app_settings WHERE key = $1`, key,
+	).Scan(&prevValue, &prevRevision, &prevDesc); err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			t.Fatalf("read existing setting: %v", err)
+		}
+		existed = false
+	}
+
 	if _, err := pool.Exec(ctx, `INSERT INTO app_settings (key, value, revision) VALUES ($1, $2::jsonb, 1)
 		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, revision = 1`, key, value); err != nil {
 		t.Fatalf("seed setting: %v", err)
 	}
 	t.Cleanup(func() {
-		_, _ = pool.Exec(context.Background(), `DELETE FROM runtime_control_operations WHERE setting_key = $1`, key)
-		_, _ = pool.Exec(context.Background(), `DELETE FROM app_settings WHERE key = $1`, key)
+		bg := context.Background()
+		_, _ = pool.Exec(bg, `DELETE FROM runtime_control_operations WHERE setting_key = $1`, key)
+		if existed {
+			_, _ = pool.Exec(bg,
+				`UPDATE app_settings SET value = $2::jsonb, revision = $3, description = $4 WHERE key = $1`,
+				key, prevValue, prevRevision, prevDesc)
+			return
+		}
+		_, _ = pool.Exec(bg, `DELETE FROM app_settings WHERE key = $1`, key)
 	})
 	return key
 }
