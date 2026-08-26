@@ -97,7 +97,7 @@ func TestCreatePreservesRequestedStatus(t *testing.T) {
 			created, err := svc.Create(context.Background(), channel.CreateInput{
 				ProviderID: 1,
 				Name:       "primary",
-				Protocols:   []string{channel.ProtocolOpenAI},
+				Protocols:  []string{channel.ProtocolOpenAI},
 				AdapterKey: channel.ProtocolOpenAI,
 				Credential: "test-credential",
 				Status:     requested,
@@ -128,7 +128,7 @@ func TestCreateEnabledRequiresEnabledProvider(t *testing.T) {
 	_, err := svc.Create(context.Background(), channel.CreateInput{
 		ProviderID: 1,
 		Name:       "primary",
-		Protocols:   []string{channel.ProtocolOpenAI},
+		Protocols:  []string{channel.ProtocolOpenAI},
 		AdapterKey: channel.ProtocolOpenAI,
 		Credential: "test-credential",
 		Status:     channel.StatusEnabled,

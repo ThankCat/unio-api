@@ -79,7 +79,6 @@ func createIdentity(t *testing.T, ctx context.Context, queries *sqlc.Queries) te
 		t.Fatalf("generate api key: %v", err)
 	}
 
-
 	key, err := queries.CreateAPIKey(ctx, sqlc.CreateAPIKeyParams{
 		UserID:    user.ID,
 		Name:      "requestlog key",

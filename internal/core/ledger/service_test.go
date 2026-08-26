@@ -106,7 +106,6 @@ func createLedgerTestAPIKey(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 
 	suffix := time.Now().UnixNano()
 
-
 	var apiKeyID int64
 	err := pool.QueryRow(ctx, `
 		INSERT INTO api_keys (user_id, name, key_prefix, key_hash)

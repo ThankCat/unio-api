@@ -40,7 +40,6 @@ func createRequestRecordIdentity(t *testing.T, ctx context.Context, queries *sql
 		t.Fatalf("generate api key: %v", err)
 	}
 
-
 	apiKey, err := queries.CreateAPIKey(ctx, sqlc.CreateAPIKeyParams{
 		UserID:    user.ID,
 		Name:      "request record key",

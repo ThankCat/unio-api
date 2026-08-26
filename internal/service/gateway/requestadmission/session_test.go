@@ -310,8 +310,8 @@ func TestSessionFinalizeFailsClosedWhenFreshIntegrityCannotBeRead(t *testing.T) 
 	facts := readyFacts()
 	manager := NewManager(store, facts, ManagerOptions{RenewInterval: time.Hour})
 	result, err := manager.Acquire(context.Background(), Identity{
-		UserID:  32,
-		Scope:   "GET /v1/models",
+		UserID: 32,
+		Scope:  "GET /v1/models",
 	})
 	if err != nil {
 		t.Fatalf("acquire: %v", err)
@@ -352,8 +352,8 @@ func TestSessionFinalizeRetriesTransientIntegrityRead(t *testing.T) {
 	}
 	manager := NewManager(store, facts, ManagerOptions{RenewInterval: time.Hour})
 	result, err := manager.Acquire(context.Background(), Identity{
-		UserID:  34,
-		Scope:   "GET /v1/models",
+		UserID: 34,
+		Scope:  "GET /v1/models",
 	})
 	if err != nil {
 		t.Fatalf("acquire: %v", err)
@@ -385,8 +385,8 @@ func TestSessionFinalizeRetriesSameTokenAfterStoreFailure(t *testing.T) {
 	}
 	manager := NewManager(store, readyFacts(), ManagerOptions{RenewInterval: time.Hour})
 	result, err := manager.Acquire(context.Background(), Identity{
-		UserID:  36,
-		Scope:   "GET /v1/models",
+		UserID: 36,
+		Scope:  "GET /v1/models",
 	})
 	if err != nil {
 		t.Fatalf("acquire: %v", err)
@@ -420,8 +420,8 @@ func TestSessionFinalizeRecordsUnknownAfterStoreRetriesExhausted(t *testing.T) {
 		RenewInterval: time.Hour,
 	})
 	result, err := manager.Acquire(context.Background(), Identity{
-		UserID:  38,
-		Scope:   "GET /v1/models",
+		UserID: 38,
+		Scope:  "GET /v1/models",
 	})
 	if err != nil {
 		t.Fatalf("acquire: %v", err)
@@ -451,8 +451,8 @@ func TestRequestAdmissionMetricsFollowTokenOwnership(t *testing.T) {
 		RenewInterval: time.Hour,
 	})
 	result, err := manager.Acquire(context.Background(), Identity{
-		UserID:  42,
-		Scope:   "POST /v1/responses",
+		UserID: 42,
+		Scope:  "POST /v1/responses",
 	})
 	if err != nil {
 		t.Fatalf("acquire: %v", err)

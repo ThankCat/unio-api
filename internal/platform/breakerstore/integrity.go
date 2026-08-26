@@ -213,12 +213,12 @@ func (s *Store) BootstrapStateEpoch(ctx context.Context, epoch string, revision 
 }
 
 type RuntimeReadinessInput struct {
-	Epoch                  string
-	EpochRevision          int64
+	Epoch                    string
+	EpochRevision            int64
 	RequestRateLimitRevision int64
-	ConcurrencyRevision    int64
-	CircuitBreakerRevision int64
-	RoutingBalanceRevision int64
+	ConcurrencyRevision      int64
+	CircuitBreakerRevision   int64
+	RoutingBalanceRevision   int64
 }
 
 type RuntimeReadinessResult struct {

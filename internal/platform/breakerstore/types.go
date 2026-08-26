@@ -203,8 +203,8 @@ type AttemptPermit struct {
 	IntegrityEpoch     string
 	IntegrityRevision  int64
 
-	ProviderID            int64
-	ChannelID             int64
+	ProviderID int64
+	ChannelID  int64
 
 	OriginRevision         int64
 	ProviderStatusRevision int64
@@ -381,7 +381,7 @@ type CandidateSnapshot struct {
 type SnapshotManyResult struct {
 	Candidates                []CandidateSnapshot
 	IntegrityRevision         int64
-	RequestRateRevision         int64
+	RequestRateRevision       int64
 	GlobalConcurrencyRevision int64
 	CircuitBreakerRevision    int64
 	RoutingBalance            RoutingBalanceSnapshot

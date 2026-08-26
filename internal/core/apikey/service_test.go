@@ -46,7 +46,6 @@ func TestServiceCreateSuccess(t *testing.T) {
 		t.Fatal(err)
 	}
 
-
 	if !store.called {
 		t.Fatal("store was not called")
 	}
@@ -150,8 +149,8 @@ func TestServiceCreateStoreError(t *testing.T) {
 	service := NewService(store)
 
 	created, err := service.Create(context.Background(), CreateParams{
-		UserID:  10,
-		Name:    "test",
+		UserID: 10,
+		Name:   "test",
 	})
 
 	if created != nil {

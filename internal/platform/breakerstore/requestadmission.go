@@ -32,7 +32,7 @@ type RequestAdmissionInput struct {
 
 	IntegrityEpoch            string
 	IntegrityRevision         int64
-	RequestRateRevision         int64
+	RequestRateRevision       int64
 	GlobalConcurrencyRevision int64
 
 	RPMLimitOverride         *int64

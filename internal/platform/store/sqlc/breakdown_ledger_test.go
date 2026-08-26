@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgtype"
-
 )
 
 func assertBreakdownFacts(t *testing.T, name string, terminal, succeeded, tokens int64, revenue, cost pgtype.Numeric) {

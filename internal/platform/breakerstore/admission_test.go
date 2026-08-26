@@ -279,11 +279,11 @@ func TestRequestAdmissionRPDBucketTTLCoversDay(t *testing.T) {
 		t.Fatalf("acquire want allowed, got %s err=%v", r.Outcome, err)
 	}
 	now := time.Now()
-	rpdTTL, err := rc.PTTL(ctx, s.keys.requestRPDBucket( 1, dayBucket(now))).Result()
+	rpdTTL, err := rc.PTTL(ctx, s.keys.requestRPDBucket(1, dayBucket(now))).Result()
 	if err != nil {
 		t.Fatalf("rpd pttl: %v", err)
 	}
-	rpmTTL, err := rc.PTTL(ctx, s.keys.requestRPMBucket( 1, minuteBucket(now))).Result()
+	rpmTTL, err := rc.PTTL(ctx, s.keys.requestRPMBucket(1, minuteBucket(now))).Result()
 	if err != nil {
 		t.Fatalf("rpm pttl: %v", err)
 	}

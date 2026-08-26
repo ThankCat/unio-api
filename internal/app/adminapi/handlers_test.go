@@ -135,6 +135,7 @@ func (s *fakeModelService) Update(context.Context, model.UpdateInput) (model.Mod
 func (s *fakeModelService) Delete(context.Context, int64) error {
 	return s.deleteErr
 }
+
 type fakeChannelModelService struct {
 	listOut   []channelmodel.Binding
 	createOut channelmodel.Binding

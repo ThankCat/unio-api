@@ -83,7 +83,7 @@ func testCircuitBreakerPayload(cfg Config) string {
 const (
 	testAttemptIntegrityEpoch    = "test-attempt-epoch"
 	testAttemptIntegrityRevision = int64(1)
-	testRequestRateRevision        = int64(1)
+	testRequestRateRevision      = int64(1)
 )
 
 const (
