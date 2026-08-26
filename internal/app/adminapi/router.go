@@ -59,7 +59,7 @@ type RouterDeps struct {
 	ChannelPriceService channel.ChannelPriceService
 	RoutingTraceService RoutingTraceService
 
-	// 模型基准售价：客户售价 = 模型绝对售价，或基准价 × 全局售价倍率。
+	// 模型定价：客户售价 = 模型绝对售价，或基准价 × 该模型的售价倍率。
 	ModelPriceService model.ModelPriceService
 
 	// DEC-027：渠道成本倍率（渠道真实成本 = 模型上游参考成本 × 价格倍率 × 充值倍率）。

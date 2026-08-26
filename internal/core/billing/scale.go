@@ -25,7 +25,7 @@ func (o SaleOverride) Configured() bool {
 	return o.UncachedInputPrice.Valid && o.OutputPrice.Valid
 }
 
-// ResolveCustomerPrice 两级解析客户售价：模型配了绝对售价就直接用，否则基准价 × 全局售价倍率。
+// ResolveCustomerPrice 两级解析客户售价：模型配了绝对售价就直接用，否则基准价 × 该模型的售价倍率。
 //
 // 绝对售价与倍率是互斥的两种表达，不做混合：绝对售价存在时倍率完全不参与，避免「这一项按绝对价、
 // 那一项按倍率」这种无法向管理员解释的口径。两条路径都产出可直接入库的 NUMERIC(20,10) 快照，
@@ -48,9 +48,9 @@ func ResolveCustomerPrice(base CustomerPriceSnapshot, ratio pgtype.Numeric, over
 	}, nil
 }
 
-// ScaleCustomerPrice 把「模型基准售价」按「全局售价倍率」逐分项缩放，得到客户最终售价快照。
+// ScaleCustomerPrice 把「模型基准售价」按「该模型的售价倍率」逐分项缩放，得到客户最终售价快照。
 //
-// 客户售价 = 模型基准价（model_prices）× 全局售价倍率（gateway.model_sale_price_ratio）。每个单价分量
+// 客户售价 = 模型基准价 × 售价倍率（同一条 model_prices 行的 sale_price_ratio）。每个单价分量
 // 独立相乘并四舍五入到 NUMERIC(20,10)（与 model_prices / price_snapshots 单价同精度，可直接入库快照）。
 // 未配置（NULL）的 cache / reasoning 分量保持 NULL —— 计费时由 normalizeTokenRates 回退到已缩放的
 // uncached / output，与现有口径一致。Currency / PricingUnit / FormulaVersion 原样保留。

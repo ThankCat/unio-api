@@ -108,6 +108,11 @@ SELECT EXISTS (
 -- ModelHasRuntimeSupply 判断该 Model 此刻是否真的能打通：需要 Binding、Channel、Provider
 -- 三级 enabled、凭据有效，且渠道成本可解析（有绝对覆盖或价格倍率，否则不参与计费也就进不了候选）。
 -- 这是启用模型的前置条件，用于守住「enabled 即可调用」的不变量。
+--
+-- 基准价条件必须与 FindModelCandidates 取 base 的那个 INNER JOIN LATERAL 对齐：
+-- 那边没有生效基准价就没有候选。少了这一条，一个没配价的模型能被成功 enable、
+-- 出现在 /v1/models 里，却对每次调用都返回 404。
+-- 售价本身不用单独判：ck_model_prices_sale_configured 保证存在价格行即可解析出售价。
 SELECT EXISTS (
     SELECT 1
     FROM channel_models cm
@@ -118,6 +123,13 @@ SELECT EXISTS (
       AND c.status = 'enabled'
       AND c.credential_valid
       AND p.status = 'enabled'
+      AND EXISTS (
+          SELECT 1 FROM model_prices mp
+          WHERE mp.model_id = cm.model_id
+            AND mp.status = 'enabled'
+            AND mp.effective_from <= now()
+            AND (mp.effective_to IS NULL OR mp.effective_to > now())
+      )
       AND (
           EXISTS (
               SELECT 1 FROM channel_prices cp

@@ -241,7 +241,6 @@ func (d *chatSettlementDBDeps) seed(t *testing.T) {
 		t.Fatalf("generate api key: %v", err)
 	}
 
-
 	apiKey, err := d.queries.CreateAPIKey(d.ctx, sqlc.CreateAPIKeyParams{
 		UserID:    user.ID,
 		Name:      "chat settlement key",
@@ -1364,27 +1363,28 @@ func TestChatSettlementMultiplierPathComputesAndPinsCost(t *testing.T) {
 
 	// DEC-031：成本基数复用 model_prices（退役独立参考成本表）。基准价：未缓存 2.0 / 输出 10.0 / 缓存读取 0.2 / reasoning 10.0（名义 USD）。
 	basePrice, err := deps.queries.CreateModelPrice(deps.ctx, sqlc.CreateModelPriceParams{
-		ModelID:              deps.modelID,
-		Currency:             "USD",
-		PricingUnit:          billing.PricingUnitPer1MTokens,
-		// 基准价相对渠道成本留足倍数：售价 = 基准价 × 全局售价倍率，
-		// 倍率是环境相关的运行时设置，价差太小会让毛利守卫在低倍率环境下误伤这些用例。
+		ModelID:     deps.modelID,
+		Currency:    "USD",
+		PricingUnit: billing.PricingUnitPer1MTokens,
+		// 基准价相对渠道成本留足倍数，毛利守卫不会误伤这些用例。
 		UncachedInputPrice:   testNumeric(100_0000000000, -10),
 		CacheReadInputPrice:  testNumeric(10_0000000000, -10),
 		OutputPrice:          testNumeric(500_0000000000, -10),
 		ReasoningOutputPrice: testNumeric(500_0000000000, -10),
-		Status:               "enabled",
-		EffectiveFrom:        pgtype.Timestamptz{Time: time.Now().Add(-time.Hour), Valid: true},
-		EffectiveTo:          pgtype.Timestamptz{Valid: false},
+		// 倍率随价格行走：按 1.0 卖，合并成本倍率 0.12 × 0.5 = 0.06 远低于它。
+		SalePriceRatio: testNumeric(1_0000000000, -10),
+		Status:         "enabled",
+		EffectiveFrom:  pgtype.Timestamptz{Time: time.Now().Add(-time.Hour), Valid: true},
+		EffectiveTo:    pgtype.Timestamptz{Valid: false},
 	})
 	if err != nil {
 		t.Fatalf("create model price (cost base): %v", err)
 	}
 	// 渠道默认价格倍率 1.2。
 	mult, err := deps.queries.CreateChannelCostMultiplier(deps.ctx, sqlc.CreateChannelCostMultiplierParams{
-		ChannelID:     deps.channelID,
-		ModelID:       pgtype.Int8{Valid: false},
-		// 合并倍率（0.12 × 0.5 = 0.06）必须低于全局售价倍率，否则毛利守卫会拒绝这份配置。
+		ChannelID: deps.channelID,
+		ModelID:   pgtype.Int8{Valid: false},
+		// 合并倍率（0.12 × 0.5 = 0.06）必须低于模型售价倍率，否则毛利守卫会拒绝这份配置。
 		Multiplier:    testNumeric(12, -2), // 0.12
 		Status:        "enabled",
 		EffectiveFrom: pgtype.Timestamptz{Time: time.Now().Add(-time.Hour), Valid: true},
@@ -1441,9 +1441,9 @@ func TestChatSettlementMultiplierPathComputesAndPinsCost(t *testing.T) {
 	assertNumericEqual(t, costSnapshot.RechargeFactor, testNumeric(5, -1))  // 0.5
 
 	// 真实成本单价 = 基准价（model_prices） × 0.12 × 0.5（= ×0.06）。
-	assertNumericEqual(t, costSnapshot.UncachedInputCost, testNumeric(6_0000000000, -10))   // 100.0 × 0.06
-	assertNumericEqual(t, costSnapshot.OutputCost, testNumeric(30_0000000000, -10))         // 500.0 × 0.06
-	assertNumericEqual(t, costSnapshot.CacheReadInputCost, testNumeric(6000000000, -10))    // 10.0 × 0.06 = 0.6
+	assertNumericEqual(t, costSnapshot.UncachedInputCost, testNumeric(6_0000000000, -10)) // 100.0 × 0.06
+	assertNumericEqual(t, costSnapshot.OutputCost, testNumeric(30_0000000000, -10))       // 500.0 × 0.06
+	assertNumericEqual(t, costSnapshot.CacheReadInputCost, testNumeric(6000000000, -10))  // 10.0 × 0.06 = 0.6
 	assertNumericEqual(t, costSnapshot.ReasoningOutputCost, testNumeric(30_0000000000, -10))
 
 	// 售价快照 price_id 倍率路径为 NULL（无 channel_prices 行可指）。

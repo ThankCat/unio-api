@@ -61,6 +61,10 @@ type Row struct {
 	BaseCacheWrite30mInputPrice *string
 	BaseOutputPrice             *string
 	BaseReasoningOutputPrice    *string
+	// 售价：绝对售价整组非空时直接生效，否则基准价 × 倍率。两者至少有一个。
+	BaseSalePriceRatio         *string
+	BaseSaleUncachedInputPrice *string
+	BaseSaleOutputPrice        *string
 	// 当前生效基准价的长上下文阶梯（无基准价或未启用时 Enabled=false，其余为 nil）。
 	BaseLongContextEnabled          bool
 	BaseLongContextThreshold        *int64
@@ -113,6 +117,9 @@ type ChannelRow struct {
 	HasPrice         bool
 	InputCost        *string
 	OutputCost       *string
+	// Fast 档成本；两侧都没配 Fast 价时为 nil，表示该渠道对本模型不区分 Fast。
+	FastInputCost  *string
+	FastOutputCost *string
 }
 
 // PerfPoint 是抽屉性能 Tab 时序点。
@@ -196,6 +203,9 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 			BaseCacheWrite30mInputPrice:     opsutil.NumericStringPtr(r.BaseCacheWrite30mInputPrice),
 			BaseOutputPrice:                 opsutil.NumericStringPtr(r.BaseOutputPrice),
 			BaseReasoningOutputPrice:        opsutil.NumericStringPtr(r.BaseReasoningOutputPrice),
+			BaseSalePriceRatio:              opsutil.NumericStringPtr(r.BaseSalePriceRatio),
+			BaseSaleUncachedInputPrice:      opsutil.NumericStringPtr(r.BaseSaleUncachedInputPrice),
+			BaseSaleOutputPrice:             opsutil.NumericStringPtr(r.BaseSaleOutputPrice),
 			BaseLongContextEnabled:          r.BaseLongContextEnabled,
 			BaseLongContextThreshold:        opsutil.Int8Value(r.BaseLongContextThreshold),
 			BaseLongContextInputMultiplier:  opsutil.NumericStringPtr(r.BaseLongContextInputMultiplier),
@@ -285,6 +295,8 @@ func (s *Service) Channels(ctx context.Context, modelID int64, from, to time.Tim
 			HasPrice:         r.HasPrice,
 			InputCost:        opsutil.NumericStringPtr(r.InputCost),
 			OutputCost:       opsutil.NumericStringPtr(r.OutputCost),
+			FastInputCost:    opsutil.NumericStringPtr(r.FastInputCost),
+			FastOutputCost:   opsutil.NumericStringPtr(r.FastOutputCost),
 		})
 	}
 	return out, nil

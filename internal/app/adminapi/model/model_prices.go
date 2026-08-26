@@ -38,6 +38,8 @@ type modelPriceDTO struct {
 	CacheWrite30mInputPrice     *string                `json:"cache_write_30m_input_price"`
 	OutputPrice                 string                 `json:"output_price"`
 	ReasoningOutputPrice        *string                `json:"reasoning_output_price"`
+	SalePriceRatio              *string                `json:"sale_price_ratio"`
+	SalePrices                  *salePriceVectorDTO    `json:"sale_prices"`
 	LongContextEnabled          bool                   `json:"long_context_enabled"`
 	LongContextThreshold        *int64                 `json:"long_context_threshold"`
 	LongContextInputMultiplier  *string                `json:"long_context_input_multiplier"`
@@ -52,8 +54,8 @@ type modelPriceDTO struct {
 	UpdatedAt                   string                 `json:"updated_at"`
 }
 
-type fastPriceDTO struct {
-	ServiceTierID           int64   `json:"service_tier_id"`
+// salePriceVectorDTO 是一组对外绝对售价：整组给齐或整组留空，非空时优先于售价倍率。
+type salePriceVectorDTO struct {
 	UncachedInputPrice      string  `json:"uncached_input_price"`
 	CacheReadInputPrice     *string `json:"cache_read_input_price"`
 	CacheWrite5mInputPrice  *string `json:"cache_write_5m_input_price"`
@@ -61,8 +63,20 @@ type fastPriceDTO struct {
 	CacheWrite30mInputPrice *string `json:"cache_write_30m_input_price"`
 	OutputPrice             string  `json:"output_price"`
 	ReasoningOutputPrice    *string `json:"reasoning_output_price"`
-	ReferenceSource         *string `json:"reference_source"`
-	ReferenceCheckedAt      *string `json:"reference_checked_at"`
+}
+
+type fastPriceDTO struct {
+	ServiceTierID           int64               `json:"service_tier_id"`
+	UncachedInputPrice      string              `json:"uncached_input_price"`
+	CacheReadInputPrice     *string             `json:"cache_read_input_price"`
+	CacheWrite5mInputPrice  *string             `json:"cache_write_5m_input_price"`
+	CacheWrite1hInputPrice  *string             `json:"cache_write_1h_input_price"`
+	CacheWrite30mInputPrice *string             `json:"cache_write_30m_input_price"`
+	OutputPrice             string              `json:"output_price"`
+	ReasoningOutputPrice    *string             `json:"reasoning_output_price"`
+	SalePrices              *salePriceVectorDTO `json:"sale_prices"`
+	ReferenceSource         *string             `json:"reference_source"`
+	ReferenceCheckedAt      *string             `json:"reference_checked_at"`
 }
 
 type fastPriceReferenceDTO struct {
@@ -80,36 +94,41 @@ type fastPriceReferenceDTO struct {
 }
 
 type fastPriceRequest struct {
-	UncachedInputPrice      string  `json:"uncached_input_price"`
-	CacheReadInputPrice     *string `json:"cache_read_input_price"`
-	CacheWrite5mInputPrice  *string `json:"cache_write_5m_input_price"`
-	CacheWrite1hInputPrice  *string `json:"cache_write_1h_input_price"`
-	CacheWrite30mInputPrice *string `json:"cache_write_30m_input_price"`
-	OutputPrice             string  `json:"output_price"`
-	ReasoningOutputPrice    *string `json:"reasoning_output_price"`
-	ReferenceSource         *string `json:"reference_source"`
-	ReferenceCheckedAt      *string `json:"reference_checked_at"`
+	UncachedInputPrice      string              `json:"uncached_input_price"`
+	CacheReadInputPrice     *string             `json:"cache_read_input_price"`
+	CacheWrite5mInputPrice  *string             `json:"cache_write_5m_input_price"`
+	CacheWrite1hInputPrice  *string             `json:"cache_write_1h_input_price"`
+	CacheWrite30mInputPrice *string             `json:"cache_write_30m_input_price"`
+	OutputPrice             string              `json:"output_price"`
+	ReasoningOutputPrice    *string             `json:"reasoning_output_price"`
+	SalePrices              *salePriceVectorDTO `json:"sale_prices"`
+	ReferenceSource         *string             `json:"reference_source"`
+	ReferenceCheckedAt      *string             `json:"reference_checked_at"`
 }
 
+// createModelPriceRequest 的 sale_price_ratio 与 sale_prices 至少给一个：
+// 前者是「基准价 × 倍率」，后者是钉死的绝对售价，两者都缺则这条价格行卖不出去。
 type createModelPriceRequest struct {
-	Currency                    string            `json:"currency"`
-	PricingUnit                 string            `json:"pricing_unit"`
-	UncachedInputPrice          string            `json:"uncached_input_price"`
-	CacheReadInputPrice         *string           `json:"cache_read_input_price"`
-	CacheWrite5mInputPrice      *string           `json:"cache_write_5m_input_price"`
-	CacheWrite1hInputPrice      *string           `json:"cache_write_1h_input_price"`
-	CacheWrite30mInputPrice     *string           `json:"cache_write_30m_input_price"`
-	OutputPrice                 string            `json:"output_price"`
-	ReasoningOutputPrice        *string           `json:"reasoning_output_price"`
-	LongContextEnabled          bool              `json:"long_context_enabled"`
-	LongContextThreshold        *int64            `json:"long_context_threshold"`
-	LongContextInputMultiplier  *string           `json:"long_context_input_multiplier"`
-	LongContextOutputMultiplier *string           `json:"long_context_output_multiplier"`
-	FastPrices                  *fastPriceRequest `json:"fast_prices"`
-	ReplaceOverlappingEnabled   bool              `json:"replace_overlapping_enabled"`
-	Status                      string            `json:"status"`
-	EffectiveFrom               string            `json:"effective_from"`
-	EffectiveTo                 *string           `json:"effective_to"`
+	Currency                    string              `json:"currency"`
+	PricingUnit                 string              `json:"pricing_unit"`
+	UncachedInputPrice          string              `json:"uncached_input_price"`
+	CacheReadInputPrice         *string             `json:"cache_read_input_price"`
+	CacheWrite5mInputPrice      *string             `json:"cache_write_5m_input_price"`
+	CacheWrite1hInputPrice      *string             `json:"cache_write_1h_input_price"`
+	CacheWrite30mInputPrice     *string             `json:"cache_write_30m_input_price"`
+	OutputPrice                 string              `json:"output_price"`
+	ReasoningOutputPrice        *string             `json:"reasoning_output_price"`
+	SalePriceRatio              *string             `json:"sale_price_ratio"`
+	SalePrices                  *salePriceVectorDTO `json:"sale_prices"`
+	LongContextEnabled          bool                `json:"long_context_enabled"`
+	LongContextThreshold        *int64              `json:"long_context_threshold"`
+	LongContextInputMultiplier  *string             `json:"long_context_input_multiplier"`
+	LongContextOutputMultiplier *string             `json:"long_context_output_multiplier"`
+	FastPrices                  *fastPriceRequest   `json:"fast_prices"`
+	ReplaceOverlappingEnabled   bool                `json:"replace_overlapping_enabled"`
+	Status                      string              `json:"status"`
+	EffectiveFrom               string              `json:"effective_from"`
+	EffectiveTo                 *string             `json:"effective_to"`
 }
 
 type updateModelPriceRequest struct {
@@ -182,6 +201,8 @@ func (h *modelPricesHandler) create(w http.ResponseWriter, r *http.Request) {
 		CacheWrite30mInputPrice:     req.CacheWrite30mInputPrice,
 		OutputPrice:                 req.OutputPrice,
 		ReasoningOutputPrice:        req.ReasoningOutputPrice,
+		SalePriceRatio:              req.SalePriceRatio,
+		SalePrices:                  saleVectorInput(req.SalePrices),
 		LongContextEnabled:          req.LongContextEnabled,
 		LongContextThreshold:        req.LongContextThreshold,
 		LongContextInputMultiplier:  req.LongContextInputMultiplier,
@@ -247,6 +268,8 @@ func toModelPriceDTO(p modelprice.ModelPrice) modelPriceDTO {
 		CacheWrite30mInputPrice:     p.CacheWrite30mInputPrice,
 		OutputPrice:                 p.OutputPrice,
 		ReasoningOutputPrice:        p.ReasoningOutputPrice,
+		SalePriceRatio:              p.SalePriceRatio,
+		SalePrices:                  saleVectorDTO(p.SalePrices),
 		LongContextEnabled:          p.LongContextEnabled,
 		LongContextThreshold:        p.LongContextThreshold,
 		LongContextInputMultiplier:  p.LongContextInputMultiplier,
@@ -267,6 +290,7 @@ func toModelPriceDTO(p modelprice.ModelPrice) modelPriceDTO {
 			CacheWrite30mInputPrice: p.FastPrices.CacheWrite30mInputPrice,
 			OutputPrice:             p.FastPrices.OutputPrice,
 			ReasoningOutputPrice:    p.FastPrices.ReasoningOutputPrice,
+			SalePrices:              saleVectorDTO(p.FastPrices.SalePrices),
 			ReferenceSource:         p.FastPrices.ReferenceSource,
 		}
 		if p.FastPrices.ReferenceCheckedAt != nil {
@@ -321,7 +345,38 @@ func parseFastPriceRequest(req *fastPriceRequest) (*modelprice.FastPriceInput, e
 		CacheWrite30mInputPrice: req.CacheWrite30mInputPrice,
 		OutputPrice:             req.OutputPrice,
 		ReasoningOutputPrice:    req.ReasoningOutputPrice,
+		SalePrices:              saleVectorInput(req.SalePrices),
 		ReferenceSource:         req.ReferenceSource,
 		ReferenceCheckedAt:      checkedAt,
 	}, nil
+}
+
+func saleVectorInput(in *salePriceVectorDTO) *modelprice.SalePriceVector {
+	if in == nil {
+		return nil
+	}
+	return &modelprice.SalePriceVector{
+		UncachedInputPrice:      in.UncachedInputPrice,
+		CacheReadInputPrice:     in.CacheReadInputPrice,
+		CacheWrite5mInputPrice:  in.CacheWrite5mInputPrice,
+		CacheWrite1hInputPrice:  in.CacheWrite1hInputPrice,
+		CacheWrite30mInputPrice: in.CacheWrite30mInputPrice,
+		OutputPrice:             in.OutputPrice,
+		ReasoningOutputPrice:    in.ReasoningOutputPrice,
+	}
+}
+
+func saleVectorDTO(in *modelprice.SalePriceVector) *salePriceVectorDTO {
+	if in == nil {
+		return nil
+	}
+	return &salePriceVectorDTO{
+		UncachedInputPrice:      in.UncachedInputPrice,
+		CacheReadInputPrice:     in.CacheReadInputPrice,
+		CacheWrite5mInputPrice:  in.CacheWrite5mInputPrice,
+		CacheWrite1hInputPrice:  in.CacheWrite1hInputPrice,
+		CacheWrite30mInputPrice: in.CacheWrite30mInputPrice,
+		OutputPrice:             in.OutputPrice,
+		ReasoningOutputPrice:    in.ReasoningOutputPrice,
+	}
 }

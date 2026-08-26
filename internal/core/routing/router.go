@@ -53,7 +53,6 @@ var (
 	// ErrModelNotAvailable 表示模型存在但当前用户不允许使用。
 	ErrModelNotAvailable = errors.New("model not available for user")
 
-
 	// ErrChannelCredentialMissing 表示 channel 未配置上游凭据。
 	ErrChannelCredentialMissing = errors.New("channel credential missing")
 
@@ -71,7 +70,6 @@ type ChatRouteRequest struct {
 
 	// Endpoint 是本次请求的 ingress 表面（chat_completions/messages/responses），供审计/日志维度。
 	Endpoint string
-
 }
 
 // ChatRouteCandidate 表示一个可尝试的 chat 上游候选。
@@ -90,7 +88,6 @@ type ChatRouteCandidate struct {
 	Channel                 channel.Runtime
 	UpstreamModel           string
 
-
 	// MaxOutputTokens 是该候选逻辑模型 models.max_output_tokens（0 表示未配置）。
 	// 客户未显式给出输出上限时，authorization 用它（取候选最大值）做保守冻结上界，
 	// 避免按全局兜底偏小导致预冻结不足、超额进平台核销。
@@ -98,7 +95,7 @@ type ChatRouteCandidate struct {
 
 	// ModelPriceID 是计算 SalePrice 所用的模型基准售价行 ID（model_prices.id，供结算审计/快照）。
 	ModelPriceID int64
-	// PriceRatio 是计算 SalePrice 所用的全局售价倍率（供结算审计/快照）。
+	// PriceRatio 是计算 SalePrice 所用的模型售价倍率（供结算审计/快照）；绝对售价路径下为空。
 	// 模型配了绝对售价时为空：那条路径下售价直接取自模型，没有倍率参与。
 	PriceRatio pgtype.Numeric
 	// SalePrice 是客户最终售价向量 = 模型基准价 × 线路倍率（DEC-026）；同一请求所有候选共享同一售价，
@@ -151,7 +148,6 @@ type ChatRoutePlan struct {
 	// ModelDBID 是 RequestedModel 解析出的模型主键。Sticky key 需要它以避免同一会话
 	// 跨模型共享绑定（§10.1）；候选行天然共享同一个模型，所以这是计划级事实。
 	ModelDBID int64
-
 }
 
 // Store 定义 routing 查询候选渠道所需的最小数据库能力。
@@ -200,10 +196,7 @@ type Router struct {
 	store                         Store
 	defaultResponseTimeoutNanos   atomic.Int64
 	defaultFirstTokenTimeoutNanos atomic.Int64
-	// salePriceRatio 是模型未配置绝对售价时的回退倍率（gateway.model_sale_price_ratio）。
-	// 与超时同样走 atomic 热改：路由热路径每个候选都要读。
-	salePriceRatio atomic.Pointer[pgtype.Numeric]
-	logger         *zap.Logger
+	logger                        *zap.Logger
 }
 
 // Option 调整 Router 的可选依赖（如日志）。
@@ -247,28 +240,6 @@ func (r *Router) SetDefaultFirstTokenTimeout(d time.Duration) {
 		d = defaultFirstTokenTimeoutFallback
 	}
 	r.defaultFirstTokenTimeoutNanos.Store(int64(d))
-}
-
-// SetSalePriceRatio 原子替换全局售价倍率（运行时热改入口）。
-// 无效值忽略：宁可继续用上一个已知有效的倍率，也不能让计费落到 0 或负数。
-func (r *Router) SetSalePriceRatio(ratio pgtype.Numeric) {
-	if !ratio.Valid {
-		return
-	}
-	value := ratio
-	r.salePriceRatio.Store(&value)
-}
-
-// currentSalePriceRatio 返回当前售价倍率；未注入时按 1.0（等于直接卖基准价，不会亏本）。
-func (r *Router) currentSalePriceRatio() pgtype.Numeric {
-	if ratio := r.salePriceRatio.Load(); ratio != nil {
-		return *ratio
-	}
-	var one pgtype.Numeric
-	if err := one.Scan("1.0"); err != nil {
-		return pgtype.Numeric{}
-	}
-	return one
 }
 
 func (r *Router) defaultResponseTimeout() time.Duration {
@@ -416,8 +387,9 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindModel
 		)
 	}
 
-	// 客户售价定在模型上，两级解析：模型配了绝对售价就用它，否则基准价 × 全局售价倍率。
-	// 售价与命中哪条渠道无关，同一请求的所有候选共享同一售价。
+	// 客户售价定在模型上，两级解析：模型配了绝对售价就用它，否则基准价 × 该模型自己的倍率。
+	// 两者都随价格行走（ck_model_prices_sale_configured 保证至少有一个），所以售价只取决于
+	// 命中的价格行；与命中哪条渠道无关，同一请求的所有候选共享同一售价。
 	basePrice := billing.CustomerPriceSnapshot{
 		Currency:                row.BaseCurrency,
 		PricingUnit:             row.BasePricingUnit,
@@ -430,7 +402,7 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindModel
 		ReasoningOutputPrice:    row.ReasoningOutputPrice,
 		FormulaVersion:          billing.FormulaVersionV1,
 	}
-	ratio := r.currentSalePriceRatio()
+	ratio := row.SalePriceRatio
 	saleOverride := billing.SaleOverride{
 		UncachedInputPrice:      row.SaleUncachedInputPrice,
 		CacheReadInputPrice:     row.SaleCacheReadInputPrice,
@@ -470,7 +442,9 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindModel
 			ReasoningOutputPrice:    row.FastReasoningOutputPrice,
 			FormulaVersion:          billing.FormulaVersionV1,
 		}
-		// Fast 档同样两级解析，绝对售价列取自该档自己的 service tier 行。
+		// Fast 档同样两级解析，绝对售价列取自该档自己的 service tier 行，倍率与 Standard 共用
+		// 同一个模型倍率。模型只配了 Standard 绝对售价（倍率为空）而 Fast 又没配绝对售价时，
+		// 这里解析失败并降级为忽略 Fast——那种组合在配置期已被毛利守卫拦下，走到这里属于兜底。
 		fastResolved, fastErr := billing.ResolveCustomerPrice(fastBasePrice, ratio, billing.SaleOverride{
 			UncachedInputPrice:      row.FastSaleUncachedInputPrice,
 			CacheReadInputPrice:     row.FastSaleCacheReadInputPrice,

@@ -6,10 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
-
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // 本文件登记 gateway 热路径运行时配置。breaker、rate/concurrency defaults 与
@@ -32,7 +29,6 @@ const (
 	GatewayRoutingStickyKey            = "gateway.routing_sticky"
 	GatewayRoutingBalanceKey           = "gateway.routing_balance"
 	GatewayCapacityWaitTimeoutKey      = "gateway.capacity_wait_timeout_ms"
-	GatewayModelSalePriceRatioKey      = "gateway.model_sale_price_ratio"
 )
 
 func msToDuration(ms int64) time.Duration {
@@ -815,61 +811,6 @@ func GatewayDefaultFirstTokenTimeout(ctx context.Context, store *SettingsStore) 
 	return d
 }
 
-// DecodeSalePriceRatioSetting 解码全局售价倍率 {"ratio":"0.2"}。
-//
-// 倍率用字符串承载而非 JSON number：它直接参与计费，必须按十进制精确解析，
-// 走 float64 会引入舍入误差。倍率必须为正——0 或负数意味着白送或倒付钱。
-func DecodeSalePriceRatioSetting(raw []byte) (pgtype.Numeric, error) {
-	var payload struct {
-		Ratio string `json:"ratio"`
-	}
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return pgtype.Numeric{}, fmt.Errorf("value must be an object with a ratio string: %w", err)
-	}
-	ratio := strings.TrimSpace(payload.Ratio)
-	if ratio == "" {
-		return pgtype.Numeric{}, errors.New("ratio is required")
-	}
-	var out pgtype.Numeric
-	if err := out.Scan(ratio); err != nil {
-		return pgtype.Numeric{}, fmt.Errorf("ratio must be a decimal number: %w", err)
-	}
-	if !out.Valid || out.NaN {
-		return pgtype.Numeric{}, errors.New("ratio must be a finite decimal number")
-	}
-	if out.Int != nil && out.Int.Sign() <= 0 {
-		return pgtype.Numeric{}, errors.New("ratio must be > 0")
-	}
-	return out, nil
-}
-
-// DefaultModelSalePriceRatio 是全新库的默认售价倍率：等于直接按基准价卖，不会亏本。
-const DefaultModelSalePriceRatio = "1.0"
-
-func modelSalePriceRatioDefinition() Definition {
-	return Definition{
-		Key:      GatewayModelSalePriceRatioKey,
-		Category: "gateway",
-		Label:    "模型售价倍率",
-		Description: "模型没有单独配置对外售价时,客户售价 = 模型基准价 × 本倍率。" +
-			"改动立即影响之后所有请求的账单,历史请求按当时快照结算不受影响。" +
-			"倍率必须大于 0,且不能低到让任一模型的售价跌破渠道成本(保存时由数据库毛利守卫拦截)。",
-		HotReload: true,
-		Default:   json.RawMessage(`{"ratio":"` + DefaultModelSalePriceRatio + `"}`),
-		Validate: func(raw json.RawMessage) error {
-			_, err := DecodeSalePriceRatioSetting(raw)
-			return err
-		},
-	}
-}
-
-// GatewayModelSalePriceRatio 读取当前生效的售价倍率（解码失败回默认 1.0）。
-func GatewayModelSalePriceRatio(ctx context.Context, store *SettingsStore) pgtype.Numeric {
-	ratio, err := DecodeSalePriceRatioSetting(store.Raw(ctx, GatewayModelSalePriceRatioKey))
-	if err != nil {
-		var fallback pgtype.Numeric
-		_ = fallback.Scan(DefaultModelSalePriceRatio)
-		return fallback
-	}
-	return ratio
-}
+// 售价倍率不再是全局设置：它随每条 model_prices 行走（sale_price_ratio），
+// 与同行的绝对售价共同决定该模型的客户售价。设置项、解码器与 Router 侧的热改入口
+// 一并删除，定价的唯一来源是价格行本身。

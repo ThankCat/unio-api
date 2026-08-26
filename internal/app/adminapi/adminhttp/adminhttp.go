@@ -6,7 +6,9 @@
 package adminhttp
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -65,6 +67,11 @@ func SupplyModelSelections(items []SupplyModelSelectionRequest) []supply.ModelSe
 	return out
 }
 
+// marginGuardConstraint 必须与 migrations 里毛利守卫 RAISE EXCEPTION 的 CONSTRAINT 一致。
+// 不一致的后果不是报错而是静默退化：错误落到 CodeAdminStoreFailed 变成 500「internal error」，
+// 管理员只看到一次失败，看不到是哪个模型、哪条渠道、哪个分项亏本。
+const marginGuardConstraint = "ck_non_negative_margin"
+
 // WriteServiceError 把 service / 解码层的内部 failure 映射为安全的 admin 错误响应。
 //
 // 只回显 4xx 的安全摘要（failure.Error() 不含 cause 细节），5xx 一律返回通用文案，
@@ -79,9 +86,9 @@ func WriteServiceError(w http.ResponseWriter, err error) {
 	code := failure.CodeOf(err)
 	messageOverride := ""
 	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.ConstraintName == "ck_non_negative_route_margin" {
+	if errors.As(err, &pgErr) && pgErr.ConstraintName == marginGuardConstraint {
 		code = failure.CodeAdminNegativeMargin
-		messageOverride = pgErr.Message
+		messageOverride = negativeMarginMessage(pgErr)
 		if holder := routingMarginRecorder.Load(); holder != nil {
 			holder.recorder.IncRoutingMarginGuard("configuration_rejected")
 		}
@@ -103,6 +110,30 @@ func WriteServiceError(w http.ResponseWriter, err error) {
 	}
 
 	_ = httpx.WriteError(w, status, codeStr, message)
+}
+
+// negativeMarginMessage 把毛利守卫的拒绝理由翻成一句能照着改的中文。
+//
+// 守卫的 DETAIL 里带了 channel_id / model_id / component / sale / cost。component 尤其重要：
+// 守卫逐项比较七个价格分项，亏本的常常不是主价而是某个缓存分项，只报「售价低于成本」
+// 会让人对着两个看起来正常的主价发懵。解析失败时退回守卫原始 MESSAGE，不吞信息。
+func negativeMarginMessage(pgErr *pgconn.PgError) string {
+	// sale / cost 在 DETAIL 里是 JSON 数字，用 json.Number 承载：它保留原始十进制文本，
+	// 不像 float64 那样在展示前先丢一次精度。
+	var detail struct {
+		ChannelID int64       `json:"channel_id"`
+		ModelID   int64       `json:"model_id"`
+		Component string      `json:"component"`
+		Sale      json.Number `json:"sale"`
+		Cost      json.Number `json:"cost"`
+	}
+	if err := json.Unmarshal([]byte(pgErr.Detail), &detail); err != nil || detail.Component == "" {
+		return pgErr.Message
+	}
+	return fmt.Sprintf(
+		"售价低于渠道成本：模型 %d 在渠道 %d 上的「%s」分项售价 %s < 成本 %s",
+		detail.ModelID, detail.ChannelID, detail.Component, detail.Sale, detail.Cost,
+	)
 }
 
 // WriteConfirmationRequired 渲染供给影响确认（409）。affected_models 是潜在影响范围，

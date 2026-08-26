@@ -1,5 +1,5 @@
 -- Model price 是某个 Unio 模型的「基准客户售价」（DEC-026 倍率定价）。
--- 客户最终售价 = 本表 sale_* 绝对售价，或基准售价 × 全局售价倍率；售价不挂渠道，渠道只记成本。
+-- 客户最终售价 = 本表 sale_* 绝对售价，或基准售价 × 本表 sale_price_ratio；售价不挂渠道，渠道只记成本。
 -- 结算审计：price snapshot 记录命中的 model_prices.id + 当时倍率，历史账单可按原事实复算。
 -- btree_gist 让 exclusion constraint 可同时比较等值列与时间范围重叠（000001 已建，幂等保证）。
 CREATE SEQUENCE public.model_prices_id_seq
@@ -37,7 +37,7 @@ CREATE TABLE public.model_prices (
     long_context_threshold bigint,
     long_context_input_multiplier numeric(20,10),
     long_context_output_multiplier numeric(20,10),
-    -- sale_*: 模型对外绝对售价；整组为空时回退「基准价 × 全局售价倍率」。--
+    -- sale_*: 模型对外绝对售价；整组为空时回退「基准价 × sale_price_ratio」（见 000042）。--
     sale_uncached_input_price numeric(20,10),
     sale_cache_read_input_price numeric(20,10),
     sale_cache_write_5m_input_price numeric(20,10),
@@ -108,7 +108,7 @@ ALTER TABLE ONLY public.model_prices
 -- DEC-031：model_prices 同时作为售价与成本基数（真实成本 = 本表 × 渠道倍率/充值倍率或 channel_prices 覆盖）。
 -- Migration renumbered after merging Provider Origin into Provider.
 -- [sale_* / 绝对售价]
--- 与成本侧对称的两级解析：客户售价 = 绝对售价（sale_* 非空时）或 基准价 × 全局售价倍率；
+-- 与成本侧对称的两级解析：客户售价 = 绝对售价（sale_* 非空时）或 基准价 × 售价倍率；
 -- 渠道成本 = channel_prices 绝对覆盖 或 基准价 × 成本倍率 × 充值倍率。
 -- sale_* 与基准价共享同一时间窗行，改售价与改基准价一样通过新开窗口完成。
 --

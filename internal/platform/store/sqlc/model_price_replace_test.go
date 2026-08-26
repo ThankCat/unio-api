@@ -105,6 +105,7 @@ func modelPriceParams(
 		EffectiveTo:                 nullTimestamptz(),
 		UncachedInputPrice:          numeric(input),
 		OutputPrice:                 numeric(output),
+		SalePriceRatio:              numeric(1),
 		CacheReadInputPrice:         pgtype.Numeric{},
 		CacheWrite5mInputPrice:      pgtype.Numeric{},
 		CacheWrite1hInputPrice:      pgtype.Numeric{},

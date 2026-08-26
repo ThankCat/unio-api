@@ -5,7 +5,7 @@
 --      协议用 protocols 数组包含判定，一条渠道可同时服务 openai 与 anthropic；
 --   2. 已定价过滤：候选必须有 model_prices 基准价（base，INNER JOIN 保证），且渠道成本可解析——
 --      「有 channel_prices 绝对成本覆盖」 OR 「有 channel_cost_multipliers 价格倍率」（否则排除，不参与计费）；
---   3. 带回基准价（base）：既是客户售价的回退基数（× 全局售价倍率），也是渠道成本基数
+--   3. 带回基准价（base）：既是客户售价的回退基数（× 模型倍率 sale_price_ratio），也是渠道成本基数
 --      （× 价格倍率 × 充值倍率，DEC-031 同一基数）；
 --      成本三来源：绝对覆盖 cost（若有）/ 价格倍率 mult + 充值倍率 recharge（供 Go 侧
 --      ScaleProviderCostByFactors 派生真实成本与毛利结算），带回来源行 id 作 pin。
@@ -59,8 +59,10 @@ SELECT
     fast_base.sale_cache_write_30m_input_price AS fast_sale_cache_write_30m_input_price,
     fast_base.sale_output_price AS fast_sale_output_price,
     fast_base.sale_reasoning_output_price AS fast_sale_reasoning_output_price,
-    -- 模型绝对售价（整组给齐或整组为空，见 ck_model_prices_sale_all_or_none）。
-    -- 非空时直接作为客户售价；为空时 Go 侧回退 base × 全局售价倍率。
+    -- 售价的两种表达，都挂在模型自己的价格行上（ck_model_prices_sale_configured 保证至少有一个）：
+    -- 绝对售价整组非空时直接用；否则 Go 侧回退 base × sale_price_ratio。
+    -- Fast 档共用同一个倍率，故这里只带一列。
+    base.sale_price_ratio,
     base.sale_uncached_input_price,
     base.sale_cache_read_input_price,
     base.sale_cache_write_5m_input_price,
@@ -102,12 +104,13 @@ JOIN channels c ON c.id = cm.channel_id
 JOIN providers p ON p.id = c.provider_id
 JOIN LATERAL (
     -- base: 模型当前生效的基准价（DEC-026/DEC-031，售价与成本的唯一基数）。
-    -- 客户售价 = base × 全局售价倍率；渠道真实成本（倍率路径）= base × 价格倍率 × 充值倍率。
+    -- 客户售价 = base × 模型倍率 sale_price_ratio；渠道真实成本（倍率路径）= base × 价格倍率 × 充值倍率。
     SELECT mp.id, mp.currency, mp.pricing_unit,
         mp.uncached_input_price, mp.cache_read_input_price,
         mp.cache_write_5m_input_price, mp.cache_write_1h_input_price,
         mp.cache_write_30m_input_price,
         mp.output_price, mp.reasoning_output_price,
+        mp.sale_price_ratio,
         mp.sale_uncached_input_price, mp.sale_cache_read_input_price,
         mp.sale_cache_write_5m_input_price, mp.sale_cache_write_1h_input_price,
         mp.sale_cache_write_30m_input_price,

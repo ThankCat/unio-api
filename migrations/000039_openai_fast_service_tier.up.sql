@@ -149,4 +149,4 @@ ALTER SEQUENCE public.provider_service_tier_cost_risks_id_seq
 CREATE INDEX idx_provider_service_tier_cost_risks_provider_created
     ON public.provider_service_tier_cost_risks (provider_id, created_at DESC, id DESC);
 
-COMMENT ON COLUMN public.model_price_service_tiers.sale_uncached_input_price IS 'Fast 档对外绝对售价；整组为空时回退「该档基准价 × 全局售价倍率」。';
+COMMENT ON COLUMN public.model_price_service_tiers.sale_uncached_input_price IS 'Fast 档对外绝对售价；整组为空时回退「该档基准价 × 模型 sale_price_ratio」（与 Standard 共用倍率，见 000042）。';

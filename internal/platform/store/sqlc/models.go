@@ -421,7 +421,7 @@ type ModelPrice struct {
 	LongContextThreshold        pgtype.Int8
 	LongContextInputMultiplier  pgtype.Numeric
 	LongContextOutputMultiplier pgtype.Numeric
-	// 模型对外绝对售价；整组为空时回退「基准价 × 全局售价倍率」。可选分项为空按 billing fallback 归一。
+	// 模型对外绝对售价；整组为空时回退「基准价 × 同行 sale_price_ratio」。可选分项为空按 billing fallback 归一。
 	SaleUncachedInputPrice      pgtype.Numeric
 	SaleCacheReadInputPrice     pgtype.Numeric
 	SaleCacheWrite5mInputPrice  pgtype.Numeric
@@ -429,6 +429,8 @@ type ModelPrice struct {
 	SaleCacheWrite30mInputPrice pgtype.Numeric
 	SaleOutputPrice             pgtype.Numeric
 	SaleReasoningOutputPrice    pgtype.Numeric
+	// 模型售价倍率：客户售价 = 基准价 × 本倍率。与 sale_* 绝对售价至少配一项，绝对售价优先。
+	SalePriceRatio pgtype.Numeric
 }
 
 type ModelPriceServiceTier struct {
@@ -445,7 +447,7 @@ type ModelPriceServiceTier struct {
 	ReferenceSource         pgtype.Text
 	ReferenceCheckedAt      pgtype.Date
 	CreatedAt               pgtype.Timestamptz
-	// Fast 档对外绝对售价；整组为空时回退「该档基准价 × 全局售价倍率」。
+	// Fast 档对外绝对售价；整组为空时回退「该档基准价 × 模型 sale_price_ratio」（与 Standard 共用倍率）。
 	SaleUncachedInputPrice      pgtype.Numeric
 	SaleCacheReadInputPrice     pgtype.Numeric
 	SaleCacheWrite5mInputPrice  pgtype.Numeric

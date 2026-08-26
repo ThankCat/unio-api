@@ -48,6 +48,10 @@ type modelOpsRowDTO struct {
 	BaseCacheWrite30mInputPrice *string `json:"base_cache_write_30m_input_price"`
 	BaseOutputPrice             *string `json:"base_output_price"`
 	BaseReasoningOutputPrice    *string `json:"base_reasoning_output_price"`
+	// 售价：绝对售价整组非空时直接生效，否则基准价 × 倍率。两者至少有一个。
+	BaseSalePriceRatio         *string `json:"base_sale_price_ratio"`
+	BaseSaleUncachedInputPrice *string `json:"base_sale_uncached_input_price"`
+	BaseSaleOutputPrice        *string `json:"base_sale_output_price"`
 	// 当前生效基准价的长上下文阶梯；无基准价或未启用时 enabled=false。
 	BaseLongContextEnabled          bool    `json:"base_long_context_enabled"`
 	BaseLongContextThreshold        *int64  `json:"base_long_context_threshold"`
@@ -97,6 +101,9 @@ type modelOpsChannelDTO struct {
 	HasPrice         bool    `json:"has_price"`
 	InputCost        *string `json:"input_cost"`
 	OutputCost       *string `json:"output_cost"`
+	// Fast 档成本；两侧都没配 Fast 价时为 null，表示该渠道对本模型不区分 Fast。
+	FastInputCost  *string `json:"fast_input_cost"`
+	FastOutputCost *string `json:"fast_output_cost"`
 }
 
 type modelOpsPerfPointDTO struct {
@@ -174,6 +181,9 @@ func (h *modelOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 			BaseCacheWrite30mInputPrice:     row.BaseCacheWrite30mInputPrice,
 			BaseOutputPrice:                 row.BaseOutputPrice,
 			BaseReasoningOutputPrice:        row.BaseReasoningOutputPrice,
+			BaseSalePriceRatio:              row.BaseSalePriceRatio,
+			BaseSaleUncachedInputPrice:      row.BaseSaleUncachedInputPrice,
+			BaseSaleOutputPrice:             row.BaseSaleOutputPrice,
 			BaseLongContextEnabled:          row.BaseLongContextEnabled,
 			BaseLongContextThreshold:        row.BaseLongContextThreshold,
 			BaseLongContextInputMultiplier:  row.BaseLongContextInputMultiplier,
@@ -260,6 +270,8 @@ func (h *modelOpsHandler) channels(w http.ResponseWriter, r *http.Request) {
 			HasPrice:         c.HasPrice,
 			InputCost:        c.InputCost,
 			OutputCost:       c.OutputCost,
+			FastInputCost:    c.FastInputCost,
+			FastOutputCost:   c.FastOutputCost,
 		})
 	}
 	adminhttp.WriteData(w, http.StatusOK, out)

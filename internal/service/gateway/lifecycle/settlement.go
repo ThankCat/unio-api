@@ -117,16 +117,18 @@ type ChatSettlementParams struct {
 	CostBaseModelPriceID    int64
 	ChannelCostMultiplierID int64
 	ChannelRechargeFactorID int64
-	// SalePrice 是客户最终售价快照 = 模型基准价 × 线路倍率（DEC-026），路由时算好并透传到结算；
-	// 同一请求所有候选共享、不随命中哪条渠道变。此处为短上下文牌价；若 LongContextPolicy 触发则结算前再缩放。
+	// SalePrice 是客户最终售价快照：模型绝对售价，或模型基准价 × 该模型的售价倍率（DEC-026）。
+	// 路由时算好并透传到结算；同一请求所有候选共享、不随命中哪条渠道变。
+	// 此处为短上下文牌价；若 LongContextPolicy 触发则结算前再缩放。
 	SalePrice billing.CustomerPriceSnapshot
 	// FastModelPriceServiceTierID/FastSalePrice 是请求前从同一模型价格窗口锁定的 Fast 售价。
 	// FastChannelPriceServiceTierID 仅用于绝对成本覆盖；倍率路径复用 Fast 模型价格子记录和现有倍率 pin。
 	FastModelPriceServiceTierID   int64
 	FastChannelPriceServiceTierID int64
 	FastSalePrice                 billing.CustomerPriceSnapshot
-	// PriceRatio 是算 SalePrice 用的线路倍率（routes.price_ratio），随 SalePrice 一起快照进 price_snapshots，
-	// 供请求详情/列表恒显示结算当时的倍率与倒推基准价（不随后续改倍率漂移）。
+	// PriceRatio 是算 SalePrice 用的模型售价倍率（model_prices.sale_price_ratio），随 SalePrice
+	// 一起快照进 price_snapshots，供请求详情/列表恒显示结算当时的倍率与倒推基准价（不随后续改倍率漂移）。
+	// 走绝对售价路径时为空——那条路径下的售价不是算出来的，没有倍率可记。
 	PriceRatio pgtype.Numeric
 	// LongContextPolicy 来自售价所用 model_prices 窗口；结算按真实 usage 输入合计决定是否放大售价与成本。
 	LongContextPolicy billing.LongContextPolicy

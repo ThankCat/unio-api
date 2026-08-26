@@ -319,7 +319,7 @@ func TestFindModelCandidatesOrdersAndFilters(t *testing.T) {
 	createChannelPriceForTest(t, ctx, queries, fallbackChannelID, modelID, now)
 	createChannelPriceForTest(t, ctx, queries, primaryChannelID, modelID, now)
 	createChannelPriceForTest(t, ctx, queries, secondaryChannelID, modelID, now)
-	// 模型需有基准价（× 全局售价倍率得客户售价），否则候选被过滤。
+	// 模型需有基准价（× 售价倍率得客户售价），否则候选被过滤。
 	createModelPriceForTest(t, ctx, queries, modelID, now)
 
 	got, err := queries.FindModelCandidates(ctx, modelCandidatesParams(requestedModel))
@@ -411,13 +411,15 @@ func createModelPriceForTest(t *testing.T, ctx context.Context, queries *sqlc.Qu
 		ModelID:     modelID,
 		Currency:    "USD",
 		PricingUnit: "per_1m_tokens",
-		// 基准价相对渠道成本留足倍数：售价 = 基准价 × 全局售价倍率，
-		// 倍率是环境相关的运行时设置，价差太小会让毛利守卫在低倍率环境下误伤这些用例。
+		// 基准价相对渠道成本（1/4）留足倍数，毛利守卫不会误伤这些用例。
 		UncachedInputPrice: numeric(100),
 		OutputPrice:        numeric(400),
-		Status:             "enabled",
-		EffectiveFrom:      timestamptz(at.Add(-time.Hour)),
-		EffectiveTo:        nullTimestamptz(),
+		// 倍率随价格行走，不再取自环境设置：按 1.0 卖即等于基准价。
+		// 需要别的倍率时由用例自己 UPDATE，环境不再影响结果。
+		SalePriceRatio: numeric(1),
+		Status:         "enabled",
+		EffectiveFrom:  timestamptz(at.Add(-time.Hour)),
+		EffectiveTo:    nullTimestamptz(),
 	}); err != nil {
 		t.Fatalf("create model price: %v", err)
 	}

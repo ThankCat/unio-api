@@ -13,7 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-// testPriceRatio 返回测试用的有效全局售价倍率（1.0）；不设倍率会让售价解析因无效倍率报错。
+// testPriceRatio 返回候选行上的模型售价倍率（1.0）；不设倍率会让售价解析因无效倍率报错。
 func testPriceRatio() pgtype.Numeric {
 	return pgtype.Numeric{Int: big.NewInt(1), Exp: 0, Valid: true}
 }
@@ -78,6 +78,7 @@ func TestRouterPlanChatReturnsOrderedCandidates(t *testing.T) {
 				Credential:              "secret://openai/main",
 				ResponseTimeoutMs:       pgtype.Int4{Int32: 15000, Valid: true},
 				UpstreamModel:           "gpt-4.1",
+				SalePriceRatio:          testPriceRatio(),
 			},
 			{
 				RequestedModelID:  "openai/gpt-4.1",
@@ -88,6 +89,7 @@ func TestRouterPlanChatReturnsOrderedCandidates(t *testing.T) {
 				Credential:        "secret://openai/backup",
 				ResponseTimeoutMs: pgtype.Int4{Int32: 30000, Valid: true},
 				UpstreamModel:     "gpt-4.1",
+				SalePriceRatio:    testPriceRatio(),
 			},
 		},
 	}
@@ -175,6 +177,7 @@ func TestRouterPlanChatFreezesProviderCostToSaleRatio(t *testing.T) {
 			Int: big.NewInt(10), Valid: true,
 		},
 		OutputPrice:     pgtype.Numeric{Int: big.NewInt(20), Valid: true},
+		SalePriceRatio:  testPriceRatio(),
 		CostCurrency:    "USD",
 		CostPricingUnit: "per_1m_tokens",
 		UncachedInputCost: pgtype.Numeric{
@@ -208,6 +211,7 @@ func TestNewRouterUsesFallbackDefaultTimeout(t *testing.T) {
 				Credential:        "secret://openai/main",
 				ResponseTimeoutMs: pgtype.Int4{Valid: false},
 				UpstreamModel:     "gpt-4.1",
+				SalePriceRatio:    testPriceRatio(),
 			},
 		},
 	}
@@ -237,6 +241,7 @@ func TestRouterSetDefaultTimeoutTakesEffect(t *testing.T) {
 				Credential:        "secret://openai/main",
 				ResponseTimeoutMs: pgtype.Int4{Valid: false},
 				UpstreamModel:     "gpt-4.1",
+				SalePriceRatio:    testPriceRatio(),
 			},
 		}
 	}
@@ -361,6 +366,7 @@ func TestRouterPlanChatSkipsBadCandidateKeepsGood(t *testing.T) {
 				Credential:        "secret://openai/good",
 				ResponseTimeoutMs: pgtype.Int4{Int32: 30000, Valid: true},
 				UpstreamModel:     "gpt-4.1",
+				SalePriceRatio:    testPriceRatio(),
 			},
 		},
 	}
@@ -436,6 +442,7 @@ func salePriceRow() sqlc.FindModelCandidatesRow {
 		BasePricingUnit:    "per_1m_tokens",
 		UncachedInputPrice: numeric(10, 0),
 		OutputPrice:        numeric(20, 0),
+		SalePriceRatio:     numeric(1, 0),
 		CostCurrency:       "USD",
 		CostPricingUnit:    "per_1m_tokens",
 		UncachedInputCost:  numeric(1, 0),
@@ -443,11 +450,13 @@ func salePriceRow() sqlc.FindModelCandidatesRow {
 	}
 }
 
-// 售价倍率路径：模型没配绝对售价时，售价 = 基准价 × 全局倍率，且倍率落进快照供审计倒推基准价。
+// 售价倍率路径：模型没配绝对售价时，售价 = 基准价 × 该模型自己的倍率，
+// 且倍率落进快照供审计倒推基准价。
 func TestRouterPlanChatScalesSalePriceByRatio(t *testing.T) {
-	store := &fakeStore{rows: []sqlc.FindModelCandidatesRow{salePriceRow()}}
+	row := salePriceRow()
+	row.SalePriceRatio = numeric(25, -1) // 2.5
+	store := &fakeStore{rows: []sqlc.FindModelCandidatesRow{row}}
 	router := NewRouter(store, 30*time.Second)
-	router.SetSalePriceRatio(numeric(25, -1)) // 2.5
 
 	plan, err := router.PlanChat(context.Background(), ChatRouteRequest{
 		UserID: 42, ModelID: "openai/gpt-4.1", IngressProtocol: ProtocolOpenAI})
@@ -472,9 +481,9 @@ func TestRouterPlanChatPrefersAbsoluteSalePriceOverRatio(t *testing.T) {
 	row := salePriceRow()
 	row.SaleUncachedInputPrice = numeric(7, 0)
 	row.SaleOutputPrice = numeric(9, 0)
+	row.SalePriceRatio = numeric(25, -1) // 2.5，应被忽略
 	store := &fakeStore{rows: []sqlc.FindModelCandidatesRow{row}}
 	router := NewRouter(store, 30*time.Second)
-	router.SetSalePriceRatio(numeric(25, -1)) // 2.5，应被忽略
 
 	plan, err := router.PlanChat(context.Background(), ChatRouteRequest{
 		UserID: 42, ModelID: "openai/gpt-4.1", IngressProtocol: ProtocolOpenAI})
@@ -493,17 +502,20 @@ func TestRouterPlanChatPrefersAbsoluteSalePriceOverRatio(t *testing.T) {
 	}
 }
 
-// 未注入倍率时按 1.0 兜底：宁可原价卖，也不能因为倍率缺失把售价算成 0。
-func TestRouterPlanChatDefaultsSaleRatioToOne(t *testing.T) {
-	store := &fakeStore{rows: []sqlc.FindModelCandidatesRow{salePriceRow()}}
+// 售价无法解析时排除该候选，绝不猜一个倍率把请求放过去。
+//
+// 倍率与绝对售价都为空的价格行会被 ck_model_prices_sale_configured 拦在库外，
+// 走到这里说明数据已经越过约束（手改库、约束被摘等），此时宁可 no_available_channel
+// 也不能兜底成 1.0——那等于按基准价原价卖，是一次静默的定价事故。
+func TestRouterPlanChatExcludesCandidateWhenSalePriceUnresolvable(t *testing.T) {
+	row := salePriceRow()
+	row.SalePriceRatio = pgtype.Numeric{}
+	store := &fakeStore{rows: []sqlc.FindModelCandidatesRow{row}}
 	router := NewRouter(store, 30*time.Second)
 
-	plan, err := router.PlanChat(context.Background(), ChatRouteRequest{
+	_, err := router.PlanChat(context.Background(), ChatRouteRequest{
 		UserID: 42, ModelID: "openai/gpt-4.1", IngressProtocol: ProtocolOpenAI})
-	if err != nil {
-		t.Fatalf("PlanChat returned error: %v", err)
-	}
-	if got := numericFloat(t, plan.Candidates[0].SalePrice.UncachedInputPrice); got != 10 {
-		t.Fatalf("uncached input sale price = %v, want 10 (倍率兜底 1.0)", got)
+	if failure.CodeOf(err) != failure.CodeRoutingNoAvailableChannel {
+		t.Fatalf("PlanChat error code = %v, want %v", failure.CodeOf(err), failure.CodeRoutingNoAvailableChannel)
 	}
 }

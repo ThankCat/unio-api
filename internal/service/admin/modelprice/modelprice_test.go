@@ -1,9 +1,119 @@
 package modelprice
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
+
+	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 )
+
+// rejectingStore 让所有存储调用失败：定价校验发生在读库之前，
+// 用它可以断言「请求被校验挡下」而不是「侥幸通过后死在别处」。
+type rejectingStore struct{}
+
+var errStoreUnreachable = errors.New("store must not be reached")
+
+func (rejectingStore) LookupModelByID(context.Context, int64) (sqlc.Model, error) {
+	return sqlc.Model{}, errStoreUnreachable
+}
+
+func (rejectingStore) GetModelPrice(context.Context, int64) (sqlc.ModelPrice, error) {
+	return sqlc.ModelPrice{}, errStoreUnreachable
+}
+
+func (rejectingStore) ListModelPricesByModel(context.Context, int64) ([]sqlc.ListModelPricesByModelRow, error) {
+	return nil, errStoreUnreachable
+}
+
+func (rejectingStore) ListEnabledModelPriceWindows(context.Context, sqlc.ListEnabledModelPriceWindowsParams) ([]sqlc.ListEnabledModelPriceWindowsRow, error) {
+	return nil, errStoreUnreachable
+}
+
+func (rejectingStore) CreateModelPrice(context.Context, sqlc.CreateModelPriceParams) (sqlc.CreateModelPriceRow, error) {
+	return sqlc.CreateModelPriceRow{}, errStoreUnreachable
+}
+
+func (rejectingStore) UpdateModelPriceWindow(context.Context, sqlc.UpdateModelPriceWindowParams) (sqlc.ModelPrice, error) {
+	return sqlc.ModelPrice{}, errStoreUnreachable
+}
+
+// baseCreateInput 是一条只差售价配置的合法入参。
+func baseCreateInput() CreateInput {
+	return CreateInput{
+		ModelID:            7,
+		Currency:           "USD",
+		PricingUnit:        PricingUnitPer1MTokens,
+		UncachedInputPrice: "2.5",
+		OutputPrice:        "15",
+		Status:             StatusEnabled,
+		EffectiveFrom:      time.Now().UTC(),
+	}
+}
+
+// 售价必须可解析：倍率与绝对售价全缺时这条价格行卖不出去，要在入口就说清楚。
+func TestCreateRequiresSaleConfiguration(t *testing.T) {
+	svc := NewService(rejectingStore{})
+
+	_, err := svc.Create(context.Background(), baseCreateInput())
+	if err == nil {
+		t.Fatal("price without sale ratio or absolute sale prices must be rejected")
+	}
+	if errors.Is(err, errStoreUnreachable) {
+		t.Fatal("validation must happen before touching the store")
+	}
+}
+
+// 没有倍率时 Fast 档没有任何售价来源，必须自带绝对售价，否则落库即被毛利守卫拒绝。
+func TestCreateRequiresFastSalePricesWithoutRatio(t *testing.T) {
+	svc := NewService(rejectingStore{})
+
+	in := baseCreateInput()
+	in.SalePrices = &SalePriceVector{UncachedInputPrice: "5", OutputPrice: "30"}
+	in.FastPrices = &FastPriceInput{UncachedInputPrice: "4", OutputPrice: "24"}
+
+	_, err := svc.Create(context.Background(), in)
+	if err == nil {
+		t.Fatal("fast tier without its own sale prices must be rejected when ratio is absent")
+	}
+	if errors.Is(err, errStoreUnreachable) {
+		t.Fatal("validation must happen before touching the store")
+	}
+
+	// 给 Fast 补上绝对售价后校验应当放行——走到存储层才失败，说明拦截原因确实是缺 Fast 售价。
+	in.FastPrices.SalePrices = &SalePriceVector{UncachedInputPrice: "8", OutputPrice: "48"}
+	if _, err := svc.Create(context.Background(), in); !errors.Is(err, errStoreUnreachable) {
+		t.Fatalf("expected to reach the store once fast sale prices are supplied, got %v", err)
+	}
+}
+
+// 倍率在场时 Fast 档可以只配基准价：售价按 Fast 基准价 × 模型倍率解析。
+func TestCreateAllowsFastWithoutSalePricesWhenRatioPresent(t *testing.T) {
+	svc := NewService(rejectingStore{})
+
+	ratio := "0.2"
+	in := baseCreateInput()
+	in.SalePriceRatio = &ratio
+	in.FastPrices = &FastPriceInput{UncachedInputPrice: "4", OutputPrice: "24"}
+
+	if _, err := svc.Create(context.Background(), in); !errors.Is(err, errStoreUnreachable) {
+		t.Fatalf("expected to reach the store, got %v", err)
+	}
+}
+
+// 倍率必须为正：0 或负数意味着白送或倒付钱。
+func TestCreateRejectsNonPositiveSaleRatio(t *testing.T) {
+	svc := NewService(rejectingStore{})
+
+	for _, ratio := range []string{"0", "-0.5"} {
+		in := baseCreateInput()
+		in.SalePriceRatio = &ratio
+		if _, err := svc.Create(context.Background(), in); err == nil || errors.Is(err, errStoreUnreachable) {
+			t.Fatalf("sale ratio %q must be rejected, got %v", ratio, err)
+		}
+	}
+}
 
 func TestParseFastPriceConfig(t *testing.T) {
 	t.Run("missing is not configured", func(t *testing.T) {

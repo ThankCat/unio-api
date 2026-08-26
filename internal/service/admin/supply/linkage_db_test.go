@@ -142,12 +142,28 @@ func (f *fixture) binding(channelID, modelID int64, status string) {
 func (f *fixture) pricing(channelID, modelID int64) {
 	f.t.Helper()
 	if _, err := f.pool.Exec(f.ctx, `
-		INSERT INTO model_prices (model_id, currency, pricing_unit, uncached_input_price, output_price, status, effective_from)
-		VALUES ($1, 'USD', 'per_1m_tokens', 100, 200, 'enabled', now() - interval '1 hour')
+		INSERT INTO model_prices (
+			model_id, currency, pricing_unit, uncached_input_price, output_price,
+			sale_price_ratio, status, effective_from
+		)
+		VALUES ($1, 'USD', 'per_1m_tokens', 100, 200, 1, 'enabled', now() - interval '1 hour')
 		ON CONFLICT DO NOTHING
 	`, modelID); err != nil {
 		f.t.Fatalf("insert model price: %v", err)
 	}
+	if _, err := f.pool.Exec(f.ctx, `
+		INSERT INTO channel_prices (channel_id, model_id, currency, pricing_unit, uncached_input_cost, output_cost, status, effective_from)
+		VALUES ($1, $2, 'USD', 'per_1m_tokens', 1, 2, 'enabled', now() - interval '1 hour')
+		ON CONFLICT DO NOTHING
+	`, channelID, modelID); err != nil {
+		f.t.Fatalf("insert channel price: %v", err)
+	}
+}
+
+// channelCostOnly 只配渠道成本，故意不给模型基准价：
+// 用于验证「成本可解析但模型没定价」时不允许启用。
+func (f *fixture) channelCostOnly(channelID, modelID int64) {
+	f.t.Helper()
 	if _, err := f.pool.Exec(f.ctx, `
 		INSERT INTO channel_prices (channel_id, model_id, currency, pricing_unit, uncached_input_cost, output_cost, status, effective_from)
 		VALUES ($1, $2, 'USD', 'per_1m_tokens', 1, 2, 'enabled', now() - interval '1 hour')
@@ -318,6 +334,38 @@ func TestModelEnableRequiresRuntimeSupply(t *testing.T) {
 
 	if _, err := newModelService(f).Update(f.ctx, adminmodel.UpdateInput{ID: modelID, DisplayName: "supply-test-model", OwnedBy: "test", Status: "enabled"}); err != nil {
 		t.Fatalf("enable model with a usable channel: %v", err)
+	}
+	if got := f.modelStatus(modelID); got != "enabled" {
+		t.Fatalf("model status = %q, want enabled", got)
+	}
+}
+
+// 加法侧守卫（定价）：渠道齐备但模型没有生效基准价时同样不允许启用。
+//
+// 候选查询取基准价用的是 INNER JOIN LATERAL，没有价格行就没有候选。少了这条检查，
+// 模型会停在「已启用、出现在 /v1/models、每次调用都 404」的状态上，破坏「列出即可调用」。
+func TestModelEnableRequiresModelPrice(t *testing.T) {
+	f := newFixture(t)
+	modelID := f.model(uniqueName("openai/supply-no-price"), "disabled")
+	providerID := f.provider(uniqueName("supply-no-price"), "enabled")
+	channelID := f.channel(providerID, uniqueName("supply-no-price-channel"), "openai", "enabled")
+	f.binding(channelID, modelID, "enabled")
+	f.channelCostOnly(channelID, modelID)
+
+	_, err := newModelService(f).Update(f.ctx, adminmodel.UpdateInput{
+		ID: modelID, DisplayName: "supply-test-model", OwnedBy: "test", Status: "enabled"})
+	if err == nil {
+		t.Fatal("enabling a model without an effective base price must be rejected")
+	}
+	if got := f.modelStatus(modelID); got != "disabled" {
+		t.Fatalf("rejected enable must not change status, got %q", got)
+	}
+
+	// 补上基准价后同一次调用应当通过，确认拦截原因确实是缺价而非别的条件。
+	f.pricing(channelID, modelID)
+	if _, err := newModelService(f).Update(f.ctx, adminmodel.UpdateInput{
+		ID: modelID, DisplayName: "supply-test-model", OwnedBy: "test", Status: "enabled"}); err != nil {
+		t.Fatalf("enable model after pricing it: %v", err)
 	}
 	if got := f.modelStatus(modelID); got != "enabled" {
 		t.Fatalf("model status = %q, want enabled", got)

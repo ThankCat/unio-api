@@ -306,6 +306,7 @@ INSERT INTO model_prices (
     cache_write_30m_input_price,
     output_price,
     reasoning_output_price,
+    sale_price_ratio,
     sale_uncached_input_price,
     sale_cache_read_input_price,
     sale_cache_write_5m_input_price,
@@ -339,16 +340,17 @@ SELECT
     $19,
     $20,
     $21,
+    $22,
     $4,
     $2,
     $7,
-    $22,
     $23,
     $24,
-    $25
+    $25,
+    $26
 FROM locked_model
 CROSS JOIN replacement_barrier
-RETURNING id, model_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, status, effective_from, effective_to, created_at, updated_at, cache_write_30m_input_price, long_context_enabled, long_context_threshold, long_context_input_multiplier, long_context_output_multiplier, sale_uncached_input_price, sale_cache_read_input_price, sale_cache_write_5m_input_price, sale_cache_write_1h_input_price, sale_cache_write_30m_input_price, sale_output_price, sale_reasoning_output_price
+RETURNING id, model_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, status, effective_from, effective_to, created_at, updated_at, cache_write_30m_input_price, long_context_enabled, long_context_threshold, long_context_input_multiplier, long_context_output_multiplier, sale_uncached_input_price, sale_cache_read_input_price, sale_cache_write_5m_input_price, sale_cache_write_1h_input_price, sale_cache_write_30m_input_price, sale_output_price, sale_reasoning_output_price, sale_price_ratio
 ), created_fast AS (
 INSERT INTO model_price_service_tiers (
     model_price_id,
@@ -373,7 +375,6 @@ INSERT INTO model_price_service_tiers (
 SELECT
     created_price.id,
     'fast',
-    $26,
     $27,
     $28,
     $29,
@@ -388,13 +389,14 @@ SELECT
     $38,
     $39,
     $40,
-    $41
+    $41,
+    $42
 FROM created_price
-WHERE $42::boolean
+WHERE $43::boolean
 RETURNING id, model_price_id, service_tier, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, cache_write_30m_input_price, output_price, reasoning_output_price, reference_source, reference_checked_at, created_at, sale_uncached_input_price, sale_cache_read_input_price, sale_cache_write_5m_input_price, sale_cache_write_1h_input_price, sale_cache_write_30m_input_price, sale_output_price, sale_reasoning_output_price
 )
 SELECT
-    created_price.id, created_price.model_id, created_price.currency, created_price.pricing_unit, created_price.uncached_input_price, created_price.cache_read_input_price, created_price.cache_write_5m_input_price, created_price.cache_write_1h_input_price, created_price.output_price, created_price.reasoning_output_price, created_price.status, created_price.effective_from, created_price.effective_to, created_price.created_at, created_price.updated_at, created_price.cache_write_30m_input_price, created_price.long_context_enabled, created_price.long_context_threshold, created_price.long_context_input_multiplier, created_price.long_context_output_multiplier, created_price.sale_uncached_input_price, created_price.sale_cache_read_input_price, created_price.sale_cache_write_5m_input_price, created_price.sale_cache_write_1h_input_price, created_price.sale_cache_write_30m_input_price, created_price.sale_output_price, created_price.sale_reasoning_output_price,
+    created_price.id, created_price.model_id, created_price.currency, created_price.pricing_unit, created_price.uncached_input_price, created_price.cache_read_input_price, created_price.cache_write_5m_input_price, created_price.cache_write_1h_input_price, created_price.output_price, created_price.reasoning_output_price, created_price.status, created_price.effective_from, created_price.effective_to, created_price.created_at, created_price.updated_at, created_price.cache_write_30m_input_price, created_price.long_context_enabled, created_price.long_context_threshold, created_price.long_context_input_multiplier, created_price.long_context_output_multiplier, created_price.sale_uncached_input_price, created_price.sale_cache_read_input_price, created_price.sale_cache_write_5m_input_price, created_price.sale_cache_write_1h_input_price, created_price.sale_cache_write_30m_input_price, created_price.sale_output_price, created_price.sale_reasoning_output_price, created_price.sale_price_ratio,
     COALESCE(created_fast.id, 0)::bigint AS fast_service_tier_id,
     created_fast.uncached_input_price AS fast_uncached_input_price,
     created_fast.cache_read_input_price AS fast_cache_read_input_price,
@@ -431,6 +433,7 @@ type CreateModelPriceParams struct {
 	CacheWrite30mInputPrice         pgtype.Numeric
 	OutputPrice                     pgtype.Numeric
 	ReasoningOutputPrice            pgtype.Numeric
+	SalePriceRatio                  pgtype.Numeric
 	SaleUncachedInputPrice          pgtype.Numeric
 	SaleCacheReadInputPrice         pgtype.Numeric
 	SaleCacheWrite5mInputPrice      pgtype.Numeric
@@ -489,6 +492,7 @@ type CreateModelPriceRow struct {
 	SaleCacheWrite30mInputPrice     pgtype.Numeric
 	SaleOutputPrice                 pgtype.Numeric
 	SaleReasoningOutputPrice        pgtype.Numeric
+	SalePriceRatio                  pgtype.Numeric
 	FastServiceTierID               int64
 	FastUncachedInputPrice          pgtype.Numeric
 	FastCacheReadInputPrice         pgtype.Numeric
@@ -527,6 +531,7 @@ func (q *Queries) CreateModelPrice(ctx context.Context, arg CreateModelPricePara
 		arg.CacheWrite30mInputPrice,
 		arg.OutputPrice,
 		arg.ReasoningOutputPrice,
+		arg.SalePriceRatio,
 		arg.SaleUncachedInputPrice,
 		arg.SaleCacheReadInputPrice,
 		arg.SaleCacheWrite5mInputPrice,
@@ -585,6 +590,7 @@ func (q *Queries) CreateModelPrice(ctx context.Context, arg CreateModelPricePara
 		&i.SaleCacheWrite30mInputPrice,
 		&i.SaleOutputPrice,
 		&i.SaleReasoningOutputPrice,
+		&i.SalePriceRatio,
 		&i.FastServiceTierID,
 		&i.FastUncachedInputPrice,
 		&i.FastCacheReadInputPrice,
@@ -798,7 +804,7 @@ func (q *Queries) GetModelCatalogState(ctx context.Context, modelID int64) (GetM
 }
 
 const getModelPrice = `-- name: GetModelPrice :one
-SELECT id, model_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, status, effective_from, effective_to, created_at, updated_at, cache_write_30m_input_price, long_context_enabled, long_context_threshold, long_context_input_multiplier, long_context_output_multiplier, sale_uncached_input_price, sale_cache_read_input_price, sale_cache_write_5m_input_price, sale_cache_write_1h_input_price, sale_cache_write_30m_input_price, sale_output_price, sale_reasoning_output_price FROM model_prices WHERE id = $1 LIMIT 1
+SELECT id, model_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, status, effective_from, effective_to, created_at, updated_at, cache_write_30m_input_price, long_context_enabled, long_context_threshold, long_context_input_multiplier, long_context_output_multiplier, sale_uncached_input_price, sale_cache_read_input_price, sale_cache_write_5m_input_price, sale_cache_write_1h_input_price, sale_cache_write_30m_input_price, sale_output_price, sale_reasoning_output_price, sale_price_ratio FROM model_prices WHERE id = $1 LIMIT 1
 `
 
 // GetModelPrice 按主键读取单条模型基准售价。
@@ -833,6 +839,7 @@ func (q *Queries) GetModelPrice(ctx context.Context, id int64) (ModelPrice, erro
 		&i.SaleCacheWrite30mInputPrice,
 		&i.SaleOutputPrice,
 		&i.SaleReasoningOutputPrice,
+		&i.SalePriceRatio,
 	)
 	return i, err
 }
@@ -1044,6 +1051,15 @@ SELECT
     mp.cache_write_30m_input_price,
     mp.output_price,
     mp.reasoning_output_price,
+    -- 售价两种表达：倍率（乘在基准价上）与绝对售价（整组给齐时优先）。
+    mp.sale_price_ratio,
+    mp.sale_uncached_input_price,
+    mp.sale_cache_read_input_price,
+    mp.sale_cache_write_5m_input_price,
+    mp.sale_cache_write_1h_input_price,
+    mp.sale_cache_write_30m_input_price,
+    mp.sale_output_price,
+    mp.sale_reasoning_output_price,
     mp.status,
     mp.effective_from,
     mp.effective_to,
@@ -1061,6 +1077,13 @@ SELECT
     fast.cache_write_30m_input_price AS fast_cache_write_30m_input_price,
     fast.output_price AS fast_output_price,
     fast.reasoning_output_price AS fast_reasoning_output_price,
+    fast.sale_uncached_input_price AS fast_sale_uncached_input_price,
+    fast.sale_cache_read_input_price AS fast_sale_cache_read_input_price,
+    fast.sale_cache_write_5m_input_price AS fast_sale_cache_write_5m_input_price,
+    fast.sale_cache_write_1h_input_price AS fast_sale_cache_write_1h_input_price,
+    fast.sale_cache_write_30m_input_price AS fast_sale_cache_write_30m_input_price,
+    fast.sale_output_price AS fast_sale_output_price,
+    fast.sale_reasoning_output_price AS fast_sale_reasoning_output_price,
     fast.reference_source AS fast_reference_source,
     fast.reference_checked_at AS fast_reference_checked_at,
     m.model_id AS model_external_id,
@@ -1074,38 +1097,53 @@ ORDER BY mp.effective_from DESC, mp.id DESC
 `
 
 type ListModelPricesByModelRow struct {
-	ID                          int64
-	ModelID                     int64
-	Currency                    string
-	PricingUnit                 string
-	UncachedInputPrice          pgtype.Numeric
-	CacheReadInputPrice         pgtype.Numeric
-	CacheWrite5mInputPrice      pgtype.Numeric
-	CacheWrite1hInputPrice      pgtype.Numeric
-	CacheWrite30mInputPrice     pgtype.Numeric
-	OutputPrice                 pgtype.Numeric
-	ReasoningOutputPrice        pgtype.Numeric
-	Status                      string
-	EffectiveFrom               pgtype.Timestamptz
-	EffectiveTo                 pgtype.Timestamptz
-	CreatedAt                   pgtype.Timestamptz
-	UpdatedAt                   pgtype.Timestamptz
-	LongContextEnabled          bool
-	LongContextThreshold        pgtype.Int8
-	LongContextInputMultiplier  pgtype.Numeric
-	LongContextOutputMultiplier pgtype.Numeric
-	FastServiceTierID           int64
-	FastUncachedInputPrice      pgtype.Numeric
-	FastCacheReadInputPrice     pgtype.Numeric
-	FastCacheWrite5mInputPrice  pgtype.Numeric
-	FastCacheWrite1hInputPrice  pgtype.Numeric
-	FastCacheWrite30mInputPrice pgtype.Numeric
-	FastOutputPrice             pgtype.Numeric
-	FastReasoningOutputPrice    pgtype.Numeric
-	FastReferenceSource         pgtype.Text
-	FastReferenceCheckedAt      pgtype.Date
-	ModelExternalID             string
-	ModelDisplayName            string
+	ID                              int64
+	ModelID                         int64
+	Currency                        string
+	PricingUnit                     string
+	UncachedInputPrice              pgtype.Numeric
+	CacheReadInputPrice             pgtype.Numeric
+	CacheWrite5mInputPrice          pgtype.Numeric
+	CacheWrite1hInputPrice          pgtype.Numeric
+	CacheWrite30mInputPrice         pgtype.Numeric
+	OutputPrice                     pgtype.Numeric
+	ReasoningOutputPrice            pgtype.Numeric
+	SalePriceRatio                  pgtype.Numeric
+	SaleUncachedInputPrice          pgtype.Numeric
+	SaleCacheReadInputPrice         pgtype.Numeric
+	SaleCacheWrite5mInputPrice      pgtype.Numeric
+	SaleCacheWrite1hInputPrice      pgtype.Numeric
+	SaleCacheWrite30mInputPrice     pgtype.Numeric
+	SaleOutputPrice                 pgtype.Numeric
+	SaleReasoningOutputPrice        pgtype.Numeric
+	Status                          string
+	EffectiveFrom                   pgtype.Timestamptz
+	EffectiveTo                     pgtype.Timestamptz
+	CreatedAt                       pgtype.Timestamptz
+	UpdatedAt                       pgtype.Timestamptz
+	LongContextEnabled              bool
+	LongContextThreshold            pgtype.Int8
+	LongContextInputMultiplier      pgtype.Numeric
+	LongContextOutputMultiplier     pgtype.Numeric
+	FastServiceTierID               int64
+	FastUncachedInputPrice          pgtype.Numeric
+	FastCacheReadInputPrice         pgtype.Numeric
+	FastCacheWrite5mInputPrice      pgtype.Numeric
+	FastCacheWrite1hInputPrice      pgtype.Numeric
+	FastCacheWrite30mInputPrice     pgtype.Numeric
+	FastOutputPrice                 pgtype.Numeric
+	FastReasoningOutputPrice        pgtype.Numeric
+	FastSaleUncachedInputPrice      pgtype.Numeric
+	FastSaleCacheReadInputPrice     pgtype.Numeric
+	FastSaleCacheWrite5mInputPrice  pgtype.Numeric
+	FastSaleCacheWrite1hInputPrice  pgtype.Numeric
+	FastSaleCacheWrite30mInputPrice pgtype.Numeric
+	FastSaleOutputPrice             pgtype.Numeric
+	FastSaleReasoningOutputPrice    pgtype.Numeric
+	FastReferenceSource             pgtype.Text
+	FastReferenceCheckedAt          pgtype.Date
+	ModelExternalID                 string
+	ModelDisplayName                string
 }
 
 // ListModelPricesByModel 列出某模型的全部基准售价（含历史与停用），连带模型对外 ID/展示名，供 admin 管理台展示。
@@ -1130,6 +1168,14 @@ func (q *Queries) ListModelPricesByModel(ctx context.Context, modelID int64) ([]
 			&i.CacheWrite30mInputPrice,
 			&i.OutputPrice,
 			&i.ReasoningOutputPrice,
+			&i.SalePriceRatio,
+			&i.SaleUncachedInputPrice,
+			&i.SaleCacheReadInputPrice,
+			&i.SaleCacheWrite5mInputPrice,
+			&i.SaleCacheWrite1hInputPrice,
+			&i.SaleCacheWrite30mInputPrice,
+			&i.SaleOutputPrice,
+			&i.SaleReasoningOutputPrice,
 			&i.Status,
 			&i.EffectiveFrom,
 			&i.EffectiveTo,
@@ -1147,6 +1193,13 @@ func (q *Queries) ListModelPricesByModel(ctx context.Context, modelID int64) ([]
 			&i.FastCacheWrite30mInputPrice,
 			&i.FastOutputPrice,
 			&i.FastReasoningOutputPrice,
+			&i.FastSaleUncachedInputPrice,
+			&i.FastSaleCacheReadInputPrice,
+			&i.FastSaleCacheWrite5mInputPrice,
+			&i.FastSaleCacheWrite1hInputPrice,
+			&i.FastSaleCacheWrite30mInputPrice,
+			&i.FastSaleOutputPrice,
+			&i.FastSaleReasoningOutputPrice,
 			&i.FastReferenceSource,
 			&i.FastReferenceCheckedAt,
 			&i.ModelExternalID,
@@ -1444,7 +1497,10 @@ SELECT
     ) AS has_price,
     -- 展示成本（DEC-031）：绝对覆盖优先，否则 基准价 × 价格倍率 × 充值倍率（缺充值倍率按 1）。
     price.uncached_input_cost AS input_cost,
-    price.output_cost AS output_cost
+    price.output_cost AS output_cost,
+    -- Fast 档成本同口径。两侧都没有 Fast 价时为 NULL，表示该渠道对本模型不单独区分 Fast。
+    price.fast_uncached_input_cost AS fast_input_cost,
+    price.fast_output_cost AS fast_output_cost
 FROM channel_models cm
 JOIN channels c ON c.id = cm.channel_id
 LEFT JOIN LATERAL (
@@ -1462,11 +1518,31 @@ LEFT JOIN LATERAL (
                 WHEN base.output_price IS NOT NULL AND mult.multiplier IS NOT NULL
                 THEN base.output_price * mult.multiplier * COALESCE(recharge.factor, 1::numeric)
             END
-        ) AS output_cost
+        ) AS output_cost,
+        -- Fast 成本：渠道 Fast 绝对覆盖优先，否则 Fast 基准价 × 同一组倍率。
+        -- 两侧都缺 Fast 价时为 NULL——结算会回落 Standard，不该编一个 Fast 成本出来。
+        COALESCE(
+            abs.fast_uncached_input_cost,
+            CASE
+                WHEN base.fast_uncached_input_price IS NOT NULL AND mult.multiplier IS NOT NULL
+                THEN base.fast_uncached_input_price * mult.multiplier * COALESCE(recharge.factor, 1::numeric)
+            END
+        ) AS fast_uncached_input_cost,
+        COALESCE(
+            abs.fast_output_cost,
+            CASE
+                WHEN base.fast_output_price IS NOT NULL AND mult.multiplier IS NOT NULL
+                THEN base.fast_output_price * mult.multiplier * COALESCE(recharge.factor, 1::numeric)
+            END
+        ) AS fast_output_cost
     FROM (SELECT 1) AS _
     LEFT JOIN LATERAL (
-        SELECT p.uncached_input_cost, p.output_cost
+        SELECT p.uncached_input_cost, p.output_cost,
+            fast.uncached_input_cost AS fast_uncached_input_cost,
+            fast.output_cost AS fast_output_cost
         FROM channel_prices p
+        LEFT JOIN channel_price_service_tiers fast
+          ON fast.channel_price_id = p.id AND fast.service_tier = 'fast'
         WHERE p.channel_id = c.id
           AND p.model_id = $1
           AND p.status = 'enabled'
@@ -1476,8 +1552,12 @@ LEFT JOIN LATERAL (
         LIMIT 1
     ) abs ON TRUE
     LEFT JOIN LATERAL (
-        SELECT mp.uncached_input_price, mp.output_price
+        SELECT mp.uncached_input_price, mp.output_price,
+            fast.uncached_input_price AS fast_uncached_input_price,
+            fast.output_price AS fast_output_price
         FROM model_prices mp
+        LEFT JOIN model_price_service_tiers fast
+          ON fast.model_price_id = mp.id AND fast.service_tier = 'fast'
         WHERE mp.model_id = $1
           AND mp.status = 'enabled'
           AND mp.effective_from <= now()
@@ -1514,7 +1594,8 @@ LEFT JOIN request_attempts a
     AND ($3::timestamptz IS NULL OR a.created_at < $3::timestamptz)
 WHERE cm.model_id = $1
 GROUP BY c.id, c.name, c.status, cm.status, cm.upstream_model, c.priority,
-    price.uncached_input_cost, price.output_cost
+    price.uncached_input_cost, price.output_cost,
+    price.fast_uncached_input_cost, price.fast_output_cost
 ORDER BY attempt_total DESC, c.priority, c.id
 `
 
@@ -1537,6 +1618,8 @@ type ModelOpsChannelsRow struct {
 	HasPrice         bool
 	InputCost        pgtype.Numeric
 	OutputCost       pgtype.Numeric
+	FastInputCost    pgtype.Numeric
+	FastOutputCost   pgtype.Numeric
 }
 
 // ModelOpsChannels 单模型的承载渠道（绑定）+ attempt 指标（抽屉渠道 Tab，§3.4 最关键）。
@@ -1562,6 +1645,8 @@ func (q *Queries) ModelOpsChannels(ctx context.Context, arg ModelOpsChannelsPara
 			&i.HasPrice,
 			&i.InputCost,
 			&i.OutputCost,
+			&i.FastInputCost,
+			&i.FastOutputCost,
 		); err != nil {
 			return nil, err
 		}
@@ -1923,7 +2008,7 @@ SELECT
               )
         )
     ) AS has_price,
-    -- 基准售价（DEC-026 model_prices 当前生效行）：客户售价 = 基准 × 线路倍率；无基准时各列为 NULL（前端显示「缺价」）。
+    -- 基准售价（DEC-026 model_prices 当前生效行）；无基准时各列为 NULL（前端显示「缺价」）。
     -- CASE 包裹让 sqlc 把 base_currency 推断为可空（pgtype.Text）：LATERAL 无命中行时该列为 NULL，避免扫描进 string 报错。
     CASE WHEN base.currency IS NOT NULL THEN base.currency END AS base_currency,
     base.uncached_input_price AS base_uncached_input_price,
@@ -1933,6 +2018,10 @@ SELECT
     base.cache_write_30m_input_price AS base_cache_write_30m_input_price,
     base.output_price AS base_output_price,
     base.reasoning_output_price AS base_reasoning_output_price,
+    -- 售价：绝对售价整组非空时直接生效，否则基准价 × sale_price_ratio。两者至少有一个。
+    base.sale_price_ratio AS base_sale_price_ratio,
+    base.sale_uncached_input_price AS base_sale_uncached_input_price,
+    base.sale_output_price AS base_sale_output_price,
     -- 长上下文阶梯：LEFT JOIN 无基准价时 COALESCE 为 false，避免 sqlc 扫 NULL 进 bool。
     COALESCE(base.long_context_enabled, false) AS base_long_context_enabled,
     base.long_context_threshold AS base_long_context_threshold,
@@ -1953,6 +2042,8 @@ LEFT JOIN LATERAL (
         mp.cache_write_5m_input_price, mp.cache_write_1h_input_price,
         mp.cache_write_30m_input_price,
         mp.output_price, mp.reasoning_output_price,
+        mp.sale_price_ratio,
+        mp.sale_uncached_input_price, mp.sale_output_price,
         mp.long_context_enabled, mp.long_context_threshold,
         mp.long_context_input_multiplier, mp.long_context_output_multiplier,
         fast.id IS NOT NULL AS fast_price_configured,
@@ -2075,6 +2166,9 @@ type ModelsOpsTableRow struct {
 	BaseCacheWrite30mInputPrice     pgtype.Numeric
 	BaseOutputPrice                 pgtype.Numeric
 	BaseReasoningOutputPrice        pgtype.Numeric
+	BaseSalePriceRatio              pgtype.Numeric
+	BaseSaleUncachedInputPrice      pgtype.Numeric
+	BaseSaleOutputPrice             pgtype.Numeric
 	BaseLongContextEnabled          bool
 	BaseLongContextThreshold        pgtype.Int8
 	BaseLongContextInputMultiplier  pgtype.Numeric
@@ -2133,6 +2227,9 @@ func (q *Queries) ModelsOpsTable(ctx context.Context, arg ModelsOpsTableParams) 
 			&i.BaseCacheWrite30mInputPrice,
 			&i.BaseOutputPrice,
 			&i.BaseReasoningOutputPrice,
+			&i.BaseSalePriceRatio,
+			&i.BaseSaleUncachedInputPrice,
+			&i.BaseSaleOutputPrice,
 			&i.BaseLongContextEnabled,
 			&i.BaseLongContextThreshold,
 			&i.BaseLongContextInputMultiplier,
@@ -2381,7 +2478,7 @@ SET effective_to = $1,
     status = $2,
     updated_at = now()
 WHERE id = $3
-RETURNING id, model_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, status, effective_from, effective_to, created_at, updated_at, cache_write_30m_input_price, long_context_enabled, long_context_threshold, long_context_input_multiplier, long_context_output_multiplier, sale_uncached_input_price, sale_cache_read_input_price, sale_cache_write_5m_input_price, sale_cache_write_1h_input_price, sale_cache_write_30m_input_price, sale_output_price, sale_reasoning_output_price
+RETURNING id, model_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, status, effective_from, effective_to, created_at, updated_at, cache_write_30m_input_price, long_context_enabled, long_context_threshold, long_context_input_multiplier, long_context_output_multiplier, sale_uncached_input_price, sale_cache_read_input_price, sale_cache_write_5m_input_price, sale_cache_write_1h_input_price, sale_cache_write_30m_input_price, sale_output_price, sale_reasoning_output_price, sale_price_ratio
 `
 
 type UpdateModelPriceWindowParams struct {
@@ -2422,6 +2519,7 @@ func (q *Queries) UpdateModelPriceWindow(ctx context.Context, arg UpdateModelPri
 		&i.SaleCacheWrite30mInputPrice,
 		&i.SaleOutputPrice,
 		&i.SaleReasoningOutputPrice,
+		&i.SalePriceRatio,
 	)
 	return i, err
 }

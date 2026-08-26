@@ -57,6 +57,33 @@ func TestScaleCustomerPriceRejectsInvalidRatio(t *testing.T) {
 	}
 }
 
+func TestResolveCustomerPricePrefersAbsoluteOverride(t *testing.T) {
+	got, err := ResolveCustomerPrice(defaultCustomerPriceSnapshot(), numeric(25, -1), SaleOverride{
+		UncachedInputPrice: numeric(7_0000000000, -10),
+		OutputPrice:        numeric(9_0000000000, -10),
+	})
+	if err != nil {
+		t.Fatalf("ResolveCustomerPrice: %v", err)
+	}
+	assertScaledRate(t, "uncached_input", got.UncachedInputPrice, big.NewRat(7, 1))
+	assertScaledRate(t, "output", got.OutputPrice, big.NewRat(9, 1))
+}
+
+func TestResolveCustomerPriceFallsBackToRatio(t *testing.T) {
+	got, err := ResolveCustomerPrice(defaultCustomerPriceSnapshot(), numeric(15, -1), SaleOverride{})
+	if err != nil {
+		t.Fatalf("ResolveCustomerPrice: %v", err)
+	}
+	assertScaledRate(t, "uncached_input", got.UncachedInputPrice, big.NewRat(3, 1)) // 2.0 × 1.5
+	assertScaledRate(t, "output", got.OutputPrice, big.NewRat(12, 1))               // 8.0 × 1.5
+}
+
+func TestResolveCustomerPriceRejectsMissingRatioWithoutOverride(t *testing.T) {
+	if _, err := ResolveCustomerPrice(defaultCustomerPriceSnapshot(), nullNumeric(), SaleOverride{}); err == nil {
+		t.Fatal("expected error when neither absolute sale nor ratio is configured")
+	}
+}
+
 func TestScaleProviderCostByFactorsCombinesPriceAndRecharge(t *testing.T) {
 	base := ProviderCostSnapshot{
 		Currency:            "USD",

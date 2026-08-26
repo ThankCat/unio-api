@@ -79,7 +79,6 @@ func DefaultRegistry() *Registry {
 		betaPolicyDefinition(),
 		circuitBreakerDefinition(),
 		requestRateLimitDefaultsDefinition(),
-		modelSalePriceRatioDefinition(),
 		streamIdleTimeoutDefinition(),
 		channelCooldownDefinition(),
 		credential401ThresholdDefinition(),

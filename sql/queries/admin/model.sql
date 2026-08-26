@@ -180,6 +180,7 @@ INSERT INTO model_prices (
     cache_write_30m_input_price,
     output_price,
     reasoning_output_price,
+    sale_price_ratio,
     sale_uncached_input_price,
     sale_cache_read_input_price,
     sale_cache_write_5m_input_price,
@@ -206,6 +207,7 @@ SELECT
     sqlc.arg(cache_write_30m_input_price),
     sqlc.arg(output_price),
     sqlc.arg(reasoning_output_price),
+    sqlc.narg(sale_price_ratio),
     sqlc.narg(sale_uncached_input_price),
     sqlc.narg(sale_cache_read_input_price),
     sqlc.narg(sale_cache_write_5m_input_price),
@@ -307,6 +309,15 @@ SELECT
     mp.cache_write_30m_input_price,
     mp.output_price,
     mp.reasoning_output_price,
+    -- 售价两种表达：倍率（乘在基准价上）与绝对售价（整组给齐时优先）。
+    mp.sale_price_ratio,
+    mp.sale_uncached_input_price,
+    mp.sale_cache_read_input_price,
+    mp.sale_cache_write_5m_input_price,
+    mp.sale_cache_write_1h_input_price,
+    mp.sale_cache_write_30m_input_price,
+    mp.sale_output_price,
+    mp.sale_reasoning_output_price,
     mp.status,
     mp.effective_from,
     mp.effective_to,
@@ -324,6 +335,13 @@ SELECT
     fast.cache_write_30m_input_price AS fast_cache_write_30m_input_price,
     fast.output_price AS fast_output_price,
     fast.reasoning_output_price AS fast_reasoning_output_price,
+    fast.sale_uncached_input_price AS fast_sale_uncached_input_price,
+    fast.sale_cache_read_input_price AS fast_sale_cache_read_input_price,
+    fast.sale_cache_write_5m_input_price AS fast_sale_cache_write_5m_input_price,
+    fast.sale_cache_write_1h_input_price AS fast_sale_cache_write_1h_input_price,
+    fast.sale_cache_write_30m_input_price AS fast_sale_cache_write_30m_input_price,
+    fast.sale_output_price AS fast_sale_output_price,
+    fast.sale_reasoning_output_price AS fast_sale_reasoning_output_price,
     fast.reference_source AS fast_reference_source,
     fast.reference_checked_at AS fast_reference_checked_at,
     m.model_id AS model_external_id,
@@ -671,7 +689,7 @@ SELECT
               )
         )
     ) AS has_price,
-    -- 基准售价（DEC-026 model_prices 当前生效行）：客户售价 = 基准 × 线路倍率；无基准时各列为 NULL（前端显示「缺价」）。
+    -- 基准售价（DEC-026 model_prices 当前生效行）；无基准时各列为 NULL（前端显示「缺价」）。
     -- CASE 包裹让 sqlc 把 base_currency 推断为可空（pgtype.Text）：LATERAL 无命中行时该列为 NULL，避免扫描进 string 报错。
     CASE WHEN base.currency IS NOT NULL THEN base.currency END AS base_currency,
     base.uncached_input_price AS base_uncached_input_price,
@@ -681,6 +699,10 @@ SELECT
     base.cache_write_30m_input_price AS base_cache_write_30m_input_price,
     base.output_price AS base_output_price,
     base.reasoning_output_price AS base_reasoning_output_price,
+    -- 售价：绝对售价整组非空时直接生效，否则基准价 × sale_price_ratio。两者至少有一个。
+    base.sale_price_ratio AS base_sale_price_ratio,
+    base.sale_uncached_input_price AS base_sale_uncached_input_price,
+    base.sale_output_price AS base_sale_output_price,
     -- 长上下文阶梯：LEFT JOIN 无基准价时 COALESCE 为 false，避免 sqlc 扫 NULL 进 bool。
     COALESCE(base.long_context_enabled, false) AS base_long_context_enabled,
     base.long_context_threshold AS base_long_context_threshold,
@@ -701,6 +723,8 @@ LEFT JOIN LATERAL (
         mp.cache_write_5m_input_price, mp.cache_write_1h_input_price,
         mp.cache_write_30m_input_price,
         mp.output_price, mp.reasoning_output_price,
+        mp.sale_price_ratio,
+        mp.sale_uncached_input_price, mp.sale_output_price,
         mp.long_context_enabled, mp.long_context_threshold,
         mp.long_context_input_multiplier, mp.long_context_output_multiplier,
         fast.id IS NOT NULL AS fast_price_configured,
@@ -909,7 +933,10 @@ SELECT
     ) AS has_price,
     -- 展示成本（DEC-031）：绝对覆盖优先，否则 基准价 × 价格倍率 × 充值倍率（缺充值倍率按 1）。
     price.uncached_input_cost AS input_cost,
-    price.output_cost AS output_cost
+    price.output_cost AS output_cost,
+    -- Fast 档成本同口径。两侧都没有 Fast 价时为 NULL，表示该渠道对本模型不单独区分 Fast。
+    price.fast_uncached_input_cost AS fast_input_cost,
+    price.fast_output_cost AS fast_output_cost
 FROM channel_models cm
 JOIN channels c ON c.id = cm.channel_id
 LEFT JOIN LATERAL (
@@ -927,11 +954,31 @@ LEFT JOIN LATERAL (
                 WHEN base.output_price IS NOT NULL AND mult.multiplier IS NOT NULL
                 THEN base.output_price * mult.multiplier * COALESCE(recharge.factor, 1::numeric)
             END
-        ) AS output_cost
+        ) AS output_cost,
+        -- Fast 成本：渠道 Fast 绝对覆盖优先，否则 Fast 基准价 × 同一组倍率。
+        -- 两侧都缺 Fast 价时为 NULL——结算会回落 Standard，不该编一个 Fast 成本出来。
+        COALESCE(
+            abs.fast_uncached_input_cost,
+            CASE
+                WHEN base.fast_uncached_input_price IS NOT NULL AND mult.multiplier IS NOT NULL
+                THEN base.fast_uncached_input_price * mult.multiplier * COALESCE(recharge.factor, 1::numeric)
+            END
+        ) AS fast_uncached_input_cost,
+        COALESCE(
+            abs.fast_output_cost,
+            CASE
+                WHEN base.fast_output_price IS NOT NULL AND mult.multiplier IS NOT NULL
+                THEN base.fast_output_price * mult.multiplier * COALESCE(recharge.factor, 1::numeric)
+            END
+        ) AS fast_output_cost
     FROM (SELECT 1) AS _
     LEFT JOIN LATERAL (
-        SELECT p.uncached_input_cost, p.output_cost
+        SELECT p.uncached_input_cost, p.output_cost,
+            fast.uncached_input_cost AS fast_uncached_input_cost,
+            fast.output_cost AS fast_output_cost
         FROM channel_prices p
+        LEFT JOIN channel_price_service_tiers fast
+          ON fast.channel_price_id = p.id AND fast.service_tier = 'fast'
         WHERE p.channel_id = c.id
           AND p.model_id = sqlc.arg('model_id')
           AND p.status = 'enabled'
@@ -941,8 +988,12 @@ LEFT JOIN LATERAL (
         LIMIT 1
     ) abs ON TRUE
     LEFT JOIN LATERAL (
-        SELECT mp.uncached_input_price, mp.output_price
+        SELECT mp.uncached_input_price, mp.output_price,
+            fast.uncached_input_price AS fast_uncached_input_price,
+            fast.output_price AS fast_output_price
         FROM model_prices mp
+        LEFT JOIN model_price_service_tiers fast
+          ON fast.model_price_id = mp.id AND fast.service_tier = 'fast'
         WHERE mp.model_id = sqlc.arg('model_id')
           AND mp.status = 'enabled'
           AND mp.effective_from <= now()
@@ -979,7 +1030,8 @@ LEFT JOIN request_attempts a
     AND (sqlc.narg('to_time')::timestamptz IS NULL OR a.created_at < sqlc.narg('to_time')::timestamptz)
 WHERE cm.model_id = sqlc.arg('model_id')
 GROUP BY c.id, c.name, c.status, cm.status, cm.upstream_model, c.priority,
-    price.uncached_input_cost, price.output_cost
+    price.uncached_input_cost, price.output_cost,
+    price.fast_uncached_input_cost, price.fast_output_cost
 ORDER BY attempt_total DESC, c.priority, c.id;
 
 -- name: ModelOpsPerformanceTimeseries :many
