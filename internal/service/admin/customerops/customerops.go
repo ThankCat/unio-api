@@ -174,20 +174,19 @@ type ApiKeysSummary struct {
 }
 
 type ApiKeyRow struct {
-	ID              int64
-	Name            string
-	KeyPrefix       string
-	KeyPlaintext    *string
-	UserID          int64
-	Status          string
-	SpendLimit      *string
-	SpentTotal      string
-	RequestTotal    int64
-	Succeeded       int64
-	SuccessRate     float64
-	ConsumptionUSD  string
-	LastUsedAt      *time.Time
-	ExpiresAt       *time.Time
+	ID             int64
+	Name           string
+	KeyPrefix      string
+	UserID         int64
+	Status         string
+	SpendLimit     *string
+	SpentTotal     string
+	RequestTotal   int64
+	Succeeded      int64
+	SuccessRate    float64
+	ConsumptionUSD string
+	LastUsedAt     *time.Time
+	ExpiresAt      *time.Time
 }
 
 // ApiKeysTableParams 用户范围内 API Key 运维主表入参（分页 / 排序 / 搜索均走 DB）。
@@ -235,20 +234,19 @@ func (s *Service) ApiKeysTable(ctx context.Context, p ApiKeysTableParams) ([]Api
 	out := make([]ApiKeyRow, 0, len(rows))
 	for _, k := range rows {
 		out = append(out, ApiKeyRow{
-			ID:              k.ID,
-			Name:            k.Name,
-			KeyPrefix:       k.KeyPrefix,
-			KeyPlaintext:    textPtr(k.KeyPlaintext),
-			UserID:          k.UserID,
-			Status:          keyStatus(k.DisabledAt, k.RevokedAt, k.ExpiresAt, now),
-			SpendLimit:      numericPtr(k.SpendLimit),
-			SpentTotal:      opsutil.NumericString(k.SpentTotal),
-			RequestTotal:    k.RequestTotal,
-			Succeeded:       k.RequestSucceeded,
-			SuccessRate:     opsutil.SuccessRate(k.RequestSucceeded, k.RequestTotal),
-			ConsumptionUSD:  opsutil.NumericString(k.ConsumptionUsd),
-			LastUsedAt:      opsutil.TimeValue(k.LastUsedAt),
-			ExpiresAt:       opsutil.TimeValue(k.ExpiresAt),
+			ID:             k.ID,
+			Name:           k.Name,
+			KeyPrefix:      k.KeyPrefix,
+			UserID:         k.UserID,
+			Status:         keyStatus(k.DisabledAt, k.RevokedAt, k.ExpiresAt, now),
+			SpendLimit:     numericPtr(k.SpendLimit),
+			SpentTotal:     opsutil.NumericString(k.SpentTotal),
+			RequestTotal:   k.RequestTotal,
+			Succeeded:      k.RequestSucceeded,
+			SuccessRate:    opsutil.SuccessRate(k.RequestSucceeded, k.RequestTotal),
+			ConsumptionUSD: opsutil.NumericString(k.ConsumptionUsd),
+			LastUsedAt:     opsutil.TimeValue(k.LastUsedAt),
+			ExpiresAt:      opsutil.TimeValue(k.ExpiresAt),
 		})
 	}
 	return out, total, nil

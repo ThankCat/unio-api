@@ -80,8 +80,7 @@ func (s *fakeRequestService) List(_ context.Context, params consolerequests.List
 		ClientIP:                "203.0.113.10",
 		APIKeyID:                9,
 		APIKeyName:              "prod",
-		APIKeyPrefix:            "unio_sk_XhE8wL5D",
-		APIKeyPlaintext:         strPtr("unio_sk_XhE8wL5Dabcdefghijklmnopqrstuvwxyz012345"),
+		APIKeyPrefix:            "sk_unio_xhe8wl5d",
 		Endpoint:                "/chat/completions",
 		Stream:                  true,
 		RequestedModelID:        "claude-sonnet-4-5",
@@ -300,8 +299,12 @@ func TestRequestListOmitsInternalFieldsAndScopesToUser(t *testing.T) {
 	if item["endpoint"] != "/chat/completions" || item["api_key_name"] != "prod" {
 		t.Fatalf("item = %#v", item)
 	}
-	if item["api_key_prefix"] != "unio_sk_XhE8wL5D" {
+	if item["api_key_prefix"] != "sk_unio_xhe8wl5d" {
 		t.Fatalf("api_key_prefix = %#v", item["api_key_prefix"])
+	}
+	// 明文不落库，请求列表的契约里就不该再有这个字段。
+	if _, ok := item["api_key_plaintext"]; ok {
+		t.Fatalf("api_key_plaintext must not be exposed: %#v", item)
 	}
 	if item["model_display_name"] != "Claude Sonnet 4.5" {
 		t.Fatalf("model_display_name = %#v", item["model_display_name"])

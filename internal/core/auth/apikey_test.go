@@ -42,7 +42,7 @@ func validAPIKey() sqlc.GetAPIKeyByHashRow {
 	return sqlc.GetAPIKeyByHashRow{
 		ID:        1,
 		UserID:    10,
-		KeyPrefix: "unio_sk_test",
+		KeyPrefix: "sk_unio_test",
 	}
 }
 
@@ -159,12 +159,15 @@ func TestAuthenticateAPIKeyValid(t *testing.T) {
 	}
 }
 
+// 认证只比对 SHA-256，对明文格式不作任何假设。
+// 这一点是换 key 格式的前提：老格式的 key hash 没变，就该继续放行。
 func TestAuthenticateAPIKeyAcceptsIssuedPrefixes(t *testing.T) {
 	for _, tt := range []struct {
 		name      string
 		plaintext string
 	}{
-		{name: "unio", plaintext: "unio_sk_existing"},
+		{name: "current", plaintext: "sk_unio_a3f9k2m1x7bq4vzn8dht"},
+		{name: "legacy-unio-sk", plaintext: "unio_sk_existing"},
 		{name: "anthropic-compatible", plaintext: "sk-ant-api03-unio_existing"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

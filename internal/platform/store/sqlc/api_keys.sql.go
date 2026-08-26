@@ -28,6 +28,125 @@ func (q *Queries) AddAPIKeySpentTotal(ctx context.Context, arg AddAPIKeySpentTot
 	return err
 }
 
+const countConsoleAPIKeys = `-- name: CountConsoleAPIKeys :one
+SELECT COUNT(*) AS total
+FROM api_keys k
+WHERE k.user_id = $1
+  AND (
+      $2::text IS NULL
+      OR k.name ILIKE '%' || $2::text || '%'
+      OR k.key_prefix ILIKE '%' || $2::text || '%'
+  )
+  AND (
+      $3::text IS NULL
+      OR CASE
+             WHEN k.revoked_at IS NOT NULL THEN 'revoked'
+             WHEN k.disabled_at IS NOT NULL THEN 'disabled'
+             WHEN k.expires_at IS NOT NULL AND k.expires_at <= now() THEN 'expired'
+             ELSE 'active'
+         END = $3::text
+  )
+`
+
+type CountConsoleAPIKeysParams struct {
+	UserID int64
+	Search pgtype.Text
+	Status pgtype.Text
+}
+
+// 与 ListConsoleAPIKeys 同过滤条件下的总数。
+func (q *Queries) CountConsoleAPIKeys(ctx context.Context, arg CountConsoleAPIKeysParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countConsoleAPIKeys, arg.UserID, arg.Search, arg.Status)
+	var total int64
+	err := row.Scan(&total)
+	return total, err
+}
+
+const createConsoleAPIKey = `-- name: CreateConsoleAPIKey :one
+INSERT INTO api_keys (user_id, name, key_prefix, key_hash, expires_at, spend_limit)
+VALUES (
+    $1,
+    $2,
+    $3,
+    $4,
+    $5,
+    $6
+)
+RETURNING
+    id, name, key_prefix, spend_limit, spent_total,
+    last_used_at, expires_at, disabled_at, revoked_at, created_at, updated_at
+`
+
+type CreateConsoleAPIKeyParams struct {
+	UserID     int64
+	Name       string
+	KeyPrefix  string
+	KeyHash    string
+	ExpiresAt  pgtype.Timestamptz
+	SpendLimit pgtype.Numeric
+}
+
+type CreateConsoleAPIKeyRow struct {
+	ID         int64
+	Name       string
+	KeyPrefix  string
+	SpendLimit pgtype.Numeric
+	SpentTotal pgtype.Numeric
+	LastUsedAt pgtype.Timestamptz
+	ExpiresAt  pgtype.Timestamptz
+	DisabledAt pgtype.Timestamptz
+	RevokedAt  pgtype.Timestamptz
+	CreatedAt  pgtype.Timestamptz
+	UpdatedAt  pgtype.Timestamptz
+}
+
+// 用户自助创建密钥。只存 prefix 与 hash；明文由调用方放进创建响应，之后无处可取。
+func (q *Queries) CreateConsoleAPIKey(ctx context.Context, arg CreateConsoleAPIKeyParams) (CreateConsoleAPIKeyRow, error) {
+	row := q.db.QueryRow(ctx, createConsoleAPIKey,
+		arg.UserID,
+		arg.Name,
+		arg.KeyPrefix,
+		arg.KeyHash,
+		arg.ExpiresAt,
+		arg.SpendLimit,
+	)
+	var i CreateConsoleAPIKeyRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.KeyPrefix,
+		&i.SpendLimit,
+		&i.SpentTotal,
+		&i.LastUsedAt,
+		&i.ExpiresAt,
+		&i.DisabledAt,
+		&i.RevokedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const deleteConsoleAPIKey = `-- name: DeleteConsoleAPIKey :execrows
+DELETE FROM api_keys
+WHERE id = $1 AND user_id = $2
+`
+
+type DeleteConsoleAPIKeyParams struct {
+	ID     int64
+	UserID int64
+}
+
+// 物理删除，只用于清理误建且没有调用历史的密钥。
+// 有调用历史时 request_records 的外键会拒绝（23503），上层降级为 conflict 并提示改用吊销。
+func (q *Queries) DeleteConsoleAPIKey(ctx context.Context, arg DeleteConsoleAPIKeyParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteConsoleAPIKey, arg.ID, arg.UserID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getAPIKeyByHash = `-- name: GetAPIKeyByHash :one
 SELECT k.id, k.user_id, k.name, k.key_prefix, k.key_hash, k.last_used_at, k.expires_at, k.disabled_at, k.revoked_at, k.created_at, k.updated_at,
        (k.spend_limit IS NOT NULL AND k.spent_total >= k.spend_limit) AS spend_limit_reached,
@@ -84,6 +203,510 @@ func (q *Queries) GetAPIKeyByHash(ctx context.Context, keyHash string) (GetAPIKe
 	return i, err
 }
 
+const getConsoleAPIKey = `-- name: GetConsoleAPIKey :one
+SELECT
+    k.id,
+    k.name,
+    k.key_prefix,
+    k.spend_limit,
+    k.spent_total,
+    k.last_used_at,
+    k.expires_at,
+    k.disabled_at,
+    k.revoked_at,
+    k.created_at,
+    k.updated_at,
+    COALESCE(agg.request_count, 0)::bigint AS request_count,
+    COALESCE(agg.charge_usd, 0)::numeric AS period_charge_usd
+FROM api_keys k
+LEFT JOIN LATERAL (
+    SELECT
+        COUNT(*) AS request_count,
+        SUM(ch.charge_usd) AS charge_usd
+    FROM request_records r
+    JOIN LATERAL (
+        SELECT SUM(
+            CASE
+                WHEN le.entry_type IN ('debit', 'adjustment_debit') THEN le.amount
+                WHEN le.entry_type IN ('credit', 'refund', 'adjustment_credit') THEN -le.amount
+                ELSE 0
+            END
+        ) AS charge_usd
+        FROM ledger_entries le
+        WHERE le.request_record_id = r.id AND le.currency = 'USD'
+    ) ch ON ch.charge_usd > 0
+    WHERE r.api_key_id = k.id
+      AND r.created_at >= $1::timestamptz
+      AND r.created_at < $2::timestamptz
+) agg ON true
+WHERE k.id = $3 AND k.user_id = $4
+LIMIT 1
+`
+
+type GetConsoleAPIKeyParams struct {
+	FromTime pgtype.Timestamptz
+	ToTime   pgtype.Timestamptz
+	ID       int64
+	UserID   int64
+}
+
+type GetConsoleAPIKeyRow struct {
+	ID              int64
+	Name            string
+	KeyPrefix       string
+	SpendLimit      pgtype.Numeric
+	SpentTotal      pgtype.Numeric
+	LastUsedAt      pgtype.Timestamptz
+	ExpiresAt       pgtype.Timestamptz
+	DisabledAt      pgtype.Timestamptz
+	RevokedAt       pgtype.Timestamptz
+	CreatedAt       pgtype.Timestamptz
+	UpdatedAt       pgtype.Timestamptz
+	RequestCount    int64
+	PeriodChargeUsd pgtype.Numeric
+}
+
+// 单把密钥。user_id 必须参与定位，否则会读到别人的密钥。
+func (q *Queries) GetConsoleAPIKey(ctx context.Context, arg GetConsoleAPIKeyParams) (GetConsoleAPIKeyRow, error) {
+	row := q.db.QueryRow(ctx, getConsoleAPIKey,
+		arg.FromTime,
+		arg.ToTime,
+		arg.ID,
+		arg.UserID,
+	)
+	var i GetConsoleAPIKeyRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.KeyPrefix,
+		&i.SpendLimit,
+		&i.SpentTotal,
+		&i.LastUsedAt,
+		&i.ExpiresAt,
+		&i.DisabledAt,
+		&i.RevokedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.RequestCount,
+		&i.PeriodChargeUsd,
+	)
+	return i, err
+}
+
+const listConsoleAPIKeyDailyCharge = `-- name: ListConsoleAPIKeyDailyCharge :many
+SELECT
+    r.api_key_id,
+    -- 显式转 timestamptz：不写这一层 sqlc 会把 AT TIME ZONE 的结果推成 interface{}。
+    (
+        date_trunc('day', r.created_at AT TIME ZONE $1::text)
+            AT TIME ZONE $1::text
+    )::timestamptz AS bucket_start,
+    COUNT(*)::bigint AS request_count,
+    SUM(ch.charge_usd)::numeric AS charge_usd
+FROM request_records r
+JOIN LATERAL (
+    SELECT SUM(
+        CASE
+            WHEN le.entry_type IN ('debit', 'adjustment_debit') THEN le.amount
+            WHEN le.entry_type IN ('credit', 'refund', 'adjustment_credit') THEN -le.amount
+            ELSE 0
+        END
+    ) AS charge_usd
+    FROM ledger_entries le
+    WHERE le.request_record_id = r.id AND le.currency = 'USD'
+) ch ON ch.charge_usd > 0
+WHERE r.user_id = $2
+  AND r.created_at >= $3::timestamptz
+  AND r.created_at < $4::timestamptz
+  AND ($5::bigint IS NULL OR r.api_key_id = $5::bigint)
+GROUP BY r.api_key_id, bucket_start
+ORDER BY r.api_key_id, bucket_start
+`
+
+type ListConsoleAPIKeyDailyChargeParams struct {
+	Tz       string
+	UserID   int64
+	FromTime pgtype.Timestamptz
+	ToTime   pgtype.Timestamptz
+	ApiKeyID pgtype.Int8
+}
+
+type ListConsoleAPIKeyDailyChargeRow struct {
+	ApiKeyID     int64
+	BucketStart  pgtype.Timestamptz
+	RequestCount int64
+	ChargeUsd    pgtype.Numeric
+}
+
+// 按天分桶的消耗，同时供列表迷你走势和详情趋势图使用。
+// 不传 api_key_id 时一次返回该用户全部密钥的分桶，避免列表逐把查询造成 N+1。
+// 分桶按调用方时区切天，与用量统计页的 tz 处理保持一致。
+func (q *Queries) ListConsoleAPIKeyDailyCharge(ctx context.Context, arg ListConsoleAPIKeyDailyChargeParams) ([]ListConsoleAPIKeyDailyChargeRow, error) {
+	rows, err := q.db.Query(ctx, listConsoleAPIKeyDailyCharge,
+		arg.Tz,
+		arg.UserID,
+		arg.FromTime,
+		arg.ToTime,
+		arg.ApiKeyID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListConsoleAPIKeyDailyChargeRow
+	for rows.Next() {
+		var i ListConsoleAPIKeyDailyChargeRow
+		if err := rows.Scan(
+			&i.ApiKeyID,
+			&i.BucketStart,
+			&i.RequestCount,
+			&i.ChargeUsd,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listConsoleAPIKeyTopModels = `-- name: ListConsoleAPIKeyTopModels :many
+SELECT
+    r.requested_model_id AS model_id,
+    COALESCE(NULLIF(m.display_name, ''), r.requested_model_id) AS display_name,
+    COUNT(*)::bigint AS request_count,
+    SUM(ch.charge_usd)::numeric AS charge_usd
+FROM request_records r
+LEFT JOIN models m ON m.model_id = r.requested_model_id
+JOIN LATERAL (
+    SELECT SUM(
+        CASE
+            WHEN le.entry_type IN ('debit', 'adjustment_debit') THEN le.amount
+            WHEN le.entry_type IN ('credit', 'refund', 'adjustment_credit') THEN -le.amount
+            ELSE 0
+        END
+    ) AS charge_usd
+    FROM ledger_entries le
+    WHERE le.request_record_id = r.id AND le.currency = 'USD'
+) ch ON ch.charge_usd > 0
+WHERE r.user_id = $1
+  AND r.api_key_id = $2
+  AND r.created_at >= $3::timestamptz
+  AND r.created_at < $4::timestamptz
+GROUP BY r.requested_model_id, m.display_name
+ORDER BY charge_usd DESC, request_count DESC, model_id
+LIMIT $5
+`
+
+type ListConsoleAPIKeyTopModelsParams struct {
+	UserID   int64
+	ApiKeyID int64
+	FromTime pgtype.Timestamptz
+	ToTime   pgtype.Timestamptz
+	RowLimit int32
+}
+
+type ListConsoleAPIKeyTopModelsRow struct {
+	ModelID      string
+	DisplayName  string
+	RequestCount int64
+	ChargeUsd    pgtype.Numeric
+}
+
+// 详情页的主用模型排行，按消耗降序。
+func (q *Queries) ListConsoleAPIKeyTopModels(ctx context.Context, arg ListConsoleAPIKeyTopModelsParams) ([]ListConsoleAPIKeyTopModelsRow, error) {
+	rows, err := q.db.Query(ctx, listConsoleAPIKeyTopModels,
+		arg.UserID,
+		arg.ApiKeyID,
+		arg.FromTime,
+		arg.ToTime,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListConsoleAPIKeyTopModelsRow
+	for rows.Next() {
+		var i ListConsoleAPIKeyTopModelsRow
+		if err := rows.Scan(
+			&i.ModelID,
+			&i.DisplayName,
+			&i.RequestCount,
+			&i.ChargeUsd,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listConsoleAPIKeys = `-- name: ListConsoleAPIKeys :many
+
+SELECT
+    k.id,
+    k.name,
+    k.key_prefix,
+    k.spend_limit,
+    k.spent_total,
+    k.last_used_at,
+    k.expires_at,
+    k.disabled_at,
+    k.revoked_at,
+    k.created_at,
+    k.updated_at,
+    COALESCE(agg.request_count, 0)::bigint AS request_count,
+    COALESCE(agg.charge_usd, 0)::numeric AS period_charge_usd
+FROM api_keys k
+LEFT JOIN LATERAL (
+    SELECT
+        COUNT(*) AS request_count,
+        SUM(ch.charge_usd) AS charge_usd
+    FROM request_records r
+    JOIN LATERAL (
+        SELECT SUM(
+            CASE
+                WHEN le.entry_type IN ('debit', 'adjustment_debit') THEN le.amount
+                WHEN le.entry_type IN ('credit', 'refund', 'adjustment_credit') THEN -le.amount
+                ELSE 0
+            END
+        ) AS charge_usd
+        FROM ledger_entries le
+        WHERE le.request_record_id = r.id AND le.currency = 'USD'
+    ) ch ON ch.charge_usd > 0
+    WHERE r.api_key_id = k.id
+      AND r.created_at >= $1::timestamptz
+      AND r.created_at < $2::timestamptz
+) agg ON true
+WHERE k.user_id = $3
+  AND (
+      $4::text IS NULL
+      OR k.name ILIKE '%' || $4::text || '%'
+      OR k.key_prefix ILIKE '%' || $4::text || '%'
+  )
+  AND (
+      $5::text IS NULL
+      OR CASE
+             WHEN k.revoked_at IS NOT NULL THEN 'revoked'
+             WHEN k.disabled_at IS NOT NULL THEN 'disabled'
+             WHEN k.expires_at IS NOT NULL AND k.expires_at <= now() THEN 'expired'
+             ELSE 'active'
+         END = $5::text
+  )
+ORDER BY k.created_at DESC, k.id DESC
+LIMIT $7 OFFSET $6
+`
+
+type ListConsoleAPIKeysParams struct {
+	FromTime   pgtype.Timestamptz
+	ToTime     pgtype.Timestamptz
+	UserID     int64
+	Search     pgtype.Text
+	Status     pgtype.Text
+	PageOffset int32
+	PageLimit  int32
+}
+
+type ListConsoleAPIKeysRow struct {
+	ID              int64
+	Name            string
+	KeyPrefix       string
+	SpendLimit      pgtype.Numeric
+	SpentTotal      pgtype.Numeric
+	LastUsedAt      pgtype.Timestamptz
+	ExpiresAt       pgtype.Timestamptz
+	DisabledAt      pgtype.Timestamptz
+	RevokedAt       pgtype.Timestamptz
+	CreatedAt       pgtype.Timestamptz
+	UpdatedAt       pgtype.Timestamptz
+	RequestCount    int64
+	PeriodChargeUsd pgtype.Numeric
+}
+
+// Console API 密钥管理。
+//
+// 归属是这一组查询的安全底线：每条语句都带 user_id 条件，包括按 id 定位的读和写。
+// Admin 侧可以只按 id 定位，Console 不行——少一个 user_id 就等于让用户操作别人的密钥。
+//
+// 消耗与请求数一律沿用「账本 USD 净扣费 > 0」口径，与 console/requests.sql、
+// console/usage.sql 完全一致。三个页面必须能互相对上，否则用户会认为哪边算错了。
+// 代价是这里的「请求数」不含未计费的失败请求，所以密钥页不展示成功率。
+//
+// 账本一律走 JOIN LATERAL + idx_ledger_entries_request_record_id 索引点查，
+// 理由同 console/usage.sql 顶部注释：CTE 再 JOIN 会被优化器估错行数退化成嵌套循环。
+// 当前用户的密钥目录，附带时间窗内的计费请求数与消耗。
+// 状态由时间戳派生，并支持按派生状态过滤——DB 里没有 status 列。
+func (q *Queries) ListConsoleAPIKeys(ctx context.Context, arg ListConsoleAPIKeysParams) ([]ListConsoleAPIKeysRow, error) {
+	rows, err := q.db.Query(ctx, listConsoleAPIKeys,
+		arg.FromTime,
+		arg.ToTime,
+		arg.UserID,
+		arg.Search,
+		arg.Status,
+		arg.PageOffset,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListConsoleAPIKeysRow
+	for rows.Next() {
+		var i ListConsoleAPIKeysRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.KeyPrefix,
+			&i.SpendLimit,
+			&i.SpentTotal,
+			&i.LastUsedAt,
+			&i.ExpiresAt,
+			&i.DisabledAt,
+			&i.RevokedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.RequestCount,
+			&i.PeriodChargeUsd,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const revokeConsoleAPIKey = `-- name: RevokeConsoleAPIKey :one
+UPDATE api_keys
+SET revoked_at = now(), updated_at = now()
+WHERE id = $1
+  AND user_id = $2
+  AND revoked_at IS NULL
+RETURNING
+    id, name, key_prefix, spend_limit, spent_total,
+    last_used_at, expires_at, disabled_at, revoked_at, created_at, updated_at
+`
+
+type RevokeConsoleAPIKeyParams struct {
+	ID     int64
+	UserID int64
+}
+
+type RevokeConsoleAPIKeyRow struct {
+	ID         int64
+	Name       string
+	KeyPrefix  string
+	SpendLimit pgtype.Numeric
+	SpentTotal pgtype.Numeric
+	LastUsedAt pgtype.Timestamptz
+	ExpiresAt  pgtype.Timestamptz
+	DisabledAt pgtype.Timestamptz
+	RevokedAt  pgtype.Timestamptz
+	CreatedAt  pgtype.Timestamptz
+	UpdatedAt  pgtype.Timestamptz
+}
+
+// 永久吊销（不可逆）。已吊销时返回零行，上层映射为 not_found。
+func (q *Queries) RevokeConsoleAPIKey(ctx context.Context, arg RevokeConsoleAPIKeyParams) (RevokeConsoleAPIKeyRow, error) {
+	row := q.db.QueryRow(ctx, revokeConsoleAPIKey, arg.ID, arg.UserID)
+	var i RevokeConsoleAPIKeyRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.KeyPrefix,
+		&i.SpendLimit,
+		&i.SpentTotal,
+		&i.LastUsedAt,
+		&i.ExpiresAt,
+		&i.DisabledAt,
+		&i.RevokedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const summarizeConsoleAPIKeyWindow = `-- name: SummarizeConsoleAPIKeyWindow :one
+SELECT
+    COUNT(*)::bigint AS request_count,
+    COALESCE(SUM(ch.charge_usd), 0)::numeric AS charge_usd
+FROM request_records r
+JOIN LATERAL (
+    SELECT SUM(
+        CASE
+            WHEN le.entry_type IN ('debit', 'adjustment_debit') THEN le.amount
+            WHEN le.entry_type IN ('credit', 'refund', 'adjustment_credit') THEN -le.amount
+            ELSE 0
+        END
+    ) AS charge_usd
+    FROM ledger_entries le
+    WHERE le.request_record_id = r.id AND le.currency = 'USD'
+) ch ON ch.charge_usd > 0
+WHERE r.user_id = $1
+  AND r.created_at >= $2::timestamptz
+  AND r.created_at < $3::timestamptz
+`
+
+type SummarizeConsoleAPIKeyWindowParams struct {
+	UserID   int64
+	FromTime pgtype.Timestamptz
+	ToTime   pgtype.Timestamptz
+}
+
+type SummarizeConsoleAPIKeyWindowRow struct {
+	RequestCount int64
+	ChargeUsd    pgtype.Numeric
+}
+
+// 页面顶栏的时间窗合计：全部密钥在窗口内的计费请求数与消耗。
+func (q *Queries) SummarizeConsoleAPIKeyWindow(ctx context.Context, arg SummarizeConsoleAPIKeyWindowParams) (SummarizeConsoleAPIKeyWindowRow, error) {
+	row := q.db.QueryRow(ctx, summarizeConsoleAPIKeyWindow, arg.UserID, arg.FromTime, arg.ToTime)
+	var i SummarizeConsoleAPIKeyWindowRow
+	err := row.Scan(&i.RequestCount, &i.ChargeUsd)
+	return i, err
+}
+
+const summarizeConsoleAPIKeys = `-- name: SummarizeConsoleAPIKeys :one
+SELECT
+    COUNT(*)::bigint AS key_total,
+    COUNT(*) FILTER (
+        WHERE disabled_at IS NULL
+          AND revoked_at IS NULL
+          AND (expires_at IS NULL OR expires_at > now())
+    )::bigint AS key_active,
+    COUNT(*) FILTER (
+        WHERE spend_limit IS NOT NULL
+          AND spend_limit > 0
+          AND spent_total >= spend_limit * 0.8
+    )::bigint AS near_limit
+FROM api_keys
+WHERE user_id = $1
+`
+
+type SummarizeConsoleAPIKeysRow struct {
+	KeyTotal  int64
+	KeyActive int64
+	NearLimit int64
+}
+
+// 页面顶栏：密钥总数 / 启用中 / 接近额度。
+// near_limit 取已用 ≥ 80%：这是页面上唯一需要用户当场处理的信号，阈值定在 SQL 里
+// 而不是前端，保证列表高亮与顶栏计数用同一个标准。
+func (q *Queries) SummarizeConsoleAPIKeys(ctx context.Context, userID int64) (SummarizeConsoleAPIKeysRow, error) {
+	row := q.db.QueryRow(ctx, summarizeConsoleAPIKeys, userID)
+	var i SummarizeConsoleAPIKeysRow
+	err := row.Scan(&i.KeyTotal, &i.KeyActive, &i.NearLimit)
+	return i, err
+}
+
 const updateAPIKeyLastUsedAt = `-- name: UpdateAPIKeyLastUsedAt :exec
 UPDATE api_keys
 SET last_used_at = $1, updated_at = now()
@@ -99,4 +722,80 @@ type UpdateAPIKeyLastUsedAtParams struct {
 func (q *Queries) UpdateAPIKeyLastUsedAt(ctx context.Context, arg UpdateAPIKeyLastUsedAtParams) error {
 	_, err := q.db.Exec(ctx, updateAPIKeyLastUsedAt, arg.LastUsedAt, arg.ID)
 	return err
+}
+
+const updateConsoleAPIKey = `-- name: UpdateConsoleAPIKey :one
+UPDATE api_keys
+SET
+    name = CASE WHEN $1::bool THEN $2::text ELSE name END,
+    spend_limit = CASE WHEN $3::bool THEN $4 ELSE spend_limit END,
+    expires_at = CASE WHEN $5::bool THEN $6 ELSE expires_at END,
+    disabled_at = CASE WHEN $7::bool THEN $8 ELSE disabled_at END,
+    updated_at = now()
+WHERE id = $9
+  AND user_id = $10
+  AND revoked_at IS NULL
+RETURNING
+    id, name, key_prefix, spend_limit, spent_total,
+    last_used_at, expires_at, disabled_at, revoked_at, created_at, updated_at
+`
+
+type UpdateConsoleAPIKeyParams struct {
+	NameProvided       bool
+	Name               string
+	SpendLimitProvided bool
+	SpendLimit         pgtype.Numeric
+	ExpiresProvided    bool
+	ExpiresAt          pgtype.Timestamptz
+	DisabledProvided   bool
+	DisabledAt         pgtype.Timestamptz
+	ID                 int64
+	UserID             int64
+}
+
+type UpdateConsoleAPIKeyRow struct {
+	ID         int64
+	Name       string
+	KeyPrefix  string
+	SpendLimit pgtype.Numeric
+	SpentTotal pgtype.Numeric
+	LastUsedAt pgtype.Timestamptz
+	ExpiresAt  pgtype.Timestamptz
+	DisabledAt pgtype.Timestamptz
+	RevokedAt  pgtype.Timestamptz
+	CreatedAt  pgtype.Timestamptz
+	UpdatedAt  pgtype.Timestamptz
+}
+
+// 一次更新名称 / 额度 / 有效期 / 启停：*_provided 决定该字段是否参与本次修改，
+// 对应的 narg 为 NULL 表示清空（不限额 / 永不过期 / 启用）。
+// 已吊销不可逆，因此 WHERE 带 revoked_at IS NULL；配合 user_id 一起定位。
+func (q *Queries) UpdateConsoleAPIKey(ctx context.Context, arg UpdateConsoleAPIKeyParams) (UpdateConsoleAPIKeyRow, error) {
+	row := q.db.QueryRow(ctx, updateConsoleAPIKey,
+		arg.NameProvided,
+		arg.Name,
+		arg.SpendLimitProvided,
+		arg.SpendLimit,
+		arg.ExpiresProvided,
+		arg.ExpiresAt,
+		arg.DisabledProvided,
+		arg.DisabledAt,
+		arg.ID,
+		arg.UserID,
+	)
+	var i UpdateConsoleAPIKeyRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.KeyPrefix,
+		&i.SpendLimit,
+		&i.SpentTotal,
+		&i.LastUsedAt,
+		&i.ExpiresAt,
+		&i.DisabledAt,
+		&i.RevokedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }

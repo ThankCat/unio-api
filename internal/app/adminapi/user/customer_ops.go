@@ -59,10 +59,10 @@ type apiKeysOpsSummaryDTO struct {
 }
 
 type apiKeyOpsRowDTO struct {
-	ID             int64   `json:"id"`
-	Name           string  `json:"name"`
-	KeyPrefix      string  `json:"key_prefix"`
-	KeyPlaintext   *string `json:"key_plaintext"`
+	ID        int64  `json:"id"`
+	Name      string `json:"name"`
+	KeyPrefix string `json:"key_prefix"`
+	// 没有 key_plaintext：明文只在创建响应里出现一次，运维排查靠 key_prefix 比对。
 	UserID         int64   `json:"user_id"`
 	Status         string  `json:"status"`
 	SpendLimit     *string `json:"spend_limit"`
@@ -202,7 +202,7 @@ func (h *customerOpsHandler) apiKeysTable(w http.ResponseWriter, r *http.Request
 	out := make([]apiKeyOpsRowDTO, 0, len(rows))
 	for _, k := range rows {
 		out = append(out, apiKeyOpsRowDTO{
-			ID: k.ID, Name: k.Name, KeyPrefix: k.KeyPrefix, KeyPlaintext: k.KeyPlaintext, UserID: k.UserID, Status: k.Status,
+			ID: k.ID, Name: k.Name, KeyPrefix: k.KeyPrefix, UserID: k.UserID, Status: k.Status,
 			SpendLimit: k.SpendLimit, SpentTotal: k.SpentTotal,
 			RequestTotal: k.RequestTotal, Succeeded: k.Succeeded, SuccessRate: k.SuccessRate,
 			ConsumptionUSD: k.ConsumptionUSD, LastUsedAt: adminhttp.RFC3339Ptr(k.LastUsedAt), ExpiresAt: adminhttp.RFC3339Ptr(k.ExpiresAt),

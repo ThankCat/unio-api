@@ -81,8 +81,7 @@ func TestListMapsCustomerSafeFieldsAndScopesToUser(t *testing.T) {
 			ClientIp:                pgtype.Text{String: "203.0.113.10", Valid: true},
 			ApiKeyID:                9,
 			ApiKeyName:              pgtype.Text{String: "prod", Valid: true},
-			ApiKeyPrefix:            pgtype.Text{String: "unio_sk_XhE8wL5D", Valid: true},
-			ApiKeyPlaintext:         pgtype.Text{String: "unio_sk_XhE8wL5Dabcdefghijklmnopqrstuvwxyz012345", Valid: true},
+			ApiKeyPrefix:            pgtype.Text{String: "sk_unio_xhe8wl5d", Valid: true},
 			Endpoint:                "chat_completions",
 			Stream:                  true,
 			RequestedModelID:        "claude-sonnet-4-5",
@@ -107,11 +106,11 @@ func TestListMapsCustomerSafeFieldsAndScopesToUser(t *testing.T) {
 	}
 
 	items, total, err := requests.NewService(store).List(context.Background(), requests.ListParams{
-		UserID:   7,
-		Q:        "claude",
-		From:     &started,
-		Limit:    20,
-		Offset:   0,
+		UserID: 7,
+		Q:      "claude",
+		From:   &started,
+		Limit:  20,
+		Offset: 0,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -132,8 +131,9 @@ func TestListMapsCustomerSafeFieldsAndScopesToUser(t *testing.T) {
 	if item.APIKeyName != "prod" {
 		t.Fatalf("item = %+v", item)
 	}
-	if item.APIKeyPrefix != "unio_sk_XhE8wL5D" || item.APIKeyPlaintext == nil || *item.APIKeyPlaintext == "" {
-		t.Fatalf("api key secret = prefix=%q plaintext=%v", item.APIKeyPrefix, item.APIKeyPlaintext)
+	// 请求列表只给前缀：明文不落库，这条链路上再也没有可回显的明文。
+	if item.APIKeyPrefix != "sk_unio_xhe8wl5d" {
+		t.Fatalf("api key prefix = %q", item.APIKeyPrefix)
 	}
 	if item.LatencyMs == nil || *item.LatencyMs != 1500 {
 		t.Fatalf("latency = %v", item.LatencyMs)

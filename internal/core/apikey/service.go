@@ -17,7 +17,6 @@ var (
 
 	// ErrInvalidName 表示创建 API Key 时 name 为空。
 	ErrInvalidName = errors.New("invalid api key name")
-
 )
 
 // Store 定义 API Key 创建服务需要的数据库能力。
@@ -72,7 +71,6 @@ func (s *Service) Create(ctx context.Context, params CreateParams) (*CreatedKey,
 		)
 	}
 
-
 	generatedKey, err := Generate()
 	if err != nil {
 		return nil, failure.Wrap(
@@ -88,12 +86,11 @@ func (s *Service) Create(ctx context.Context, params CreateParams) (*CreatedKey,
 	}
 
 	storeParams := sqlc.CreateAPIKeyParams{
-		UserID:       params.UserID,
-		Name:         name,
-		KeyPrefix:    generatedKey.Prefix,
-		KeyHash:      generatedKey.Hash,
-		KeyPlaintext: pgtype.Text{String: generatedKey.Plaintext, Valid: true},
-		ExpiresAt:    expiresAt,
+		UserID:    params.UserID,
+		Name:      name,
+		KeyPrefix: generatedKey.Prefix,
+		KeyHash:   generatedKey.Hash,
+		ExpiresAt: expiresAt,
 	}
 	storedKey, err := s.store.CreateAPIKey(ctx, storeParams)
 	if err != nil {

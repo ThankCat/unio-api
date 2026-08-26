@@ -14,7 +14,6 @@ type itemDTO struct {
 	APIKeyID                  int64    `json:"api_key_id"`
 	APIKeyName                string   `json:"api_key_name"`
 	APIKeyPrefix              string   `json:"api_key_prefix"`
-	APIKeyPlaintext           *string  `json:"api_key_plaintext,omitempty"`
 	Endpoint                  string   `json:"endpoint"`
 	Stream                    bool     `json:"stream"`
 	RequestedModelID          string   `json:"requested_model_id"`
@@ -152,7 +151,6 @@ func toItemDTO(item consolerequests.Item) itemDTO {
 		APIKeyID:                  item.APIKeyID,
 		APIKeyName:                item.APIKeyName,
 		APIKeyPrefix:              item.APIKeyPrefix,
-		APIKeyPlaintext:           item.APIKeyPlaintext,
 		Endpoint:                  item.Endpoint,
 		Stream:                    item.Stream,
 		RequestedModelID:          item.RequestedModelID,

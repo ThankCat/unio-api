@@ -62,13 +62,13 @@ func TestAPIKeyAuthAuthenticatorError(t *testing.T) {
 	handler := APIKeyAuth(authenticator)(next)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
-	req.Header.Set("Authorization", "Bearer unio_sk_test")
+	req.Header.Set("Authorization", "Bearer sk_unio_test")
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
 
-	if authenticator.token != "unio_sk_test" {
-		t.Fatalf("expected token %q, got %q", "unio_sk_test", authenticator.token)
+	if authenticator.token != "sk_unio_test" {
+		t.Fatalf("expected token %q, got %q", "sk_unio_test", authenticator.token)
 	}
 
 	if rec.Code != http.StatusUnauthorized {
@@ -84,7 +84,7 @@ func TestAPIKeyAuthSuccess(t *testing.T) {
 	expectedPrincipal := &auth.APIKeyPrincipal{
 		APIKeyID:  1,
 		UserID:    1,
-		KeyPrefix: "unio_sk_XhE8wL5D",
+		KeyPrefix: "sk_unio_xhe8wl5d",
 	}
 
 	authenticator := &fakeAPIKeyAuthenticator{
@@ -104,13 +104,13 @@ func TestAPIKeyAuthSuccess(t *testing.T) {
 	handler := APIKeyAuth(authenticator)(next)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
-	req.Header.Set("Authorization", "Bearer unio_sk_test")
+	req.Header.Set("Authorization", "Bearer sk_unio_test")
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
 
-	if authenticator.token != "unio_sk_test" {
-		t.Fatalf("expected token %q, got %q", "unio_sk_test", authenticator.token)
+	if authenticator.token != "sk_unio_test" {
+		t.Fatalf("expected token %q, got %q", "sk_unio_test", authenticator.token)
 	}
 
 	if !nextCalled {

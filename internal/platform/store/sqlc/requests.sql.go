@@ -698,7 +698,6 @@ SELECT
     r.api_key_id,
     ak.name AS api_key_name,
     ak.key_prefix AS api_key_prefix,
-    ak.key_plaintext AS api_key_plaintext,
     r.endpoint,
     r.stream,
     r.requested_model_id,
@@ -822,7 +821,6 @@ type ListConsoleBilledRequestsRow struct {
 	ApiKeyID                  int64
 	ApiKeyName                pgtype.Text
 	ApiKeyPrefix              pgtype.Text
-	ApiKeyPlaintext           pgtype.Text
 	Endpoint                  string
 	Stream                    bool
 	RequestedModelID          string
@@ -884,7 +882,6 @@ func (q *Queries) ListConsoleBilledRequests(ctx context.Context, arg ListConsole
 			&i.ApiKeyID,
 			&i.ApiKeyName,
 			&i.ApiKeyPrefix,
-			&i.ApiKeyPlaintext,
 			&i.Endpoint,
 			&i.Stream,
 			&i.RequestedModelID,
@@ -1029,7 +1026,6 @@ SELECT
     r.service_tier_resolution,
     ak.name AS api_key_name,
     ak.key_prefix AS api_key_prefix,
-    ak.key_plaintext AS api_key_plaintext,
     COALESCE(ur.uncached_input_tokens, 0)::bigint AS uncached_input_tokens,
     COALESCE(ur.cache_read_input_tokens, 0)::bigint AS cache_read_input_tokens,
     COALESCE(ur.cache_write_5m_input_tokens, 0)::bigint AS cache_write_5m_input_tokens,
@@ -1217,7 +1213,6 @@ type ListRequestRecordsPageRow struct {
 	ServiceTierResolution        pgtype.Text
 	ApiKeyName                   pgtype.Text
 	ApiKeyPrefix                 pgtype.Text
-	ApiKeyPlaintext              pgtype.Text
 	UncachedInputTokens          int64
 	CacheReadInputTokens         int64
 	CacheWrite5mInputTokens      int64
@@ -1342,7 +1337,6 @@ func (q *Queries) ListRequestRecordsPage(ctx context.Context, arg ListRequestRec
 			&i.ServiceTierResolution,
 			&i.ApiKeyName,
 			&i.ApiKeyPrefix,
-			&i.ApiKeyPlaintext,
 			&i.UncachedInputTokens,
 			&i.CacheReadInputTokens,
 			&i.CacheWrite5mInputTokens,

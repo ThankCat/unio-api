@@ -107,7 +107,6 @@ SELECT
     r.api_key_id,
     ak.name AS api_key_name,
     ak.key_prefix AS api_key_prefix,
-    ak.key_plaintext AS api_key_plaintext,
     r.endpoint,
     r.stream,
     r.requested_model_id,

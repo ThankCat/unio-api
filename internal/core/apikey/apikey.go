@@ -8,23 +8,27 @@ import (
 )
 
 const (
-	keyPrefix       = "unio_sk_"
+	keyPrefix       = "sk_unio_"
 	prefixRandomLen = 8
-	// randomLen 是明文 key 随机部分的字符数；43 个 base62 字符约等于 256 bit 熵。
-	randomLen = 43
-	// base62Alphabet 是无符号、可安全展示的 key 字符集，避免 base64 的 - 和 _。
-	base62Alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+	// randomLen 是明文 key 随机部分的字符数。
+	// 24 个 base36 字符约 124 bit 熵，加上 8 字符前缀刚好落在 32 字符总长上限内。
+	randomLen = 24
+	// base36Alphabet 只含小写字母和数字：明文全小写，复制粘贴时不会因大小写误读，
+	// 也避开 base64 的 - 和 _（会被 URL 或 shell 转义）。
+	base36Alphabet = "0123456789abcdefghijklmnopqrstuvwxyz"
+	// MaxPlaintextLen 是明文 key 的总长上限，供调用方做防御性校验。
+	MaxPlaintextLen = 32
 )
 
 // Key 表示一次新生成的 API Key。
-// Plaintext 只在创建时返回给用户，不能保存到数据库或写入日志。
+// Plaintext 只在创建响应里返回一次，既不落库也不写日志——之后任何接口都拿不回明文。
 type Key struct {
 	// Plaintext 是完整明文 key，只能在创建时展示一次。
-	// 示例格式：unio_sk_<random>
+	// 示例格式：sk_unio_<24 位小写随机>
 	Plaintext string
 
-	// Prefix 是可安全展示的短前缀，用于识别 key。
-	// 示例格式：unio_sk_<前 8 位 random>
+	// Prefix 是可安全展示的短前缀，明文丢弃后靠它识别是哪一把 key。
+	// 示例格式：sk_unio_<前 8 位 random>
 	Prefix string
 
 	// Hash 是明文 key 的哈希值，用于数据库存储和认证匹配。
@@ -34,7 +38,7 @@ type Key struct {
 
 // Generate 生成一个新的高熵 API Key，并返回明文、展示前缀和哈希值。
 func Generate() (Key, error) {
-	random, err := randomBase62(randomLen)
+	random, err := randomBase36(randomLen)
 	if err != nil {
 		return Key{}, err
 	}
@@ -48,10 +52,10 @@ func Generate() (Key, error) {
 	}, nil
 }
 
-// randomBase62 生成 n 个均匀分布的 base62 字符。
-// 用拒绝采样丢弃落在 256 % 62 余数区间的字节，避免取模偏置削弱熵。
-func randomBase62(n int) (string, error) {
-	const maxUnbiased = 256 - (256 % len(base62Alphabet))
+// randomBase36 生成 n 个均匀分布的 base36 字符。
+// 用拒绝采样丢弃落在 256 % 36 余数区间的字节，避免取模偏置削弱熵。
+func randomBase36(n int) (string, error) {
+	const maxUnbiased = 256 - (256 % len(base36Alphabet))
 
 	out := make([]byte, n)
 	buf := make([]byte, n)
@@ -65,7 +69,7 @@ func randomBase62(n int) (string, error) {
 			if int(c) >= maxUnbiased {
 				continue
 			}
-			out[filled] = base62Alphabet[int(c)%len(base62Alphabet)]
+			out[filled] = base36Alphabet[int(c)%len(base36Alphabet)]
 			filled++
 			if filled == n {
 				break

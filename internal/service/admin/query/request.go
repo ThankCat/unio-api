@@ -128,10 +128,9 @@ type RequestListItem struct {
 	// LongContextApplied 售价/成本快照是否已应用长上下文倍率（列表费用列标识）。
 	LongContextApplied bool
 
-	// 用户/Key 展示（key 名 / 前缀 / 明文——明文供列表点击复制，口径同 api-keys 页）。
-	APIKeyName      *string
-	APIKeyPrefix    *string
-	APIKeyPlaintext *string
+	// 用户/Key 展示：只给名称和前缀，明文不落库也就无从回显。
+	APIKeyName   *string
+	APIKeyPrefix *string
 
 	SalePriceRatio      *string
 	FinalChannelName    *string
@@ -548,9 +547,8 @@ func toRequestListItem(r sqlc.ListRequestRecordsPageRow) RequestListItem {
 		RechargeFactor:        opsutil.NumericStringPtr(r.RechargeFactor),
 		LongContextApplied:    r.LongContextApplied,
 
-		APIKeyName:      textPtr(r.ApiKeyName),
-		APIKeyPrefix:    textPtr(r.ApiKeyPrefix),
-		APIKeyPlaintext: textPtr(r.ApiKeyPlaintext),
+		APIKeyName:   textPtr(r.ApiKeyName),
+		APIKeyPrefix: textPtr(r.ApiKeyPrefix),
 
 		SalePriceRatio:      opsutil.NumericStringPtr(r.SalePriceRatio),
 		FinalChannelName:    textPtr(r.FinalChannelName),

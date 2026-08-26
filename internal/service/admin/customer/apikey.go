@@ -21,17 +21,16 @@ const (
 	APIKeyStatusExpired  = "expired"
 )
 
-// APIKey 表示后台 API Key 视图；含完整明文 key 供多次复制（产品决策），绝不含 key_hash。
+// APIKey 表示后台 API Key 视图。
+// 既不含明文也不含 key_hash：明文只在 CreatedAPIKey 里出现一次，之后连 admin 也取不回。
 type APIKey struct {
-	ID        int64
-	UserID    int64
-	Name      string
-	KeyPrefix string
-	// KeyPlaintext 是完整明文 key（产品决策：留存明文供多次复制）；nil 表示历史 key 不可回显。
-	KeyPlaintext *string
-	Status       string
-	SpendLimit   *string // nil 表示不限额
-	SpentTotal   string
+	ID         int64
+	UserID     int64
+	Name       string
+	KeyPrefix  string
+	Status     string
+	SpendLimit *string // nil 表示不限额
+	SpentTotal string
 	// 这里没有 Key 级限流：DEC-027 之后限流全部归线路，按 (线路, 用户) 计数。
 	LastUsedAt *time.Time
 	ExpiresAt  *time.Time
@@ -41,7 +40,8 @@ type APIKey struct {
 	UpdatedAt  pgtype.Timestamptz
 }
 
-// CreatedAPIKey 表示创建成功的一次性结果：含只展示一次的明文。
+// CreatedAPIKey 表示创建成功的一次性结果。
+// Plaintext 是明文唯一一次露面的地方：不落库、不写日志，响应发出去就再也拿不回来。
 type CreatedAPIKey struct {
 	APIKey
 	Plaintext string
@@ -122,7 +122,7 @@ func (s *APIKeyService) List(ctx context.Context, params APIKeyListParams) ([]AP
 
 	keys := make([]APIKey, 0, len(rows))
 	for _, row := range rows {
-		keys = append(keys, s.buildAPIKey(row.ID, row.UserID, row.Name, row.KeyPrefix, row.KeyPlaintext, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.CreatedAt, row.UpdatedAt))
+		keys = append(keys, s.buildAPIKey(row.ID, row.UserID, row.Name, row.KeyPrefix, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.CreatedAt, row.UpdatedAt))
 	}
 
 	return keys, total, nil
@@ -137,7 +137,7 @@ func (s *APIKeyService) Get(ctx context.Context, id int64) (APIKey, error) {
 		}
 		return APIKey{}, storeFailed(err, "get api key")
 	}
-	return s.buildAPIKey(row.ID, row.UserID, row.Name, row.KeyPrefix, row.KeyPlaintext, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.CreatedAt, row.UpdatedAt), nil
+	return s.buildAPIKey(row.ID, row.UserID, row.Name, row.KeyPrefix, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.CreatedAt, row.UpdatedAt), nil
 }
 
 // Create 在用户下创建 API Key，并返回只展示一次的明文。
@@ -172,18 +172,17 @@ func (s *APIKeyService) Create(ctx context.Context, params APIKeyCreateParams) (
 	}
 
 	created, err := s.store.CreateAPIKey(ctx, sqlc.CreateAPIKeyParams{
-		UserID:       params.UserID,
-		Name:         name,
-		KeyPrefix:    generated.Prefix,
-		KeyHash:      generated.Hash,
-		KeyPlaintext: pgtype.Text{String: generated.Plaintext, Valid: true},
-		ExpiresAt:    expiresAt,
+		UserID:    params.UserID,
+		Name:      name,
+		KeyPrefix: generated.Prefix,
+		KeyHash:   generated.Hash,
+		ExpiresAt: expiresAt,
 	})
 	if err != nil {
 		return CreatedAPIKey{}, storeFailed(err, "create api key")
 	}
 
-	view := s.buildAPIKey(created.ID, created.UserID, created.Name, created.KeyPrefix, created.KeyPlaintext, created.LastUsedAt, created.ExpiresAt, created.DisabledAt, created.RevokedAt, created.SpendLimit, created.SpentTotal, created.CreatedAt, created.UpdatedAt)
+	view := s.buildAPIKey(created.ID, created.UserID, created.Name, created.KeyPrefix, created.LastUsedAt, created.ExpiresAt, created.DisabledAt, created.RevokedAt, created.SpendLimit, created.SpentTotal, created.CreatedAt, created.UpdatedAt)
 
 	// 上限作为独立 UPDATE：CreateAPIKey 不接收 spend_limit，创建后按需补设。
 	if spendLimit.Valid {
@@ -194,7 +193,7 @@ func (s *APIKeyService) Create(ctx context.Context, params APIKeyCreateParams) (
 		if err != nil {
 			return CreatedAPIKey{}, storeFailed(err, "set api key spend limit")
 		}
-		view = s.buildAPIKey(updated.ID, updated.UserID, updated.Name, updated.KeyPrefix, updated.KeyPlaintext, updated.LastUsedAt, updated.ExpiresAt, updated.DisabledAt, updated.RevokedAt, updated.SpendLimit, updated.SpentTotal, updated.CreatedAt, updated.UpdatedAt)
+		view = s.buildAPIKey(updated.ID, updated.UserID, updated.Name, updated.KeyPrefix, updated.LastUsedAt, updated.ExpiresAt, updated.DisabledAt, updated.RevokedAt, updated.SpendLimit, updated.SpentTotal, updated.CreatedAt, updated.UpdatedAt)
 	}
 
 	return CreatedAPIKey{APIKey: view, Plaintext: generated.Plaintext}, nil
@@ -233,7 +232,7 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, params APIKeyUpdat
 		if err != nil {
 			return APIKey{}, storeFailed(err, "set api key disabled")
 		}
-		latest = s.buildAPIKey(row.ID, row.UserID, row.Name, row.KeyPrefix, row.KeyPlaintext, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.CreatedAt, row.UpdatedAt)
+		latest = s.buildAPIKey(row.ID, row.UserID, row.Name, row.KeyPrefix, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.CreatedAt, row.UpdatedAt)
 		applied = true
 	}
 
@@ -249,10 +248,9 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, params APIKeyUpdat
 		if err != nil {
 			return APIKey{}, storeFailed(err, "set api key spend limit")
 		}
-		latest = s.buildAPIKey(row.ID, row.UserID, row.Name, row.KeyPrefix, row.KeyPlaintext, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.CreatedAt, row.UpdatedAt)
+		latest = s.buildAPIKey(row.ID, row.UserID, row.Name, row.KeyPrefix, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.CreatedAt, row.UpdatedAt)
 		applied = true
 	}
-
 
 	if params.Name != nil {
 		name := strings.TrimSpace(*params.Name)
@@ -266,7 +264,7 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, params APIKeyUpdat
 		if err != nil {
 			return APIKey{}, storeFailed(err, "set api key name")
 		}
-		latest = s.buildAPIKey(row.ID, row.UserID, row.Name, row.KeyPrefix, row.KeyPlaintext, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.CreatedAt, row.UpdatedAt)
+		latest = s.buildAPIKey(row.ID, row.UserID, row.Name, row.KeyPrefix, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.CreatedAt, row.UpdatedAt)
 		applied = true
 	}
 
@@ -282,7 +280,7 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, params APIKeyUpdat
 		if err != nil {
 			return APIKey{}, storeFailed(err, "set api key expires at")
 		}
-		latest = s.buildAPIKey(row.ID, row.UserID, row.Name, row.KeyPrefix, row.KeyPlaintext, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.CreatedAt, row.UpdatedAt)
+		latest = s.buildAPIKey(row.ID, row.UserID, row.Name, row.KeyPrefix, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.CreatedAt, row.UpdatedAt)
 		applied = true
 	}
 
@@ -302,7 +300,7 @@ func (s *APIKeyService) Revoke(ctx context.Context, id int64) (APIKey, error) {
 		}
 		return APIKey{}, storeFailed(err, "revoke api key")
 	}
-	return s.buildAPIKey(row.ID, row.UserID, row.Name, row.KeyPrefix, row.KeyPlaintext, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.CreatedAt, row.UpdatedAt), nil
+	return s.buildAPIKey(row.ID, row.UserID, row.Name, row.KeyPrefix, row.LastUsedAt, row.ExpiresAt, row.DisabledAt, row.RevokedAt, row.SpendLimit, row.SpentTotal, row.CreatedAt, row.UpdatedAt), nil
 }
 
 // Delete 物理删除 API Key，用于清理误建/未使用的 Key（与 channel/model/provider/route 的删除语义对齐）。
@@ -331,36 +329,25 @@ func (s *APIKeyService) Delete(ctx context.Context, id int64) error {
 func (s *APIKeyService) buildAPIKey(
 	id, userID int64,
 	name, keyPrefix string,
-	keyPlaintext pgtype.Text,
 	lastUsedAt, expiresAt, disabledAt, revokedAt pgtype.Timestamptz,
 	spendLimit, spentTotal pgtype.Numeric,
 	createdAt, updatedAt pgtype.Timestamptz,
 ) APIKey {
 	return APIKey{
-		ID:           id,
-		UserID:       userID,
-		Name:         name,
-		KeyPrefix:    keyPrefix,
-		KeyPlaintext: textPtr(keyPlaintext),
-		Status:       s.computeStatus(disabledAt, revokedAt, expiresAt),
-		SpendLimit:   numericPtr(spendLimit),
-		SpentTotal:   numericString(spentTotal),
-		LastUsedAt:   timePtr(lastUsedAt),
-		ExpiresAt:    timePtr(expiresAt),
-		DisabledAt:   timePtr(disabledAt),
-		RevokedAt:    timePtr(revokedAt),
-		CreatedAt:    createdAt,
-		UpdatedAt:    updatedAt,
+		ID:         id,
+		UserID:     userID,
+		Name:       name,
+		KeyPrefix:  keyPrefix,
+		Status:     s.computeStatus(disabledAt, revokedAt, expiresAt),
+		SpendLimit: numericPtr(spendLimit),
+		SpentTotal: numericString(spentTotal),
+		LastUsedAt: timePtr(lastUsedAt),
+		ExpiresAt:  timePtr(expiresAt),
+		DisabledAt: timePtr(disabledAt),
+		RevokedAt:  timePtr(revokedAt),
+		CreatedAt:  createdAt,
+		UpdatedAt:  updatedAt,
 	}
-}
-
-// textPtr 把可空 pgtype.Text 转成 *string（nil=历史 key 无明文，不可回显）。
-func textPtr(v pgtype.Text) *string {
-	if !v.Valid {
-		return nil
-	}
-	out := v.String
-	return &out
 }
 
 // int4ToPtr 把可空 pgtype.Int4 转成 *int64（限流上限可空，nil=继承全局默认）。

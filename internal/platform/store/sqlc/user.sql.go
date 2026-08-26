@@ -39,7 +39,6 @@ SELECT
     k.id,
     k.name,
     k.key_prefix,
-    k.key_plaintext,
     k.user_id,
     k.disabled_at,
     k.revoked_at,
@@ -63,7 +62,7 @@ LEFT JOIN request_records r
     AND ($2::timestamptz IS NULL OR r.created_at < $2::timestamptz)
 WHERE k.user_id = $3
   AND ($4::text IS NULL OR k.name ILIKE '%' || $4::text || '%' OR k.key_prefix ILIKE '%' || $4::text || '%')
-GROUP BY k.id, k.name, k.key_prefix, k.key_plaintext, k.user_id, k.disabled_at, k.revoked_at, k.expires_at, k.spend_limit, k.spent_total, k.last_used_at
+GROUP BY k.id, k.name, k.key_prefix, k.user_id, k.disabled_at, k.revoked_at, k.expires_at, k.spend_limit, k.spent_total, k.last_used_at
 ORDER BY
   CASE WHEN COALESCE($5::text, 'requests') IN ('', 'requests') AND COALESCE($6::bool, true) THEN COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed')) END DESC NULLS LAST,
   CASE WHEN COALESCE($5::text, 'requests') IN ('', 'requests') AND NOT COALESCE($6::bool, true) THEN COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed')) END ASC NULLS LAST,
@@ -94,7 +93,6 @@ type ApiKeysOpsTableRow struct {
 	ID               int64
 	Name             string
 	KeyPrefix        string
-	KeyPlaintext     pgtype.Text
 	UserID           int64
 	DisabledAt       pgtype.Timestamptz
 	RevokedAt        pgtype.Timestamptz
@@ -130,7 +128,6 @@ func (q *Queries) ApiKeysOpsTable(ctx context.Context, arg ApiKeysOpsTableParams
 			&i.ID,
 			&i.Name,
 			&i.KeyPrefix,
-			&i.KeyPlaintext,
 			&i.UserID,
 			&i.DisabledAt,
 			&i.RevokedAt,
@@ -201,35 +198,33 @@ func (q *Queries) CountUsers(ctx context.Context, q_ pgtype.Text) (int64, error)
 }
 
 const createAPIKey = `-- name: CreateAPIKey :one
-INSERT INTO api_keys (user_id, name, key_prefix, key_hash, key_plaintext, expires_at)
+INSERT INTO api_keys (user_id, name, key_prefix, key_hash, expires_at)
 VALUES (
     $1,
     $2,
     $3,
     $4,
-    $5,
-    $6
+    $5
 )
-RETURNING id, name, key_prefix, key_hash, key_plaintext, last_used_at, expires_at, disabled_at, revoked_at, created_at, updated_at, spend_limit, spent_total, user_id
+RETURNING id, name, key_prefix, key_hash, last_used_at, expires_at, disabled_at, revoked_at, created_at, updated_at, spend_limit, spent_total, user_id
 `
 
 type CreateAPIKeyParams struct {
-	UserID       int64
-	Name         string
-	KeyPrefix    string
-	KeyHash      string
-	KeyPlaintext pgtype.Text
-	ExpiresAt    pgtype.Timestamptz
+	UserID    int64
+	Name      string
+	KeyPrefix string
+	KeyHash   string
+	ExpiresAt pgtype.Timestamptz
 }
 
-// CreateAPIKey 创建用户 API Key，保存 key hash（认证用）、展示前缀与完整明文（供多次复制）。
+// CreateAPIKey 创建用户 API Key，只保存 key hash（认证用）与展示前缀。
+// 明文不落库：调用方拿 apikey.Generate() 的返回值放进创建响应，那是它唯一一次露面的机会。
 func (q *Queries) CreateAPIKey(ctx context.Context, arg CreateAPIKeyParams) (ApiKey, error) {
 	row := q.db.QueryRow(ctx, createAPIKey,
 		arg.UserID,
 		arg.Name,
 		arg.KeyPrefix,
 		arg.KeyHash,
-		arg.KeyPlaintext,
 		arg.ExpiresAt,
 	)
 	var i ApiKey
@@ -238,7 +233,6 @@ func (q *Queries) CreateAPIKey(ctx context.Context, arg CreateAPIKeyParams) (Api
 		&i.Name,
 		&i.KeyPrefix,
 		&i.KeyHash,
-		&i.KeyPlaintext,
 		&i.LastUsedAt,
 		&i.ExpiresAt,
 		&i.DisabledAt,
@@ -302,29 +296,28 @@ func (q *Queries) DeleteAPIKey(ctx context.Context, id int64) (int64, error) {
 }
 
 const getAPIKeyByID = `-- name: GetAPIKeyByID :one
-SELECT k.id, k.user_id, k.name, k.key_prefix, k.key_plaintext, k.last_used_at, k.expires_at, k.disabled_at, k.revoked_at, k.spend_limit, k.spent_total, k.created_at, k.updated_at
+SELECT k.id, k.user_id, k.name, k.key_prefix, k.last_used_at, k.expires_at, k.disabled_at, k.revoked_at, k.spend_limit, k.spent_total, k.created_at, k.updated_at
 FROM api_keys k
 WHERE k.id = $1
 LIMIT 1
 `
 
 type GetAPIKeyByIDRow struct {
-	ID           int64
-	UserID       int64
-	Name         string
-	KeyPrefix    string
-	KeyPlaintext pgtype.Text
-	LastUsedAt   pgtype.Timestamptz
-	ExpiresAt    pgtype.Timestamptz
-	DisabledAt   pgtype.Timestamptz
-	RevokedAt    pgtype.Timestamptz
-	SpendLimit   pgtype.Numeric
-	SpentTotal   pgtype.Numeric
-	CreatedAt    pgtype.Timestamptz
-	UpdatedAt    pgtype.Timestamptz
+	ID         int64
+	UserID     int64
+	Name       string
+	KeyPrefix  string
+	LastUsedAt pgtype.Timestamptz
+	ExpiresAt  pgtype.Timestamptz
+	DisabledAt pgtype.Timestamptz
+	RevokedAt  pgtype.Timestamptz
+	SpendLimit pgtype.Numeric
+	SpentTotal pgtype.Numeric
+	CreatedAt  pgtype.Timestamptz
+	UpdatedAt  pgtype.Timestamptz
 }
 
-// GetAPIKeyByID 供 admin 按 id 读取单把 API Key（带所属用户 ID 与 Key 绑定线路；返回明文 key 供复制）。
+// GetAPIKeyByID 供 admin 按 id 读取单把 API Key（带所属用户 ID 与 Key 绑定线路）。
 func (q *Queries) GetAPIKeyByID(ctx context.Context, id int64) (GetAPIKeyByIDRow, error) {
 	row := q.db.QueryRow(ctx, getAPIKeyByID, id)
 	var i GetAPIKeyByIDRow
@@ -333,7 +326,6 @@ func (q *Queries) GetAPIKeyByID(ctx context.Context, id int64) (GetAPIKeyByIDRow
 		&i.UserID,
 		&i.Name,
 		&i.KeyPrefix,
-		&i.KeyPlaintext,
 		&i.LastUsedAt,
 		&i.ExpiresAt,
 		&i.DisabledAt,
@@ -384,7 +376,7 @@ func (q *Queries) GetUserByID(ctx context.Context, id int64) (GetUserByIDRow, er
 }
 
 const listAPIKeysByUserPage = `-- name: ListAPIKeysByUserPage :many
-SELECT id, user_id, name, key_prefix, key_plaintext, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, created_at, updated_at
+SELECT id, user_id, name, key_prefix, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, created_at, updated_at
 FROM api_keys
 WHERE user_id = $1
 ORDER BY created_at DESC, id DESC
@@ -398,22 +390,21 @@ type ListAPIKeysByUserPageParams struct {
 }
 
 type ListAPIKeysByUserPageRow struct {
-	ID           int64
-	UserID       int64
-	Name         string
-	KeyPrefix    string
-	KeyPlaintext pgtype.Text
-	LastUsedAt   pgtype.Timestamptz
-	ExpiresAt    pgtype.Timestamptz
-	DisabledAt   pgtype.Timestamptz
-	RevokedAt    pgtype.Timestamptz
-	SpendLimit   pgtype.Numeric
-	SpentTotal   pgtype.Numeric
-	CreatedAt    pgtype.Timestamptz
-	UpdatedAt    pgtype.Timestamptz
+	ID         int64
+	UserID     int64
+	Name       string
+	KeyPrefix  string
+	LastUsedAt pgtype.Timestamptz
+	ExpiresAt  pgtype.Timestamptz
+	DisabledAt pgtype.Timestamptz
+	RevokedAt  pgtype.Timestamptz
+	SpendLimit pgtype.Numeric
+	SpentTotal pgtype.Numeric
+	CreatedAt  pgtype.Timestamptz
+	UpdatedAt  pgtype.Timestamptz
 }
 
-// ListAPIKeysByUserPage 供 admin 按用户分页倒序列出 API Key（返回明文 key 供复制，不返回 key_hash）。
+// ListAPIKeysByUserPage 供 admin 按用户分页倒序列出 API Key（不返回 key_hash）。
 func (q *Queries) ListAPIKeysByUserPage(ctx context.Context, arg ListAPIKeysByUserPageParams) ([]ListAPIKeysByUserPageRow, error) {
 	rows, err := q.db.Query(ctx, listAPIKeysByUserPage, arg.UserID, arg.PageOffset, arg.PageLimit)
 	if err != nil {
@@ -428,7 +419,6 @@ func (q *Queries) ListAPIKeysByUserPage(ctx context.Context, arg ListAPIKeysByUs
 			&i.UserID,
 			&i.Name,
 			&i.KeyPrefix,
-			&i.KeyPlaintext,
 			&i.LastUsedAt,
 			&i.ExpiresAt,
 			&i.DisabledAt,
@@ -548,23 +538,22 @@ const revokeAPIKey = `-- name: RevokeAPIKey :one
 UPDATE api_keys
 SET revoked_at = now(), updated_at = now()
 WHERE id = $1 AND revoked_at IS NULL
-RETURNING id, user_id, name, key_prefix, key_plaintext, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, created_at, updated_at
+RETURNING id, user_id, name, key_prefix, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, created_at, updated_at
 `
 
 type RevokeAPIKeyRow struct {
-	ID           int64
-	UserID       int64
-	Name         string
-	KeyPrefix    string
-	KeyPlaintext pgtype.Text
-	LastUsedAt   pgtype.Timestamptz
-	ExpiresAt    pgtype.Timestamptz
-	DisabledAt   pgtype.Timestamptz
-	RevokedAt    pgtype.Timestamptz
-	SpendLimit   pgtype.Numeric
-	SpentTotal   pgtype.Numeric
-	CreatedAt    pgtype.Timestamptz
-	UpdatedAt    pgtype.Timestamptz
+	ID         int64
+	UserID     int64
+	Name       string
+	KeyPrefix  string
+	LastUsedAt pgtype.Timestamptz
+	ExpiresAt  pgtype.Timestamptz
+	DisabledAt pgtype.Timestamptz
+	RevokedAt  pgtype.Timestamptz
+	SpendLimit pgtype.Numeric
+	SpentTotal pgtype.Numeric
+	CreatedAt  pgtype.Timestamptz
+	UpdatedAt  pgtype.Timestamptz
 }
 
 // RevokeAPIKey 永久吊销 API Key（revoked_at 置 now()，不可逆）。
@@ -576,7 +565,6 @@ func (q *Queries) RevokeAPIKey(ctx context.Context, id int64) (RevokeAPIKeyRow, 
 		&i.UserID,
 		&i.Name,
 		&i.KeyPrefix,
-		&i.KeyPlaintext,
 		&i.LastUsedAt,
 		&i.ExpiresAt,
 		&i.DisabledAt,
@@ -593,7 +581,7 @@ const setAPIKeyDisabled = `-- name: SetAPIKeyDisabled :one
 UPDATE api_keys
 SET disabled_at = $1, updated_at = now()
 WHERE id = $2
-RETURNING id, user_id, name, key_prefix, key_plaintext, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, created_at, updated_at
+RETURNING id, user_id, name, key_prefix, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, created_at, updated_at
 `
 
 type SetAPIKeyDisabledParams struct {
@@ -602,19 +590,18 @@ type SetAPIKeyDisabledParams struct {
 }
 
 type SetAPIKeyDisabledRow struct {
-	ID           int64
-	UserID       int64
-	Name         string
-	KeyPrefix    string
-	KeyPlaintext pgtype.Text
-	LastUsedAt   pgtype.Timestamptz
-	ExpiresAt    pgtype.Timestamptz
-	DisabledAt   pgtype.Timestamptz
-	RevokedAt    pgtype.Timestamptz
-	SpendLimit   pgtype.Numeric
-	SpentTotal   pgtype.Numeric
-	CreatedAt    pgtype.Timestamptz
-	UpdatedAt    pgtype.Timestamptz
+	ID         int64
+	UserID     int64
+	Name       string
+	KeyPrefix  string
+	LastUsedAt pgtype.Timestamptz
+	ExpiresAt  pgtype.Timestamptz
+	DisabledAt pgtype.Timestamptz
+	RevokedAt  pgtype.Timestamptz
+	SpendLimit pgtype.Numeric
+	SpentTotal pgtype.Numeric
+	CreatedAt  pgtype.Timestamptz
+	UpdatedAt  pgtype.Timestamptz
 }
 
 // SetAPIKeyDisabled 启停 API Key：disabled_at 置 now() 为停用，置 NULL 为启用。
@@ -626,7 +613,6 @@ func (q *Queries) SetAPIKeyDisabled(ctx context.Context, arg SetAPIKeyDisabledPa
 		&i.UserID,
 		&i.Name,
 		&i.KeyPrefix,
-		&i.KeyPlaintext,
 		&i.LastUsedAt,
 		&i.ExpiresAt,
 		&i.DisabledAt,
@@ -643,7 +629,7 @@ const setAPIKeyExpiresAt = `-- name: SetAPIKeyExpiresAt :one
 UPDATE api_keys
 SET expires_at = $1, updated_at = now()
 WHERE id = $2
-RETURNING id, user_id, name, key_prefix, key_plaintext, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, created_at, updated_at
+RETURNING id, user_id, name, key_prefix, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, created_at, updated_at
 `
 
 type SetAPIKeyExpiresAtParams struct {
@@ -652,19 +638,18 @@ type SetAPIKeyExpiresAtParams struct {
 }
 
 type SetAPIKeyExpiresAtRow struct {
-	ID           int64
-	UserID       int64
-	Name         string
-	KeyPrefix    string
-	KeyPlaintext pgtype.Text
-	LastUsedAt   pgtype.Timestamptz
-	ExpiresAt    pgtype.Timestamptz
-	DisabledAt   pgtype.Timestamptz
-	RevokedAt    pgtype.Timestamptz
-	SpendLimit   pgtype.Numeric
-	SpentTotal   pgtype.Numeric
-	CreatedAt    pgtype.Timestamptz
-	UpdatedAt    pgtype.Timestamptz
+	ID         int64
+	UserID     int64
+	Name       string
+	KeyPrefix  string
+	LastUsedAt pgtype.Timestamptz
+	ExpiresAt  pgtype.Timestamptz
+	DisabledAt pgtype.Timestamptz
+	RevokedAt  pgtype.Timestamptz
+	SpendLimit pgtype.Numeric
+	SpentTotal pgtype.Numeric
+	CreatedAt  pgtype.Timestamptz
+	UpdatedAt  pgtype.Timestamptz
 }
 
 // SetAPIKeyExpiresAt 设置/清除 API Key 过期时间；expires_at 为 NULL 表示永不过期。
@@ -676,7 +661,6 @@ func (q *Queries) SetAPIKeyExpiresAt(ctx context.Context, arg SetAPIKeyExpiresAt
 		&i.UserID,
 		&i.Name,
 		&i.KeyPrefix,
-		&i.KeyPlaintext,
 		&i.LastUsedAt,
 		&i.ExpiresAt,
 		&i.DisabledAt,
@@ -693,7 +677,7 @@ const setAPIKeyName = `-- name: SetAPIKeyName :one
 UPDATE api_keys
 SET name = $1, updated_at = now()
 WHERE id = $2
-RETURNING id, user_id, name, key_prefix, key_plaintext, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, created_at, updated_at
+RETURNING id, user_id, name, key_prefix, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, created_at, updated_at
 `
 
 type SetAPIKeyNameParams struct {
@@ -702,19 +686,18 @@ type SetAPIKeyNameParams struct {
 }
 
 type SetAPIKeyNameRow struct {
-	ID           int64
-	UserID       int64
-	Name         string
-	KeyPrefix    string
-	KeyPlaintext pgtype.Text
-	LastUsedAt   pgtype.Timestamptz
-	ExpiresAt    pgtype.Timestamptz
-	DisabledAt   pgtype.Timestamptz
-	RevokedAt    pgtype.Timestamptz
-	SpendLimit   pgtype.Numeric
-	SpentTotal   pgtype.Numeric
-	CreatedAt    pgtype.Timestamptz
-	UpdatedAt    pgtype.Timestamptz
+	ID         int64
+	UserID     int64
+	Name       string
+	KeyPrefix  string
+	LastUsedAt pgtype.Timestamptz
+	ExpiresAt  pgtype.Timestamptz
+	DisabledAt pgtype.Timestamptz
+	RevokedAt  pgtype.Timestamptz
+	SpendLimit pgtype.Numeric
+	SpentTotal pgtype.Numeric
+	CreatedAt  pgtype.Timestamptz
+	UpdatedAt  pgtype.Timestamptz
 }
 
 // SetAPIKeyName 更新 API Key 名称。
@@ -726,7 +709,6 @@ func (q *Queries) SetAPIKeyName(ctx context.Context, arg SetAPIKeyNameParams) (S
 		&i.UserID,
 		&i.Name,
 		&i.KeyPrefix,
-		&i.KeyPlaintext,
 		&i.LastUsedAt,
 		&i.ExpiresAt,
 		&i.DisabledAt,
@@ -743,7 +725,7 @@ const setAPIKeySpendLimit = `-- name: SetAPIKeySpendLimit :one
 UPDATE api_keys
 SET spend_limit = $1, updated_at = now()
 WHERE id = $2
-RETURNING id, user_id, name, key_prefix, key_plaintext, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, created_at, updated_at
+RETURNING id, user_id, name, key_prefix, last_used_at, expires_at, disabled_at, revoked_at, spend_limit, spent_total, created_at, updated_at
 `
 
 type SetAPIKeySpendLimitParams struct {
@@ -752,19 +734,18 @@ type SetAPIKeySpendLimitParams struct {
 }
 
 type SetAPIKeySpendLimitRow struct {
-	ID           int64
-	UserID       int64
-	Name         string
-	KeyPrefix    string
-	KeyPlaintext pgtype.Text
-	LastUsedAt   pgtype.Timestamptz
-	ExpiresAt    pgtype.Timestamptz
-	DisabledAt   pgtype.Timestamptz
-	RevokedAt    pgtype.Timestamptz
-	SpendLimit   pgtype.Numeric
-	SpentTotal   pgtype.Numeric
-	CreatedAt    pgtype.Timestamptz
-	UpdatedAt    pgtype.Timestamptz
+	ID         int64
+	UserID     int64
+	Name       string
+	KeyPrefix  string
+	LastUsedAt pgtype.Timestamptz
+	ExpiresAt  pgtype.Timestamptz
+	DisabledAt pgtype.Timestamptz
+	RevokedAt  pgtype.Timestamptz
+	SpendLimit pgtype.Numeric
+	SpentTotal pgtype.Numeric
+	CreatedAt  pgtype.Timestamptz
+	UpdatedAt  pgtype.Timestamptz
 }
 
 // SetAPIKeySpendLimit 设置/清除 API Key 费用上限；spend_limit 为 NULL 表示不限额。
@@ -776,7 +757,6 @@ func (q *Queries) SetAPIKeySpendLimit(ctx context.Context, arg SetAPIKeySpendLim
 		&i.UserID,
 		&i.Name,
 		&i.KeyPrefix,
-		&i.KeyPlaintext,
 		&i.LastUsedAt,
 		&i.ExpiresAt,
 		&i.DisabledAt,

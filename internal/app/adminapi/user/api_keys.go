@@ -49,14 +49,13 @@ type APIKeyService interface {
 	Delete(ctx context.Context, id int64) error
 }
 
-// apiKeyDTO 是 API Key 响应体；含完整明文 key 供多次复制（产品决策），绝不含 key_hash。
+// apiKeyDTO 是 API Key 响应体，既不含明文也不含 key_hash。
+// 明文只出现在 createdAPIKeyDTO——即创建接口的 201 响应，此后任何接口都取不回。
 type apiKeyDTO struct {
-	ID        int64  `json:"id"`
-	UserID    int64  `json:"user_id"`
-	Name      string `json:"name"`
-	KeyPrefix string `json:"key_prefix"`
-	// Plaintext 是完整明文 key（产品决策：留存供多次复制）；null 表示历史 key 不可回显。
-	Plaintext  *string `json:"plaintext"`
+	ID         int64   `json:"id"`
+	UserID     int64   `json:"user_id"`
+	Name       string  `json:"name"`
+	KeyPrefix  string  `json:"key_prefix"`
 	Status     string  `json:"status"`
 	SpendLimit *string `json:"spend_limit"`
 	SpentTotal string  `json:"spent_total"`
@@ -67,6 +66,14 @@ type apiKeyDTO struct {
 	RevokedAt  *string `json:"revoked_at"`
 	CreatedAt  string  `json:"created_at"`
 	UpdatedAt  string  `json:"updated_at"`
+}
+
+// createdAPIKeyDTO 只用于创建接口的 201 响应。
+// plaintext 单独挂在这里而不是放进 apiKeyDTO，是为了让契约自己说清楚：
+// 明文只有这一次机会，客户端在别处看到的永远是 key_prefix。
+type createdAPIKeyDTO struct {
+	apiKeyDTO
+	Plaintext string `json:"plaintext"`
 }
 
 type createAPIKeyRequest struct {
@@ -123,10 +130,11 @@ func (h *apiKeysHandler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dto := toAPIKeyDTO(created.APIKey)
-	// 创建结果以服务返回的权威明文为准（也已落库供后续多次复制）。
-	dto.Plaintext = &created.Plaintext
-	adminhttp.WriteData(w, http.StatusCreated, dto)
+	// 明文不落库，这个响应是客户端唯一一次拿到它的机会。
+	adminhttp.WriteData(w, http.StatusCreated, createdAPIKeyDTO{
+		apiKeyDTO: toAPIKeyDTO(created.APIKey),
+		Plaintext: created.Plaintext,
+	})
 }
 
 // update 更新 API Key 的启停与费用上限。
@@ -213,7 +221,6 @@ func toAPIKeyDTO(k customer.APIKey) apiKeyDTO {
 		UserID:     k.UserID,
 		Name:       k.Name,
 		KeyPrefix:  k.KeyPrefix,
-		Plaintext:  k.KeyPlaintext,
 		Status:     k.Status,
 		SpendLimit: k.SpendLimit,
 		SpentTotal: k.SpentTotal,

@@ -81,7 +81,6 @@ SELECT
     r.service_tier_resolution,
     ak.name AS api_key_name,
     ak.key_prefix AS api_key_prefix,
-    ak.key_plaintext AS api_key_plaintext,
     COALESCE(ur.uncached_input_tokens, 0)::bigint AS uncached_input_tokens,
     COALESCE(ur.cache_read_input_tokens, 0)::bigint AS cache_read_input_tokens,
     COALESCE(ur.cache_write_5m_input_tokens, 0)::bigint AS cache_write_5m_input_tokens,

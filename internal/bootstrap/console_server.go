@@ -14,6 +14,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 	"github.com/ThankCat/unio-gateway/internal/service/appsettings"
 	consoleservice "github.com/ThankCat/unio-gateway/internal/service/console"
+	consoleapikeys "github.com/ThankCat/unio-gateway/internal/service/console/apikeys"
 	consoleauth "github.com/ThankCat/unio-gateway/internal/service/console/auth"
 	consolerequests "github.com/ThankCat/unio-gateway/internal/service/console/requests"
 	consoleusage "github.com/ThankCat/unio-gateway/internal/service/console/usage"
@@ -125,6 +126,7 @@ func NewConsoleServerApp(ctx context.Context, deps ConsoleServerAppDeps) (*Conso
 		AuthService:    authService,
 		RequestService: consolerequests.NewService(queries),
 		UsageService:   consoleusage.NewService(queries),
+		APIKeyService:  consoleapikeys.NewService(queries),
 	})
 	if err != nil {
 		_ = tracerProvider.Shutdown(ctx)

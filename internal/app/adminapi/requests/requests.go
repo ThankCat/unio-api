@@ -96,10 +96,9 @@ type requestListItemDTO struct {
 	RechargeFactor        *string `json:"recharge_factor"`
 	// LongContextApplied 费用是否已按长上下文倍率结算。
 	LongContextApplied bool `json:"long_context_applied"`
-	// 用户/Key（明文供列表点击复制，口径同 api-keys 页）。
+	// 用户/Key 展示口径同 api-keys 页：只给名称和前缀，明文不落库也就无从回显。
 	ApiKeyName            *string  `json:"api_key_name"`
 	ApiKeyPrefix          *string  `json:"api_key_prefix"`
-	ApiKeyPlaintext       *string  `json:"api_key_plaintext"`
 	SalePriceRatio        *string  `json:"sale_price_ratio"`
 	FinalChannelName      *string  `json:"final_channel_name"`
 	ChannelChain          string   `json:"channel_chain"`
@@ -418,9 +417,8 @@ func toRequestListItemDTO(item query.RequestListItem) requestListItemDTO {
 		RechargeFactor:        item.RechargeFactor,
 		LongContextApplied:    item.LongContextApplied,
 
-		ApiKeyName:      item.APIKeyName,
-		ApiKeyPrefix:    item.APIKeyPrefix,
-		ApiKeyPlaintext: item.APIKeyPlaintext,
+		ApiKeyName:   item.APIKeyName,
+		ApiKeyPrefix: item.APIKeyPrefix,
 
 		SalePriceRatio:        item.SalePriceRatio,
 		FinalChannelName:      item.FinalChannelName,

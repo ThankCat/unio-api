@@ -48,7 +48,6 @@ type Item struct {
 	APIKeyID                  int64
 	APIKeyName                string
 	APIKeyPrefix              string
-	APIKeyPlaintext           *string
 	Endpoint                  string
 	Stream                    bool
 	RequestedModelID          string
@@ -364,7 +363,6 @@ func toItem(row sqlc.ListConsoleBilledRequestsRow) Item {
 		APIKeyID:                  row.ApiKeyID,
 		APIKeyName:                textValue(row.ApiKeyName),
 		APIKeyPrefix:              textValue(row.ApiKeyPrefix),
-		APIKeyPlaintext:           textPtr(row.ApiKeyPlaintext),
 		Endpoint:                  PublicEndpoint(row.Endpoint),
 		Stream:                    row.Stream,
 		RequestedModelID:          row.RequestedModelID,

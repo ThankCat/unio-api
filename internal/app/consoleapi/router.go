@@ -7,6 +7,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/zap"
 
+	consoleapikeys "github.com/ThankCat/unio-gateway/internal/app/consoleapi/apikeys"
 	consoleauth "github.com/ThankCat/unio-gateway/internal/app/consoleapi/auth"
 	consolemiddleware "github.com/ThankCat/unio-gateway/internal/app/consoleapi/middleware"
 	consolerequests "github.com/ThankCat/unio-gateway/internal/app/consoleapi/requests"
@@ -24,6 +25,7 @@ type Deps struct {
 	AuthService    consoleauth.Service
 	RequestService consolerequests.Service
 	UsageService   consoleusage.Service
+	APIKeyService  consoleapikeys.Service
 }
 
 // NewRouter 构建公开的 Console API 路由及其公共中间件。
@@ -66,7 +68,7 @@ func NewRouter(deps Deps) (http.Handler, error) {
 			Service:      deps.AuthService,
 			ErrorWriter:  errorWriter,
 		})
-		if deps.RequestService != nil || deps.UsageService != nil {
+		if deps.RequestService != nil || deps.UsageService != nil || deps.APIKeyService != nil {
 			r.Group(func(r chi.Router) {
 				r.Use(consoleauth.RequireAuth(deps.AuthService, errorWriter))
 				if deps.RequestService != nil {
@@ -78,6 +80,12 @@ func NewRouter(deps Deps) (http.Handler, error) {
 				if deps.UsageService != nil {
 					consoleusage.Register(r, consoleusage.Deps{
 						Service:     deps.UsageService,
+						ErrorWriter: errorWriter,
+					})
+				}
+				if deps.APIKeyService != nil {
+					consoleapikeys.Register(r, consoleapikeys.Deps{
+						Service:     deps.APIKeyService,
 						ErrorWriter: errorWriter,
 					})
 				}

@@ -9,20 +9,21 @@ import (
 )
 
 type ApiKey struct {
-	ID           int64
-	Name         string
-	KeyPrefix    string
-	KeyHash      string
-	KeyPlaintext pgtype.Text
-	LastUsedAt   pgtype.Timestamptz
-	ExpiresAt    pgtype.Timestamptz
-	DisabledAt   pgtype.Timestamptz
-	RevokedAt    pgtype.Timestamptz
-	CreatedAt    pgtype.Timestamptz
-	UpdatedAt    pgtype.Timestamptz
-	SpendLimit   pgtype.Numeric
-	SpentTotal   pgtype.Numeric
-	UserID       int64
+	ID   int64
+	Name string
+	// API Key 明文前缀（sk_unio_ + 前 8 位随机）。明文不落库，识别与搜索都依赖这一列。
+	KeyPrefix string
+	// API Key 明文的 SHA-256，认证唯一依据。明文只在创建响应里返回一次，此后无法从任何接口取回。
+	KeyHash    string
+	LastUsedAt pgtype.Timestamptz
+	ExpiresAt  pgtype.Timestamptz
+	DisabledAt pgtype.Timestamptz
+	RevokedAt  pgtype.Timestamptz
+	CreatedAt  pgtype.Timestamptz
+	UpdatedAt  pgtype.Timestamptz
+	SpendLimit pgtype.Numeric
+	SpentTotal pgtype.Numeric
+	UserID     int64
 }
 
 type AppSetting struct {
