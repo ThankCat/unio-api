@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS public.idx_routing_decision_traces_model_created;

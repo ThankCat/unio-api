@@ -41,6 +41,7 @@ import (
 	modelcatalogadmin "github.com/ThankCat/unio-gateway/internal/service/admin/modelcatalog"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/modelops"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/modelprice"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/modelrouting"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/provider"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/providerbalance"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/providerops"
@@ -49,6 +50,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/service/admin/runtimediagnostics"
 	"github.com/ThankCat/unio-gateway/internal/service/appsettings"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/readiness"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/runtimefacts"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -209,7 +211,7 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		deps.DB, queries, adapterRegistry, adapterRegistry, providerLedgerService, settingsStore,
 	)
 	channelPriceService := channelprice.NewService(queries)
-	modelPriceService := modelprice.NewService(queries)
+	modelPriceService := modelprice.NewService(queries, deps.DB, queries)
 	// DEC-027 渠道成本倍率：渠道价格倍率 / 渠道充值倍率，均复用同一 sqlc Queries。
 	channelCostMultiplierService := channelcostmultiplier.NewService(queries)
 	channelRechargeFactorService := channelrechargefactor.NewService(queries)
@@ -244,6 +246,17 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 
 	// M9 工作台看板：复用同一 sqlc Queries 做只读聚合（KPI 概览 + 时间序列）。
 	dashboardService := dashboard.NewService(queries)
+
+	// 选路观测（ADR-0020 移除 Route 后补回的候选排序与流量分布视图）。
+	// Redis 不可用时仍然构造：统计类接口只读 PG，实时视图会如实报告运行态不可用。
+	var modelRoutingService *modelrouting.Service
+	if sharedBreakerStore != nil {
+		modelRoutingService = modelrouting.NewService(
+			queries, runtimefacts.NewReader(queries), sharedBreakerStore, sharedBreakerStore,
+		)
+	} else {
+		modelRoutingService = modelrouting.NewService(queries, nil, nil, nil)
+	}
 
 	// M8 系统/任务/健康：结算补偿任务只读视图，复用同一 sqlc Queries。
 	recoveryJobQueryService := query.NewRecoveryService(queries)
@@ -287,6 +300,7 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		ChannelOpsService:            channelOpsService,
 		ModelService:                 modelService,
 		ModelOpsService:              modelOpsService,
+		ModelRoutingService:          modelRoutingService,
 		ChannelModelService:          channelModelService,
 		ChannelModelInventoryService: channelModelInventoryService,
 		ChannelPriceService:          channelPriceService,
@@ -310,7 +324,8 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 
 		CatalogService: modelCatalogAdminService,
 
-		DashboardService: dashboardService,
+		DashboardService:   dashboardService,
+		LiveTrafficService: modelRoutingService,
 
 		RecoveryJobQueryService:   recoveryJobQueryService,
 		RuntimeDiagnosticsService: runtimeDiagnosticsService,

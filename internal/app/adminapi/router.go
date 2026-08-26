@@ -52,6 +52,7 @@ type RouterDeps struct {
 	ChannelOpsService            channel.ChannelOpsService
 	ModelService                 model.ModelService
 	ModelOpsService              model.ModelOpsService
+	ModelRoutingService          model.ModelRoutingService
 	ChannelModelService          channel.ChannelModelService
 	ChannelModelInventoryService channel.ChannelModelInventoryService
 
@@ -86,6 +87,8 @@ type RouterDeps struct {
 
 	// M9 工作台看板：首屏概览雷达 + 时间序列（只读聚合）
 	DashboardService overview.DashboardService
+	// 实时流量：Redis 运行态秒级快照，与上面的历史聚合不是同一时间尺度
+	LiveTrafficService overview.LiveTrafficService
 
 	// M8 系统/任务/健康（横切）：结算补偿任务只读视图
 	RecoveryJobQueryService   system.RecoveryJobQueryService
@@ -155,7 +158,10 @@ func NewRouter(deps RouterDeps) http.Handler {
 			r.Post("/logout", handleLogout(deps.Sessions))
 
 			// 各业务模块自注册路由（chi 按静态优先于通配匹配，模块注册顺序不影响正确性）。
-			overview.Register(r, overview.Deps{Service: deps.DashboardService})
+			overview.Register(r, overview.Deps{
+				Service:     deps.DashboardService,
+				LiveTraffic: deps.LiveTrafficService,
+			})
 			provider.Register(r, provider.Deps{
 				Service:        deps.ProviderService,
 				OpsService:     deps.ProviderOpsService,
@@ -178,6 +184,7 @@ func NewRouter(deps RouterDeps) http.Handler {
 				OpsService:     deps.ModelOpsService,
 				PriceService:   deps.ModelPriceService,
 				CatalogService: deps.CatalogService,
+				RoutingService: deps.ModelRoutingService,
 			})
 			capability.Register(r, capability.Deps{
 				Service:     deps.CapabilityService,

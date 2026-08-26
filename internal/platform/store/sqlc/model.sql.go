@@ -1667,9 +1667,20 @@ SELECT
     COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY
         CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
              THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p50,
+    COALESCE(percentile_cont(0.9) WITHIN GROUP (ORDER BY
+        CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p90,
     COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
         CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
              THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p95,
+    COALESCE(percentile_cont(0.99) WITHIN GROUP (ORDER BY
+        CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p99,
+    -- Gateway TTFT 只对流式请求有意义（口径同 overview.sql）：非流式没有首 token 时刻。
+    COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
+        CASE WHEN r.stream = TRUE AND r.gateway_first_token_at IS NOT NULL
+             THEN (EXTRACT(EPOCH FROM (r.gateway_first_token_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS gateway_ttft_p95,
+    COUNT(*) FILTER (WHERE r.stream = TRUE AND r.gateway_first_token_at IS NOT NULL) AS gateway_ttft_sample,
     COALESCE(SUM(u.output_tokens_total) FILTER (WHERE r.status = 'succeeded'), 0)::bigint AS output_tokens,
     COALESCE(SUM(u.uncached_input_tokens + u.cache_read_input_tokens + u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens + u.cache_write_30m_input_tokens), 0)::bigint AS input_tokens,
     COALESCE(SUM(u.cache_read_input_tokens), 0)::bigint AS cache_read_tokens,
@@ -1743,7 +1754,11 @@ type ModelOpsDetailRow struct {
 	RequestSucceeded  int64
 	LatencyAvg        float64
 	LatencyP50        float64
+	LatencyP90        float64
 	LatencyP95        float64
+	LatencyP99        float64
+	GatewayTtftP95    float64
+	GatewayTtftSample int64
 	OutputTokens      int64
 	InputTokens       int64
 	CacheReadTokens   int64
@@ -1765,7 +1780,11 @@ func (q *Queries) ModelOpsDetail(ctx context.Context, arg ModelOpsDetailParams) 
 		&i.RequestSucceeded,
 		&i.LatencyAvg,
 		&i.LatencyP50,
+		&i.LatencyP90,
 		&i.LatencyP95,
+		&i.LatencyP99,
+		&i.GatewayTtftP95,
+		&i.GatewayTtftSample,
 		&i.OutputTokens,
 		&i.InputTokens,
 		&i.CacheReadTokens,
@@ -1780,21 +1799,122 @@ func (q *Queries) ModelOpsDetail(ctx context.Context, arg ModelOpsDetailParams) 
 	return i, err
 }
 
-const modelOpsPerformanceTimeseries = `-- name: ModelOpsPerformanceTimeseries :many
+const modelOpsErrors = `-- name: ModelOpsErrors :many
 SELECT
-    date_trunc($1::text, r.created_at)::timestamptz AS bucket,
-    COUNT(*) FILTER (WHERE r.status IN ('succeeded', 'failed')) AS request_total,
-    COUNT(*) FILTER (WHERE r.status = 'succeeded') AS request_succeeded,
-    COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
-        CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
-             THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p95
+    COALESCE(NULLIF(r.error_code, ''), 'unknown')::text AS error_code,
+    COUNT(*) AS occurrences,
+    MAX(r.created_at)::timestamptz AS last_seen_at,
+    ((array_agg(r.request_id ORDER BY r.created_at DESC))[1])::text AS sample_request_id,
+    COUNT(DISTINCT r.final_channel_id) AS channels_touched
 FROM request_records r
 JOIN models m ON m.model_id = r.requested_model_id
-WHERE m.id = $2
-  AND ($3::timestamptz IS NULL OR r.created_at >= $3::timestamptz)
-  AND ($4::timestamptz IS NULL OR r.created_at < $4::timestamptz)
-GROUP BY bucket
-ORDER BY bucket
+WHERE m.id = $1
+  AND r.status = 'failed'
+  AND ($2::timestamptz IS NULL OR r.created_at >= $2::timestamptz)
+  AND ($3::timestamptz IS NULL OR r.created_at < $3::timestamptz)
+GROUP BY 1
+ORDER BY occurrences DESC, last_seen_at DESC
+`
+
+type ModelOpsErrorsParams struct {
+	ModelID  int64
+	FromTime pgtype.Timestamptz
+	ToTime   pgtype.Timestamptz
+}
+
+type ModelOpsErrorsRow struct {
+	ErrorCode       string
+	Occurrences     int64
+	LastSeenAt      pgtype.Timestamptz
+	SampleRequestID string
+	ChannelsTouched int64
+}
+
+// ModelOpsErrors 单模型失败请求按 error_code 聚合（排障分区）。
+// 与 ModelOpsRequests 互补：明细回答「这一笔怎么了」，聚合回答「主要错在哪」。
+// 口径同其余模型 ops 查询：request 粒度，失败即 status = 'failed'。
+// 错误码为空归一到 'unknown'，否则每条失败自成一组，聚合表退化成明细表。
+// 错误码种类有限，不分页；占比由调用方按总数换算。
+func (q *Queries) ModelOpsErrors(ctx context.Context, arg ModelOpsErrorsParams) ([]ModelOpsErrorsRow, error) {
+	rows, err := q.db.Query(ctx, modelOpsErrors, arg.ModelID, arg.FromTime, arg.ToTime)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ModelOpsErrorsRow
+	for rows.Next() {
+		var i ModelOpsErrorsRow
+		if err := rows.Scan(
+			&i.ErrorCode,
+			&i.Occurrences,
+			&i.LastSeenAt,
+			&i.SampleRequestID,
+			&i.ChannelsTouched,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const modelOpsPerformanceTimeseries = `-- name: ModelOpsPerformanceTimeseries :many
+WITH requests AS (
+    SELECT
+        date_trunc($1::text, r.created_at)::timestamptz AS bucket,
+        COUNT(*) FILTER (WHERE r.status IN ('succeeded', 'failed')) AS request_total,
+        COUNT(*) FILTER (WHERE r.status = 'succeeded') AS request_succeeded,
+        COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
+            CASE WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
+                 THEN (EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p95
+    FROM request_records r
+    JOIN models m ON m.model_id = r.requested_model_id
+    WHERE m.id = $2
+      AND ($3::timestamptz IS NULL OR r.created_at >= $3::timestamptz)
+      AND ($4::timestamptz IS NULL OR r.created_at < $4::timestamptz)
+    GROUP BY 1
+), revenue AS (
+    SELECT
+        date_trunc($1::text, le.created_at)::timestamptz AS bucket,
+        SUM(le.amount) AS revenue_usd
+    FROM ledger_entries le
+    JOIN request_records rr ON rr.id = le.request_record_id
+    JOIN models m2 ON m2.model_id = rr.requested_model_id
+    WHERE le.entry_type = 'debit' AND le.currency = 'USD' AND m2.id = $2
+      AND ($3::timestamptz IS NULL OR le.created_at >= $3::timestamptz)
+      AND ($4::timestamptz IS NULL OR le.created_at < $4::timestamptz)
+    GROUP BY 1
+), costs AS (
+    SELECT
+        date_trunc($1::text, cs.created_at)::timestamptz AS bucket,
+        SUM(cs.total_cost_amount) AS cost_usd
+    FROM cost_snapshots cs
+    WHERE cs.model_id = $2 AND cs.currency = 'USD'
+      AND ($3::timestamptz IS NULL OR cs.created_at >= $3::timestamptz)
+      AND ($4::timestamptz IS NULL OR cs.created_at < $4::timestamptz)
+    GROUP BY 1
+), all_buckets AS (
+    SELECT bucket FROM requests
+    UNION
+    SELECT bucket FROM revenue
+    UNION
+    SELECT bucket FROM costs
+)
+SELECT
+    b.bucket,
+    COALESCE(rq.request_total, 0)::bigint AS request_total,
+    COALESCE(rq.request_succeeded, 0)::bigint AS request_succeeded,
+    COALESCE(rq.latency_p95, 0)::float8 AS latency_p95,
+    COALESCE(rv.revenue_usd, 0)::numeric AS revenue_usd,
+    COALESCE(ct.cost_usd, 0)::numeric AS cost_usd
+FROM all_buckets b
+LEFT JOIN requests rq ON rq.bucket = b.bucket
+LEFT JOIN revenue rv ON rv.bucket = b.bucket
+LEFT JOIN costs ct ON ct.bucket = b.bucket
+ORDER BY b.bucket
 `
 
 type ModelOpsPerformanceTimeseriesParams struct {
@@ -1809,8 +1929,15 @@ type ModelOpsPerformanceTimeseriesRow struct {
 	RequestTotal     int64
 	RequestSucceeded int64
 	LatencyP95       float64
+	RevenueUsd       pgtype.Numeric
+	CostUsd          pgtype.Numeric
 }
 
+// ModelOpsPerformanceTimeseries 单模型分桶时序：请求量、P95 延迟与收入/成本。
+//
+// 收入与成本各按自己的时间戳分桶，与 ModelOpsDetail 的过滤口径逐字一致，
+// 这样时序求和等于概览数值；若不一致，页头和图表会互相打脸。
+// 三者的桶取并集：结算可能落在请求所在桶的下一桶，用 UNION 保证那部分金额不被丢掉。
 func (q *Queries) ModelOpsPerformanceTimeseries(ctx context.Context, arg ModelOpsPerformanceTimeseriesParams) ([]ModelOpsPerformanceTimeseriesRow, error) {
 	rows, err := q.db.Query(ctx, modelOpsPerformanceTimeseries,
 		arg.Unit,
@@ -1830,6 +1957,8 @@ func (q *Queries) ModelOpsPerformanceTimeseries(ctx context.Context, arg ModelOp
 			&i.RequestTotal,
 			&i.RequestSucceeded,
 			&i.LatencyP95,
+			&i.RevenueUsd,
+			&i.CostUsd,
 		); err != nil {
 			return nil, err
 		}
@@ -2018,10 +2147,15 @@ SELECT
     base.cache_write_30m_input_price AS base_cache_write_30m_input_price,
     base.output_price AS base_output_price,
     base.reasoning_output_price AS base_reasoning_output_price,
-    -- 售价：绝对售价整组非空时直接生效，否则基准价 × sale_price_ratio。两者至少有一个。
+    -- 售价：绝对售价整组非空时整组覆盖，否则基准价 × sale_price_ratio。两套实体可共存，不能混算。
     base.sale_price_ratio AS base_sale_price_ratio,
     base.sale_uncached_input_price AS base_sale_uncached_input_price,
+    base.sale_cache_read_input_price AS base_sale_cache_read_input_price,
+    base.sale_cache_write_5m_input_price AS base_sale_cache_write_5m_input_price,
+    base.sale_cache_write_1h_input_price AS base_sale_cache_write_1h_input_price,
+    base.sale_cache_write_30m_input_price AS base_sale_cache_write_30m_input_price,
     base.sale_output_price AS base_sale_output_price,
+    base.sale_reasoning_output_price AS base_sale_reasoning_output_price,
     -- 长上下文阶梯：LEFT JOIN 无基准价时 COALESCE 为 false，避免 sqlc 扫 NULL 进 bool。
     COALESCE(base.long_context_enabled, false) AS base_long_context_enabled,
     base.long_context_threshold AS base_long_context_threshold,
@@ -2034,7 +2168,14 @@ SELECT
     base.fast_cache_write_1h_input_price AS base_fast_cache_write_1h_input_price,
     base.fast_cache_write_30m_input_price AS base_fast_cache_write_30m_input_price,
     base.fast_output_price AS base_fast_output_price,
-    base.fast_reasoning_output_price AS base_fast_reasoning_output_price
+    base.fast_reasoning_output_price AS base_fast_reasoning_output_price,
+    base.fast_sale_uncached_input_price AS base_fast_sale_uncached_input_price,
+    base.fast_sale_cache_read_input_price AS base_fast_sale_cache_read_input_price,
+    base.fast_sale_cache_write_5m_input_price AS base_fast_sale_cache_write_5m_input_price,
+    base.fast_sale_cache_write_1h_input_price AS base_fast_sale_cache_write_1h_input_price,
+    base.fast_sale_cache_write_30m_input_price AS base_fast_sale_cache_write_30m_input_price,
+    base.fast_sale_output_price AS base_fast_sale_output_price,
+    base.fast_sale_reasoning_output_price AS base_fast_sale_reasoning_output_price
 FROM models m
 LEFT JOIN LATERAL (
     -- base: 模型当前生效的基准售价（mirror FindRouteCandidates 的 base LATERAL）；LEFT 保证无基准价的模型仍出现在列表。
@@ -2043,7 +2184,13 @@ LEFT JOIN LATERAL (
         mp.cache_write_30m_input_price,
         mp.output_price, mp.reasoning_output_price,
         mp.sale_price_ratio,
-        mp.sale_uncached_input_price, mp.sale_output_price,
+        mp.sale_uncached_input_price,
+        mp.sale_cache_read_input_price,
+        mp.sale_cache_write_5m_input_price,
+        mp.sale_cache_write_1h_input_price,
+        mp.sale_cache_write_30m_input_price,
+        mp.sale_output_price,
+        mp.sale_reasoning_output_price,
         mp.long_context_enabled, mp.long_context_threshold,
         mp.long_context_input_multiplier, mp.long_context_output_multiplier,
         fast.id IS NOT NULL AS fast_price_configured,
@@ -2053,7 +2200,14 @@ LEFT JOIN LATERAL (
         fast.cache_write_1h_input_price AS fast_cache_write_1h_input_price,
         fast.cache_write_30m_input_price AS fast_cache_write_30m_input_price,
         fast.output_price AS fast_output_price,
-        fast.reasoning_output_price AS fast_reasoning_output_price
+        fast.reasoning_output_price AS fast_reasoning_output_price,
+        fast.sale_uncached_input_price AS fast_sale_uncached_input_price,
+        fast.sale_cache_read_input_price AS fast_sale_cache_read_input_price,
+        fast.sale_cache_write_5m_input_price AS fast_sale_cache_write_5m_input_price,
+        fast.sale_cache_write_1h_input_price AS fast_sale_cache_write_1h_input_price,
+        fast.sale_cache_write_30m_input_price AS fast_sale_cache_write_30m_input_price,
+        fast.sale_output_price AS fast_sale_output_price,
+        fast.sale_reasoning_output_price AS fast_sale_reasoning_output_price
     FROM model_prices mp
     LEFT JOIN model_price_service_tiers fast
       ON fast.model_price_id = mp.id AND fast.service_tier = 'fast'
@@ -2144,43 +2298,55 @@ type ModelsOpsTableParams struct {
 }
 
 type ModelsOpsTableRow struct {
-	ID                              int64
-	ModelID                         string
-	DisplayName                     string
-	OwnedBy                         string
-	Status                          string
-	Family                          string
-	DisabledReason                  pgtype.Text
-	CreatedAt                       pgtype.Timestamptz
-	MaxOutputTokens                 pgtype.Int8
-	ContextWindowTokens             pgtype.Int8
-	BindingsTotal                   int64
-	BindingsAvailable               int64
-	CapabilitiesDeclaredCount       int64
-	HasPrice                        bool
-	BaseCurrency                    interface{}
-	BaseUncachedInputPrice          pgtype.Numeric
-	BaseCacheReadInputPrice         pgtype.Numeric
-	BaseCacheWrite5mInputPrice      pgtype.Numeric
-	BaseCacheWrite1hInputPrice      pgtype.Numeric
-	BaseCacheWrite30mInputPrice     pgtype.Numeric
-	BaseOutputPrice                 pgtype.Numeric
-	BaseReasoningOutputPrice        pgtype.Numeric
-	BaseSalePriceRatio              pgtype.Numeric
-	BaseSaleUncachedInputPrice      pgtype.Numeric
-	BaseSaleOutputPrice             pgtype.Numeric
-	BaseLongContextEnabled          bool
-	BaseLongContextThreshold        pgtype.Int8
-	BaseLongContextInputMultiplier  pgtype.Numeric
-	BaseLongContextOutputMultiplier pgtype.Numeric
-	BaseFastPriceConfigured         bool
-	BaseFastUncachedInputPrice      pgtype.Numeric
-	BaseFastCacheReadInputPrice     pgtype.Numeric
-	BaseFastCacheWrite5mInputPrice  pgtype.Numeric
-	BaseFastCacheWrite1hInputPrice  pgtype.Numeric
-	BaseFastCacheWrite30mInputPrice pgtype.Numeric
-	BaseFastOutputPrice             pgtype.Numeric
-	BaseFastReasoningOutputPrice    pgtype.Numeric
+	ID                                  int64
+	ModelID                             string
+	DisplayName                         string
+	OwnedBy                             string
+	Status                              string
+	Family                              string
+	DisabledReason                      pgtype.Text
+	CreatedAt                           pgtype.Timestamptz
+	MaxOutputTokens                     pgtype.Int8
+	ContextWindowTokens                 pgtype.Int8
+	BindingsTotal                       int64
+	BindingsAvailable                   int64
+	CapabilitiesDeclaredCount           int64
+	HasPrice                            bool
+	BaseCurrency                        interface{}
+	BaseUncachedInputPrice              pgtype.Numeric
+	BaseCacheReadInputPrice             pgtype.Numeric
+	BaseCacheWrite5mInputPrice          pgtype.Numeric
+	BaseCacheWrite1hInputPrice          pgtype.Numeric
+	BaseCacheWrite30mInputPrice         pgtype.Numeric
+	BaseOutputPrice                     pgtype.Numeric
+	BaseReasoningOutputPrice            pgtype.Numeric
+	BaseSalePriceRatio                  pgtype.Numeric
+	BaseSaleUncachedInputPrice          pgtype.Numeric
+	BaseSaleCacheReadInputPrice         pgtype.Numeric
+	BaseSaleCacheWrite5mInputPrice      pgtype.Numeric
+	BaseSaleCacheWrite1hInputPrice      pgtype.Numeric
+	BaseSaleCacheWrite30mInputPrice     pgtype.Numeric
+	BaseSaleOutputPrice                 pgtype.Numeric
+	BaseSaleReasoningOutputPrice        pgtype.Numeric
+	BaseLongContextEnabled              bool
+	BaseLongContextThreshold            pgtype.Int8
+	BaseLongContextInputMultiplier      pgtype.Numeric
+	BaseLongContextOutputMultiplier     pgtype.Numeric
+	BaseFastPriceConfigured             bool
+	BaseFastUncachedInputPrice          pgtype.Numeric
+	BaseFastCacheReadInputPrice         pgtype.Numeric
+	BaseFastCacheWrite5mInputPrice      pgtype.Numeric
+	BaseFastCacheWrite1hInputPrice      pgtype.Numeric
+	BaseFastCacheWrite30mInputPrice     pgtype.Numeric
+	BaseFastOutputPrice                 pgtype.Numeric
+	BaseFastReasoningOutputPrice        pgtype.Numeric
+	BaseFastSaleUncachedInputPrice      pgtype.Numeric
+	BaseFastSaleCacheReadInputPrice     pgtype.Numeric
+	BaseFastSaleCacheWrite5mInputPrice  pgtype.Numeric
+	BaseFastSaleCacheWrite1hInputPrice  pgtype.Numeric
+	BaseFastSaleCacheWrite30mInputPrice pgtype.Numeric
+	BaseFastSaleOutputPrice             pgtype.Numeric
+	BaseFastSaleReasoningOutputPrice    pgtype.Numeric
 }
 
 // §3.4 模型商品控制台只读运维聚合。
@@ -2229,7 +2395,12 @@ func (q *Queries) ModelsOpsTable(ctx context.Context, arg ModelsOpsTableParams) 
 			&i.BaseReasoningOutputPrice,
 			&i.BaseSalePriceRatio,
 			&i.BaseSaleUncachedInputPrice,
+			&i.BaseSaleCacheReadInputPrice,
+			&i.BaseSaleCacheWrite5mInputPrice,
+			&i.BaseSaleCacheWrite1hInputPrice,
+			&i.BaseSaleCacheWrite30mInputPrice,
 			&i.BaseSaleOutputPrice,
+			&i.BaseSaleReasoningOutputPrice,
 			&i.BaseLongContextEnabled,
 			&i.BaseLongContextThreshold,
 			&i.BaseLongContextInputMultiplier,
@@ -2242,6 +2413,13 @@ func (q *Queries) ModelsOpsTable(ctx context.Context, arg ModelsOpsTableParams) 
 			&i.BaseFastCacheWrite30mInputPrice,
 			&i.BaseFastOutputPrice,
 			&i.BaseFastReasoningOutputPrice,
+			&i.BaseFastSaleUncachedInputPrice,
+			&i.BaseFastSaleCacheReadInputPrice,
+			&i.BaseFastSaleCacheWrite5mInputPrice,
+			&i.BaseFastSaleCacheWrite1hInputPrice,
+			&i.BaseFastSaleCacheWrite30mInputPrice,
+			&i.BaseFastSaleOutputPrice,
+			&i.BaseFastSaleReasoningOutputPrice,
 		); err != nil {
 			return nil, err
 		}

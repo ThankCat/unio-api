@@ -16,6 +16,75 @@ import (
 // marginGuardConstraint 是毛利守卫的约束名；断言它而非错误文本，避免文案改动破坏测试。
 const marginGuardConstraint = "ck_non_negative_margin"
 
+// 只有基准价、没有售价的草稿行必须能落库，且不触发毛利守卫。
+// 可售门槛改由启用检查 / 路由排除守住，守卫不能把草稿当成亏本。
+func TestMarginGuardSkipsDraftBasePriceWithoutSale(t *testing.T) {
+	ctx, tx, queries, cleanup := newModelChannelTestTx(t)
+	defer cleanup()
+
+	suffix := time.Now().UnixNano()
+	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("margin-draft-%d", suffix), "enabled")
+	channelID := insertChannel(t, ctx, tx, providerID, fmt.Sprintf("margin-draft-channel-%d", suffix), "enabled", 10, nil)
+	modelID := insertModel(t, ctx, tx, fmt.Sprintf("openai/margin-draft-%d", suffix), "openai", "enabled")
+	insertChannelModel(t, ctx, tx, channelID, modelID, "margin-draft", "enabled")
+	now := time.Now().UTC()
+	createChannelPriceForTest(t, ctx, queries, channelID, modelID, now)
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO model_prices (
+			model_id, currency, pricing_unit, uncached_input_price, output_price, status, effective_from
+		) VALUES ($1, 'USD', 'per_1m_tokens', 100, 400, 'enabled', $2)
+	`, modelID, now.Add(-time.Hour)); err != nil {
+		t.Fatalf("insert draft base price: %v", err)
+	}
+
+	if _, err := tx.Exec(ctx, "SET CONSTRAINTS ALL IMMEDIATE"); err != nil {
+		t.Fatalf("draft base price without sale must skip margin guard, got %v", err)
+	}
+}
+
+// Fast 基准价跟着草稿行一起落库时，同样不能因为 Fast 售价解析不出而被拒。
+func TestMarginGuardSkipsDraftFastBaseWithoutSale(t *testing.T) {
+	ctx, tx, queries, cleanup := newModelChannelTestTx(t)
+	defer cleanup()
+
+	suffix := time.Now().UnixNano()
+	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("margin-draft-fast-%d", suffix), "enabled")
+	channelID := insertChannel(t, ctx, tx, providerID, fmt.Sprintf("margin-draft-fast-channel-%d", suffix), "enabled", 10, nil)
+	modelID := insertModel(t, ctx, tx, fmt.Sprintf("openai/margin-draft-fast-%d", suffix), "openai", "enabled")
+	insertChannelModel(t, ctx, tx, channelID, modelID, "margin-draft-fast", "enabled")
+	now := time.Now().UTC()
+	channelPrice := createChannelPriceForTest(t, ctx, queries, channelID, modelID, now)
+
+	var modelPriceID int64
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO model_prices (
+			model_id, currency, pricing_unit, uncached_input_price, output_price, status, effective_from
+		) VALUES ($1, 'USD', 'per_1m_tokens', 100, 400, 'enabled', $2)
+		RETURNING id
+	`, modelID, now.Add(-time.Hour)).Scan(&modelPriceID); err != nil {
+		t.Fatalf("insert draft base price: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO model_price_service_tiers (
+			model_price_id, service_tier, uncached_input_price, output_price
+		) VALUES ($1, 'fast', 100, 400)
+	`, modelPriceID); err != nil {
+		t.Fatalf("insert draft fast base: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO channel_price_service_tiers (
+			channel_price_id, service_tier, uncached_input_cost, output_cost
+		) VALUES ($1, 'fast', 2, 8)
+	`, channelPrice.ID); err != nil {
+		t.Fatalf("insert fast channel cost: %v", err)
+	}
+
+	if _, err := tx.Exec(ctx, "SET CONSTRAINTS ALL IMMEDIATE"); err != nil {
+		t.Fatalf("draft fast base without sale must skip margin guard, got %v", err)
+	}
+}
+
 func TestMarginGuardAcceptsSafeConfiguration(t *testing.T) {
 	ctx, tx, queries, cleanup := newModelChannelTestTx(t)
 	defer cleanup()
@@ -101,6 +170,7 @@ func TestMarginGuardRejectsFastAbsoluteSalePriceBelowCost(t *testing.T) {
 	defer cleanup()
 
 	fixture := stageFastTierMargin(t, ctx, tx, queries, "margin-fast-bad")
+	stageMatchingAbsoluteSale(t, ctx, tx, fixture.modelPriceID)
 
 	// Fast 成本 2/8，Fast 绝对售价压到 1e-10：逐项比较必定亏本。
 	if _, err := tx.Exec(ctx, `
@@ -124,6 +194,7 @@ func TestMarginGuardAcceptsFastAbsoluteSalePriceAboveCost(t *testing.T) {
 	defer cleanup()
 
 	fixture := stageFastTierMargin(t, ctx, tx, queries, "margin-fast-ok")
+	stageMatchingAbsoluteSale(t, ctx, tx, fixture.modelPriceID)
 
 	// Fast 成本 2/8，绝对售价 20/80：十倍毛利。
 	if _, err := tx.Exec(ctx, `
@@ -136,6 +207,28 @@ func TestMarginGuardAcceptsFastAbsoluteSalePriceAboveCost(t *testing.T) {
 
 	if _, err := tx.Exec(ctx, "SET CONSTRAINTS ALL IMMEDIATE"); err != nil {
 		t.Fatalf("profitable fast absolute sale price rejected: %v", err)
+	}
+}
+
+// Standard 已配绝对售价、模型又有 Fast 基准价时，缺 Fast 绝对售价必须拒绝。
+// 即使倍率还在，也不能拿 Fast 基准 × 倍率去补，那是两套售价实体混算。
+func TestMarginGuardRejectsStandardAbsoluteWithoutFastAbsolute(t *testing.T) {
+	ctx, tx, queries, cleanup := newModelChannelTestTx(t)
+	defer cleanup()
+
+	fixture := stageFastTierMargin(t, ctx, tx, queries, "margin-fast-mismatch")
+	if _, err := tx.Exec(ctx, `
+		UPDATE model_prices
+		SET sale_uncached_input_price = 20,
+		    sale_output_price = 80
+		WHERE id = $1`, fixture.modelPriceID); err != nil {
+		t.Fatalf("stage standard absolute without fast absolute: %v", err)
+	}
+
+	_, err := tx.Exec(ctx, "SET CONSTRAINTS ALL IMMEDIATE")
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.ConstraintName != marginGuardConstraint {
+		t.Fatalf("expected negative-margin constraint, got %v", err)
 	}
 }
 
@@ -190,4 +283,16 @@ func stageFastTierMargin(
 	}
 
 	return fastTierMarginFixture{modelID: modelID, channelID: channelID, modelPriceID: modelPriceID}
+}
+
+// stageMatchingAbsoluteSale 给 Standard 配一组高于成本的绝对售价，让 Fast 用例在「绝对售价实体」下比较。
+func stageMatchingAbsoluteSale(t *testing.T, ctx context.Context, tx pgx.Tx, modelPriceID int64) {
+	t.Helper()
+	if _, err := tx.Exec(ctx, `
+		UPDATE model_prices
+		SET sale_uncached_input_price = 20,
+		    sale_output_price = 80
+		WHERE id = $1`, modelPriceID); err != nil {
+		t.Fatalf("stage matching standard absolute sale: %v", err)
+	}
 }

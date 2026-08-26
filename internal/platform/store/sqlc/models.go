@@ -326,7 +326,7 @@ type Model struct {
 	Source                         string
 	CreatedAt                      pgtype.Timestamptz
 	UpdatedAt                      pgtype.Timestamptz
-	// 停用直接原因：manual_delisted 管理员主动下架；binding_disabled 最后一条渠道绑定被停用或解除；channel_disabled 最后一条可用渠道被停用。enabled 时为空。
+	// 停用直接原因：manual_delisted 管理员主动下架；binding_disabled 最后一条渠道绑定被停用或解除；channel_disabled 最后一条可用渠道被停用；price_disabled 最后一条可解析售价被撤销。enabled 时为空。
 	DisabledReason pgtype.Text
 	DisabledAt     pgtype.Timestamptz
 	// 模型系列（来自 models.dev feed 的 family），仅用于列表分组展示，空串表示未归类。
@@ -422,7 +422,7 @@ type ModelPrice struct {
 	LongContextThreshold        pgtype.Int8
 	LongContextInputMultiplier  pgtype.Numeric
 	LongContextOutputMultiplier pgtype.Numeric
-	// 模型对外绝对售价；整组为空时回退「基准价 × 同行 sale_price_ratio」。可选分项为空按 billing fallback 归一。
+	// 模型对外绝对售价；整组非空时覆盖倍率，Standard 与 Fast 必须同在。整组为空时回退「基准价 × 同行 sale_price_ratio」。两者都空则此行不可售。
 	SaleUncachedInputPrice      pgtype.Numeric
 	SaleCacheReadInputPrice     pgtype.Numeric
 	SaleCacheWrite5mInputPrice  pgtype.Numeric
@@ -430,7 +430,7 @@ type ModelPrice struct {
 	SaleCacheWrite30mInputPrice pgtype.Numeric
 	SaleOutputPrice             pgtype.Numeric
 	SaleReasoningOutputPrice    pgtype.Numeric
-	// 模型售价倍率：客户售价 = 基准价 × 本倍率。与 sale_* 绝对售价至少配一项，绝对售价优先。
+	// 模型售价倍率：绝对售价整组留空时，客户售价 = 基准价 × 本倍率。可与绝对售价同行共存，但绝对售价生效时倍率不参与计算。
 	SalePriceRatio pgtype.Numeric
 }
 

@@ -20,6 +20,7 @@ type Store interface {
 	ModelOpsPerformanceTimeseries(ctx context.Context, arg sqlc.ModelOpsPerformanceTimeseriesParams) ([]sqlc.ModelOpsPerformanceTimeseriesRow, error)
 	ModelOpsRequests(ctx context.Context, arg sqlc.ModelOpsRequestsParams) ([]sqlc.ModelOpsRequestsRow, error)
 	ModelOpsRequestsCount(ctx context.Context, arg sqlc.ModelOpsRequestsCountParams) (int64, error)
+	ModelOpsErrors(ctx context.Context, arg sqlc.ModelOpsErrorsParams) ([]sqlc.ModelOpsErrorsRow, error)
 }
 
 // Service 提供模型运维只读聚合。
@@ -61,23 +62,35 @@ type Row struct {
 	BaseCacheWrite30mInputPrice *string
 	BaseOutputPrice             *string
 	BaseReasoningOutputPrice    *string
-	// 售价：绝对售价整组非空时直接生效，否则基准价 × 倍率。两者至少有一个。
-	BaseSalePriceRatio         *string
-	BaseSaleUncachedInputPrice *string
-	BaseSaleOutputPrice        *string
+	// 售价：绝对售价整组非空时整组覆盖，否则基准价 × 倍率。两套实体可共存，不能混算。
+	BaseSalePriceRatio              *string
+	BaseSaleUncachedInputPrice      *string
+	BaseSaleCacheReadInputPrice     *string
+	BaseSaleCacheWrite5mInputPrice  *string
+	BaseSaleCacheWrite1hInputPrice  *string
+	BaseSaleCacheWrite30mInputPrice *string
+	BaseSaleOutputPrice             *string
+	BaseSaleReasoningOutputPrice    *string
 	// 当前生效基准价的长上下文阶梯（无基准价或未启用时 Enabled=false，其余为 nil）。
-	BaseLongContextEnabled          bool
-	BaseLongContextThreshold        *int64
-	BaseLongContextInputMultiplier  *string
-	BaseLongContextOutputMultiplier *string
-	BaseFastPriceConfigured         bool
-	BaseFastUncachedInputPrice      *string
-	BaseFastCacheReadInputPrice     *string
-	BaseFastCacheWrite5mInputPrice  *string
-	BaseFastCacheWrite1hInputPrice  *string
-	BaseFastCacheWrite30mInputPrice *string
-	BaseFastOutputPrice             *string
-	BaseFastReasoningOutputPrice    *string
+	BaseLongContextEnabled              bool
+	BaseLongContextThreshold            *int64
+	BaseLongContextInputMultiplier      *string
+	BaseLongContextOutputMultiplier     *string
+	BaseFastPriceConfigured             bool
+	BaseFastUncachedInputPrice          *string
+	BaseFastCacheReadInputPrice         *string
+	BaseFastCacheWrite5mInputPrice      *string
+	BaseFastCacheWrite1hInputPrice      *string
+	BaseFastCacheWrite30mInputPrice     *string
+	BaseFastOutputPrice                 *string
+	BaseFastReasoningOutputPrice        *string
+	BaseFastSaleUncachedInputPrice      *string
+	BaseFastSaleCacheReadInputPrice     *string
+	BaseFastSaleCacheWrite5mInputPrice  *string
+	BaseFastSaleCacheWrite1hInputPrice  *string
+	BaseFastSaleCacheWrite30mInputPrice *string
+	BaseFastSaleOutputPrice             *string
+	BaseFastSaleReasoningOutputPrice    *string
 }
 
 // Detail 是模型详情页概览（含请求/延迟/毛利等运维指标）。
@@ -87,14 +100,20 @@ type Detail struct {
 	SuccessRate      float64
 	LatencyAvg       float64
 	LatencyP50       float64
+	LatencyP90       float64
 	LatencyP95       float64
-	OutputTokens     int64
-	InputTokens      int64
-	CacheReadRate    float64
-	TPS              float64
-	RevenueUSD       string
-	MarginUSD        string
-	MarginRate       float64
+	LatencyP99       float64
+	// GatewayTTFTP95 只统计流式请求；GatewayTTFTSample 为 0 时该值无意义，前端应显示「—」。
+	GatewayTTFTP95    float64
+	GatewayTTFTSample int64
+	OutputTokens      int64
+	InputTokens       int64
+	CacheReadRate     float64
+	TPS               float64
+	RevenueUSD        string
+	CostUSD           string
+	MarginUSD         string
+	MarginRate        float64
 	// SupplyAvailable 表示当前是否存在可计费的基础渠道候选；它不表示任何 Route 是否售卖该模型。
 	SupplyAvailable   bool
 	BindingsTotal     int64
@@ -122,12 +141,27 @@ type ChannelRow struct {
 	FastOutputCost *string
 }
 
-// PerfPoint 是抽屉性能 Tab 时序点。
+// PerfPoint 是抽屉性能 Tab 时序点。收入与成本按各自时间戳分桶，
+// 求和与 Detail 的 RevenueUSD / 成本一致。
 type PerfPoint struct {
 	Bucket           time.Time
 	RequestTotal     int64
 	RequestSucceeded int64
 	LatencyP95       float64
+	RevenueUSD       string
+	CostUSD          string
+	MarginUSD        string
+}
+
+// ErrorRow 是排障分区的一类错误：同一 error_code 在时间窗内的汇总。
+type ErrorRow struct {
+	ErrorCode   string
+	Occurrences int64
+	LastSeenAt  time.Time
+	// SampleRequestID 是该错误码最近一次发生的请求，用于直接跳证据中心。
+	SampleRequestID string
+	// ChannelsTouched 是该错误码涉及的落点渠道数；>1 说明不是单一渠道的问题。
+	ChannelsTouched int64
 }
 
 // RequestRow 是抽屉请求 Tab 行。
@@ -180,44 +214,56 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 			baseCurrency = &v
 		}
 		out = append(out, Row{
-			ID:                              r.ID,
-			ModelID:                         r.ModelID,
-			DisplayName:                     r.DisplayName,
-			OwnedBy:                         r.OwnedBy,
-			Family:                          r.Family,
-			DisabledReason:                  textPtr(r.DisabledReason),
-			Status:                          r.Status,
-			CreatedAt:                       r.CreatedAt.Time,
-			MaxOutputTokens:                 opsutil.Int8Value(r.MaxOutputTokens),
-			ContextWindowTokens:             opsutil.Int8Value(r.ContextWindowTokens),
-			BindingsTotal:                   r.BindingsTotal,
-			BindingsAvailable:               r.BindingsAvailable,
-			CapabilitiesDeclaredCount:       r.CapabilitiesDeclaredCount,
-			HasPrice:                        r.HasPrice,
-			SupplyAvailable:                 r.Status == "enabled" && r.BindingsAvailable > 0,
-			BaseCurrency:                    baseCurrency,
-			BaseUncachedInputPrice:          opsutil.NumericStringPtr(r.BaseUncachedInputPrice),
-			BaseCacheReadInputPrice:         opsutil.NumericStringPtr(r.BaseCacheReadInputPrice),
-			BaseCacheWrite5mInputPrice:      opsutil.NumericStringPtr(r.BaseCacheWrite5mInputPrice),
-			BaseCacheWrite1hInputPrice:      opsutil.NumericStringPtr(r.BaseCacheWrite1hInputPrice),
-			BaseCacheWrite30mInputPrice:     opsutil.NumericStringPtr(r.BaseCacheWrite30mInputPrice),
-			BaseOutputPrice:                 opsutil.NumericStringPtr(r.BaseOutputPrice),
-			BaseReasoningOutputPrice:        opsutil.NumericStringPtr(r.BaseReasoningOutputPrice),
-			BaseSalePriceRatio:              opsutil.NumericStringPtr(r.BaseSalePriceRatio),
-			BaseSaleUncachedInputPrice:      opsutil.NumericStringPtr(r.BaseSaleUncachedInputPrice),
-			BaseSaleOutputPrice:             opsutil.NumericStringPtr(r.BaseSaleOutputPrice),
-			BaseLongContextEnabled:          r.BaseLongContextEnabled,
-			BaseLongContextThreshold:        opsutil.Int8Value(r.BaseLongContextThreshold),
-			BaseLongContextInputMultiplier:  opsutil.NumericStringPtr(r.BaseLongContextInputMultiplier),
-			BaseLongContextOutputMultiplier: opsutil.NumericStringPtr(r.BaseLongContextOutputMultiplier),
-			BaseFastPriceConfigured:         r.BaseFastPriceConfigured,
-			BaseFastUncachedInputPrice:      opsutil.NumericStringPtr(r.BaseFastUncachedInputPrice),
-			BaseFastCacheReadInputPrice:     opsutil.NumericStringPtr(r.BaseFastCacheReadInputPrice),
-			BaseFastCacheWrite5mInputPrice:  opsutil.NumericStringPtr(r.BaseFastCacheWrite5mInputPrice),
-			BaseFastCacheWrite1hInputPrice:  opsutil.NumericStringPtr(r.BaseFastCacheWrite1hInputPrice),
-			BaseFastCacheWrite30mInputPrice: opsutil.NumericStringPtr(r.BaseFastCacheWrite30mInputPrice),
-			BaseFastOutputPrice:             opsutil.NumericStringPtr(r.BaseFastOutputPrice),
-			BaseFastReasoningOutputPrice:    opsutil.NumericStringPtr(r.BaseFastReasoningOutputPrice),
+			ID:                                  r.ID,
+			ModelID:                             r.ModelID,
+			DisplayName:                         r.DisplayName,
+			OwnedBy:                             r.OwnedBy,
+			Family:                              r.Family,
+			DisabledReason:                      textPtr(r.DisabledReason),
+			Status:                              r.Status,
+			CreatedAt:                           r.CreatedAt.Time,
+			MaxOutputTokens:                     opsutil.Int8Value(r.MaxOutputTokens),
+			ContextWindowTokens:                 opsutil.Int8Value(r.ContextWindowTokens),
+			BindingsTotal:                       r.BindingsTotal,
+			BindingsAvailable:                   r.BindingsAvailable,
+			CapabilitiesDeclaredCount:           r.CapabilitiesDeclaredCount,
+			HasPrice:                            r.HasPrice,
+			SupplyAvailable:                     r.Status == "enabled" && r.BindingsAvailable > 0,
+			BaseCurrency:                        baseCurrency,
+			BaseUncachedInputPrice:              opsutil.NumericStringPtr(r.BaseUncachedInputPrice),
+			BaseCacheReadInputPrice:             opsutil.NumericStringPtr(r.BaseCacheReadInputPrice),
+			BaseCacheWrite5mInputPrice:          opsutil.NumericStringPtr(r.BaseCacheWrite5mInputPrice),
+			BaseCacheWrite1hInputPrice:          opsutil.NumericStringPtr(r.BaseCacheWrite1hInputPrice),
+			BaseCacheWrite30mInputPrice:         opsutil.NumericStringPtr(r.BaseCacheWrite30mInputPrice),
+			BaseOutputPrice:                     opsutil.NumericStringPtr(r.BaseOutputPrice),
+			BaseReasoningOutputPrice:            opsutil.NumericStringPtr(r.BaseReasoningOutputPrice),
+			BaseSalePriceRatio:                  opsutil.NumericStringPtr(r.BaseSalePriceRatio),
+			BaseSaleUncachedInputPrice:          opsutil.NumericStringPtr(r.BaseSaleUncachedInputPrice),
+			BaseSaleCacheReadInputPrice:         opsutil.NumericStringPtr(r.BaseSaleCacheReadInputPrice),
+			BaseSaleCacheWrite5mInputPrice:      opsutil.NumericStringPtr(r.BaseSaleCacheWrite5mInputPrice),
+			BaseSaleCacheWrite1hInputPrice:      opsutil.NumericStringPtr(r.BaseSaleCacheWrite1hInputPrice),
+			BaseSaleCacheWrite30mInputPrice:     opsutil.NumericStringPtr(r.BaseSaleCacheWrite30mInputPrice),
+			BaseSaleOutputPrice:                 opsutil.NumericStringPtr(r.BaseSaleOutputPrice),
+			BaseSaleReasoningOutputPrice:        opsutil.NumericStringPtr(r.BaseSaleReasoningOutputPrice),
+			BaseLongContextEnabled:              r.BaseLongContextEnabled,
+			BaseLongContextThreshold:            opsutil.Int8Value(r.BaseLongContextThreshold),
+			BaseLongContextInputMultiplier:      opsutil.NumericStringPtr(r.BaseLongContextInputMultiplier),
+			BaseLongContextOutputMultiplier:     opsutil.NumericStringPtr(r.BaseLongContextOutputMultiplier),
+			BaseFastPriceConfigured:             r.BaseFastPriceConfigured,
+			BaseFastUncachedInputPrice:          opsutil.NumericStringPtr(r.BaseFastUncachedInputPrice),
+			BaseFastCacheReadInputPrice:         opsutil.NumericStringPtr(r.BaseFastCacheReadInputPrice),
+			BaseFastCacheWrite5mInputPrice:      opsutil.NumericStringPtr(r.BaseFastCacheWrite5mInputPrice),
+			BaseFastCacheWrite1hInputPrice:      opsutil.NumericStringPtr(r.BaseFastCacheWrite1hInputPrice),
+			BaseFastCacheWrite30mInputPrice:     opsutil.NumericStringPtr(r.BaseFastCacheWrite30mInputPrice),
+			BaseFastOutputPrice:                 opsutil.NumericStringPtr(r.BaseFastOutputPrice),
+			BaseFastReasoningOutputPrice:        opsutil.NumericStringPtr(r.BaseFastReasoningOutputPrice),
+			BaseFastSaleUncachedInputPrice:      opsutil.NumericStringPtr(r.BaseFastSaleUncachedInputPrice),
+			BaseFastSaleCacheReadInputPrice:     opsutil.NumericStringPtr(r.BaseFastSaleCacheReadInputPrice),
+			BaseFastSaleCacheWrite5mInputPrice:  opsutil.NumericStringPtr(r.BaseFastSaleCacheWrite5mInputPrice),
+			BaseFastSaleCacheWrite1hInputPrice:  opsutil.NumericStringPtr(r.BaseFastSaleCacheWrite1hInputPrice),
+			BaseFastSaleCacheWrite30mInputPrice: opsutil.NumericStringPtr(r.BaseFastSaleCacheWrite30mInputPrice),
+			BaseFastSaleOutputPrice:             opsutil.NumericStringPtr(r.BaseFastSaleOutputPrice),
+			BaseFastSaleReasoningOutputPrice:    opsutil.NumericStringPtr(r.BaseFastSaleReasoningOutputPrice),
 		})
 	}
 	return out, total, nil
@@ -239,10 +285,15 @@ func (s *Service) Detail(ctx context.Context, modelID int64, from, to time.Time)
 		SuccessRate:       opsutil.SuccessRate(r.RequestSucceeded, r.RequestTotal),
 		LatencyAvg:        r.LatencyAvg,
 		LatencyP50:        r.LatencyP50,
+		LatencyP90:        r.LatencyP90,
 		LatencyP95:        r.LatencyP95,
+		LatencyP99:        r.LatencyP99,
+		GatewayTTFTP95:    r.GatewayTtftP95,
+		GatewayTTFTSample: r.GatewayTtftSample,
 		OutputTokens:      r.OutputTokens,
 		InputTokens:       r.InputTokens,
 		RevenueUSD:        revenue,
+		CostUSD:           cost,
 		MarginUSD:         marginAmt,
 		MarginRate:        opsutil.Ratio(marginAmt, revenue),
 		SupplyAvailable:   r.ModelStatus == "enabled" && r.BindingsAvailable > 0,
@@ -313,7 +364,17 @@ func (s *Service) PerformanceTimeseries(ctx context.Context, modelID int64, inte
 	}
 	out := make([]PerfPoint, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, PerfPoint{Bucket: r.Bucket.Time, RequestTotal: r.RequestTotal, RequestSucceeded: r.RequestSucceeded, LatencyP95: r.LatencyP95})
+		revenue := opsutil.NumericString(r.RevenueUsd)
+		cost := opsutil.NumericString(r.CostUsd)
+		out = append(out, PerfPoint{
+			Bucket:           r.Bucket.Time,
+			RequestTotal:     r.RequestTotal,
+			RequestSucceeded: r.RequestSucceeded,
+			LatencyP95:       r.LatencyP95,
+			RevenueUSD:       revenue,
+			CostUSD:          cost,
+			MarginUSD:        opsutil.SubtractDecimal(revenue, cost),
+		})
 	}
 	return out, nil
 }
@@ -343,4 +404,28 @@ func (s *Service) Requests(ctx context.Context, modelID int64, from, to time.Tim
 		out = append(out, row)
 	}
 	return out, total, nil
+}
+
+// Errors 返回单模型失败请求按错误码的聚合，最高频在前。
+// 错误码种类有限，一次返回全部；占比由前端按总数换算，避免分页后占比失真。
+func (s *Service) Errors(ctx context.Context, modelID int64, from, to time.Time) ([]ErrorRow, error) {
+	rows, err := s.store.ModelOpsErrors(ctx, sqlc.ModelOpsErrorsParams{
+		ModelID:  modelID,
+		FromTime: opsutil.TsNarg(from),
+		ToTime:   opsutil.TsNarg(to),
+	})
+	if err != nil {
+		return nil, opsutil.StoreFailed(err, "model ops errors")
+	}
+	out := make([]ErrorRow, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, ErrorRow{
+			ErrorCode:       r.ErrorCode,
+			Occurrences:     r.Occurrences,
+			LastSeenAt:      r.LastSeenAt.Time,
+			SampleRequestID: r.SampleRequestID,
+			ChannelsTouched: r.ChannelsTouched,
+		})
+	}
+	return out, nil
 }

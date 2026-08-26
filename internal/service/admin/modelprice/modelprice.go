@@ -1,13 +1,16 @@
 // Package modelprice 编排 admin 管理端的模型定价（model_prices）读写（DEC-026）。
 //
 // 一条价格行同时承载三件事：基准价（也是成本基数，DEC-031）、售价倍率、绝对售价。
-// 客户最终售价 = 绝对售价（整组非空时）或 基准价 × 售价倍率，两者至少配一个。
+// 倍率与绝对售价是两套独立实体，可以同行共存；绝对售价是倍率的整组覆盖，不能混算。
+// 客户最终售价 = 绝对售价整组非空时用绝对售价，否则基准价 × 售价倍率。
+// 允许只有基准价、没有售价的草稿行；那种行不可售（不能启用、不能调用）。
+// 创建走三个 intent：配基准价、按倍率定价、按绝对售价。改哪边就新开窗口，另一套售价从当前生效行复制。
 // 设计约束（沿用 channelprice 口径）：
 //   - 金额只填明确数值、绝不用 float；DTO 层用十进制字符串承载，避免精度丢失。
 //   - 价格不可改金额：账务（price_snapshots）按事实快照引用历史价；改价靠「新建一条 + 关闭旧窗口」。
 //     售价倍率与绝对售价同样如此——它们与基准价同行，改动一律走新窗口。
 //   - 同一 model 的启用窗口不可重叠，否则结算取基准价有歧义。
-//   - 毛利由数据库守卫在提交时兜底（售价低于任一渠道成本即拒绝），本层不重复计算。
+//   - 毛利由数据库守卫在提交时兜底（售价低于任一渠道成本即拒绝）；草稿行售价不可解析时跳过守卫。
 package modelprice
 
 import (
@@ -22,6 +25,7 @@ import (
 
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/supply"
 )
 
 const (
@@ -32,6 +36,13 @@ const (
 
 	// PricingUnitPer1MTokens 是当前唯一支持的计价单位。
 	PricingUnitPer1MTokens = "per_1m_tokens"
+
+	// IntentBase 配基准价：新窗口写入新基准价，售价从当前生效行复制（没有则留空）。
+	IntentBase = "base"
+	// IntentSaleRatio 按倍率定价：复制当前基准价与当前绝对售价，写入新倍率。
+	IntentSaleRatio = "sale_ratio"
+	// IntentSaleAbsolute 按绝对售价：复制当前基准价与当前倍率，写入新绝对售价。
+	IntentSaleAbsolute = "sale_absolute"
 )
 
 // Store 定义模型基准价管理所需的存储能力。
@@ -74,6 +85,7 @@ type ModelPrice struct {
 	ReasoningOutputPrice        *string
 	SalePriceRatio              *string
 	SalePrices                  *SalePriceVector
+	SaleConfigured              bool
 	LongContextEnabled          bool
 	LongContextThreshold        *int64
 	LongContextInputMultiplier  *string
@@ -86,10 +98,14 @@ type ModelPrice struct {
 	EffectiveTo                 *time.Time
 	CreatedAt                   time.Time
 	UpdatedAt                   time.Time
+	// Warnings 是不阻断写入、但管理员应当知道的后果，例如窗口到期后无接续售价。
+	// 只在写响应里出现，不落库。
+	Warnings []string
 }
 
 // FastPrice 是同一模型价格窗口下已经持久化的 Fast 精确售价。
-// 倍率不分档：Fast 售价 = SalePrices（若配）或 Fast 基准价 × 模型的 SalePriceRatio。
+// Fast 与 Standard 绑在同一套售价实体上：走绝对售价时两边都必须有绝对售价；
+// 走倍率时两边都按各自基准价 × 模型倍率。不允许一档绝对、另一档倍率。
 type FastPrice struct {
 	ServiceTierID           int64
 	UncachedInputPrice      string
@@ -133,9 +149,10 @@ type FastPriceInput struct {
 	ReferenceCheckedAt      *time.Time
 }
 
-// CreateInput 是创建模型基准价的入参；uncached_input/output 必填，其余可空，金额为十进制字符串。
+// CreateInput 是创建模型价格窗口的入参。Intent 必填，决定哪一半由请求提供、哪一半从当前生效行复制。
 type CreateInput struct {
 	ModelID                     int64
+	Intent                      string
 	Currency                    string
 	PricingUnit                 string
 	UncachedInputPrice          string
@@ -156,6 +173,8 @@ type CreateInput struct {
 	Status                      string
 	EffectiveFrom               time.Time
 	EffectiveTo                 *time.Time
+	// Confirmation 携带撤价影响指纹；替换窗口导致模型失去可解析售价时必须确认。
+	Confirmation supply.Confirmation
 }
 
 // UpdateInput 是 PATCH 模型基准价的入参：只改启停状态与生效结束时间（关闭窗口）；金额不可改。
@@ -163,16 +182,33 @@ type UpdateInput struct {
 	ID          int64
 	Status      string
 	EffectiveTo *time.Time
+	// Confirmation 携带撤价影响指纹。撤掉模型最后一条可解析售价时必须确认。
+	Confirmation supply.Confirmation
+}
+
+// TxBeginner 提供事务能力（由 pgxpool 满足）。撤价可能让模型失去最后一条可解析售价，
+// 那时价格写入与模型下架必须同进同出，否则会留下「已启用、却没法卖」的模型。
+type TxBeginner interface {
+	Begin(ctx context.Context) (pgx.Tx, error)
 }
 
 // Service 编排模型基准价读写。
 type Service struct {
-	store Store
+	store   Store
+	db      TxBeginner
+	queries *sqlc.Queries
 }
 
-// NewService 创建模型基准价管理服务。
-func NewService(store Store) *Service {
-	return &Service{store: store}
+// NewService 创建模型基准价管理服务。db/queries 用于撤价时的供给影响预览与联动下架；
+// 只读路径继续走 store。
+func NewService(store Store, db TxBeginner, queries *sqlc.Queries) *Service {
+	return &Service{store: store, db: db, queries: queries}
+}
+
+// withStore 返回一个把全部内部读写重定向到 st 的副本，用于让既有方法在事务内执行。
+// *sqlc.Queries 满足 Store，因此事务句柄可直接传入。
+func (s *Service) withStore(st Store) *Service {
+	return &Service{store: st, db: s.db, queries: s.queries}
 }
 
 // List 列出某 model 下全部基准价（含历史与停用）；model 不存在返回 not_found。
@@ -200,17 +236,13 @@ func (s *Service) List(ctx context.Context, modelID int64) ([]ModelPrice, error)
 	return prices, nil
 }
 
-// Create 创建一条模型基准价：校验模型存在、金额合法、生效窗口不重叠。
+// Create 按 intent 创建一条价格窗口：改哪边就新开窗口，另一半从当前生效行复制。
 func (s *Service) Create(ctx context.Context, in CreateInput) (ModelPrice, error) {
 	if in.ModelID <= 0 {
 		return ModelPrice{}, invalidArgument("model_id", "model_id must be positive")
 	}
-	currency := strings.TrimSpace(in.Currency)
-	if currency == "" {
-		return ModelPrice{}, invalidArgument("currency", "currency is required")
-	}
-	if in.PricingUnit != PricingUnitPer1MTokens {
-		return ModelPrice{}, invalidArgument("pricing_unit", "pricing_unit must be \"per_1m_tokens\"")
+	if err := validateIntent(in.Intent); err != nil {
+		return ModelPrice{}, err
 	}
 	if err := validateStatus(in.Status); err != nil {
 		return ModelPrice{}, err
@@ -225,49 +257,38 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (ModelPrice, error
 		return ModelPrice{}, invalidArgument("effective_to", "effective_to must be after effective_from")
 	}
 
-	amounts, err := parseModelPriceAmounts(in)
-	if err != nil {
-		return ModelPrice{}, err
-	}
-	longContext, err := parseLongContextConfig(in)
-	if err != nil {
-		return ModelPrice{}, err
-	}
-	fastPrice, err := parseFastPriceConfig(in.FastPrices)
-	if err != nil {
-		return ModelPrice{}, err
-	}
-	saleRatio, err := parseOptionalPositiveMultiplier("sale_price_ratio", in.SalePriceRatio)
-	if err != nil {
-		return ModelPrice{}, err
-	}
-	sale, err := parseSaleVector("sale_prices", in.SalePrices)
-	if err != nil {
-		return ModelPrice{}, err
-	}
-	// 售价必须可解析（ck_model_prices_sale_configured 的应用层前哨，错误更可读）。
-	if !saleRatio.Valid && !sale.configured {
-		return ModelPrice{}, invalidArgument(
-			"sale_price_ratio",
-			"pricing requires either sale_price_ratio or sale_prices",
-		)
-	}
-	// 没有倍率时 Fast 档没有任何可用的售价来源，必须自带绝对售价，
-	// 否则这条价格行一落库就会被毛利守卫按「Fast 售价不可解析」拒绝。
-	if !saleRatio.Valid && fastPrice.configured && !fastPrice.sale.configured {
-		return ModelPrice{}, invalidArgument(
-			"fast_prices.sale_prices",
-			"fast tier requires its own sale_prices when sale_price_ratio is absent",
-		)
+	if s.db == nil || s.queries == nil {
+		return ModelPrice{}, storeFailed(errors.New("supply linkage dependencies are unavailable"), "create model price")
 	}
 
-	// 基准价必须挂在已存在的 model 上（DB 也有同名外键，这里给清晰 400）。
-	model, err := s.store.LookupModelByID(ctx, in.ModelID)
+	tx, err := s.db.Begin(ctx)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ModelPrice{}, invalidArgument("model_id", "model not found")
-		}
-		return ModelPrice{}, storeFailed(err, "load model")
+		return ModelPrice{}, storeFailed(err, "begin model price create transaction")
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := s.queries.WithTx(tx)
+
+	// 锁内构建草稿：intent 要从当前生效行复制另一半售价，锁外读会与并发撤价竞态。
+	if err := supply.LockModels(ctx, q, []int64{in.ModelID}); err != nil {
+		return ModelPrice{}, storeFailed(err, "lock model for price create")
+	}
+
+	result, err := s.withStore(q).createInLock(ctx, q, in)
+	if err != nil {
+		return ModelPrice{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ModelPrice{}, storeFailed(err, "commit model price create transaction")
+	}
+	return result, nil
+}
+
+// createInLock 是 Create 的写入主体，调用方负责事务与 Model 锁。
+// supplyQ 为 nil 表示不做供给联动（fake store 单测验证 intent 复制时走这条）。
+func (s *Service) createInLock(ctx context.Context, supplyQ *sqlc.Queries, in CreateInput) (ModelPrice, error) {
+	draft, err := s.buildCreateDraft(ctx, in)
+	if err != nil {
+		return ModelPrice{}, err
 	}
 
 	if in.Status == StatusEnabled && !in.ReplaceOverlappingEnabled {
@@ -276,10 +297,273 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (ModelPrice, error
 		}
 	}
 
-	row, err := s.store.CreateModelPrice(ctx, sqlc.CreateModelPriceParams{
+	// 替换会停掉当前全部重叠窗口。新窗口自己可售就没有空档；否则等同撤价。
+	var impact supply.Impact
+	if supplyQ != nil && in.ReplaceOverlappingEnabled && !draftSellable(draft) {
+		impact, err = supply.PriceImpact(ctx, supplyQ, in.ModelID, nil)
+		if err != nil {
+			return ModelPrice{}, storeFailed(err, "compute model price replace impact")
+		}
+		if err := supply.Authorize(impact,
+			"model_price_disable_confirmation_required",
+			"新窗口没有配售价，替换后该模型没有可解析售价；确认后会连同模型一并下架",
+			in.Confirmation,
+		); err != nil {
+			return ModelPrice{}, err
+		}
+	}
+
+	row, err := s.store.CreateModelPrice(ctx, draft.params)
+	if err != nil {
+		return ModelPrice{}, storeFailed(err, "create model price")
+	}
+
+	result := toModelPriceFromCreateRow(row)
+	result.ModelExternalID = draft.model.ModelID
+	result.ModelDisplayName = draft.model.DisplayName
+	result.FastPriceReference = officialFastPriceReference(draft.model.ModelID)
+
+	if supplyQ == nil {
+		return result, nil
+	}
+	if impact.RequiresConfirmation() {
+		if err := supply.DisableAffectedModels(ctx, supplyQ, impact, supply.ReasonPriceDisabled); err != nil {
+			return ModelPrice{}, storeFailed(err, "delist models losing sale price")
+		}
+	}
+	warnings, err := expiryWarnings(ctx, supplyQ, in.ModelID, row.ID, in.Status, in.EffectiveTo)
+	if err != nil {
+		return ModelPrice{}, err
+	}
+	result.Warnings = warnings
+	return result, nil
+}
+
+// draftSellable 判断待写入窗口自身是否可售：倍率或绝对售价有其一即可。
+func draftSellable(draft createDraft) bool {
+	return draft.params.SalePriceRatio.Valid || draft.params.SaleUncachedInputPrice.Valid
+}
+
+type createDraft struct {
+	model  sqlc.Model
+	params sqlc.CreateModelPriceParams
+}
+
+func validateIntent(intent string) error {
+	switch intent {
+	case IntentBase, IntentSaleRatio, IntentSaleAbsolute:
+		return nil
+	case "":
+		return invalidArgument("intent", "intent is required (base, sale_ratio, or sale_absolute)")
+	default:
+		return invalidArgument("intent", "intent must be base, sale_ratio, or sale_absolute")
+	}
+}
+
+func (s *Service) lookupModel(ctx context.Context, modelID int64) (sqlc.Model, error) {
+	model, err := s.store.LookupModelByID(ctx, modelID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return sqlc.Model{}, invalidArgument("model_id", "model not found")
+		}
+		return sqlc.Model{}, storeFailed(err, "load model")
+	}
+	return model, nil
+}
+
+func (s *Service) currentEnabledPrice(ctx context.Context, modelID int64) (*sqlc.ListModelPricesByModelRow, error) {
+	rows, err := s.store.ListModelPricesByModel(ctx, modelID)
+	if err != nil {
+		return nil, storeFailed(err, "list model prices")
+	}
+	now := time.Now()
+	for i := range rows {
+		row := &rows[i]
+		if row.Status != StatusEnabled {
+			continue
+		}
+		if row.EffectiveFrom.Time.After(now) {
+			continue
+		}
+		if row.EffectiveTo.Valid && !row.EffectiveTo.Time.After(now) {
+			continue
+		}
+		return row, nil
+	}
+	return nil, nil
+}
+
+func (s *Service) buildCreateDraft(ctx context.Context, in CreateInput) (createDraft, error) {
+	switch in.Intent {
+	case IntentBase:
+		return s.buildBaseDraft(ctx, in)
+	case IntentSaleRatio:
+		return s.buildSaleRatioDraft(ctx, in)
+	case IntentSaleAbsolute:
+		return s.buildSaleAbsoluteDraft(ctx, in)
+	default:
+		return createDraft{}, invalidArgument("intent", "intent must be base, sale_ratio, or sale_absolute")
+	}
+}
+
+func (s *Service) buildBaseDraft(ctx context.Context, in CreateInput) (createDraft, error) {
+	currency := strings.TrimSpace(in.Currency)
+	if currency == "" {
+		return createDraft{}, invalidArgument("currency", "currency is required")
+	}
+	if in.PricingUnit != PricingUnitPer1MTokens {
+		return createDraft{}, invalidArgument("pricing_unit", "pricing_unit must be \"per_1m_tokens\"")
+	}
+	amounts, err := parseModelPriceAmounts(in)
+	if err != nil {
+		return createDraft{}, err
+	}
+	longContext, err := parseLongContextConfig(in)
+	if err != nil {
+		return createDraft{}, err
+	}
+	fastPrice, err := parseFastPriceConfig(in.FastPrices)
+	if err != nil {
+		return createDraft{}, err
+	}
+	fastPrice.sale = saleVectorAmounts{}
+
+	model, err := s.lookupModel(ctx, in.ModelID)
+	if err != nil {
+		return createDraft{}, err
+	}
+	current, err := s.currentEnabledPrice(ctx, in.ModelID)
+	if err != nil {
+		return createDraft{}, err
+	}
+
+	var saleRatio pgtype.Numeric
+	var sale saleVectorAmounts
+	if current != nil {
+		saleRatio = current.SalePriceRatio
+		sale = saleVectorFromRow(*current)
+		if fastPrice.configured {
+			fastPrice.sale = fastSaleVectorFromRow(*current)
+		}
+	}
+
+	return createDraft{
+		model:  model,
+		params: createParams(in, currency, in.PricingUnit, amounts, longContext, fastPrice, saleRatio, sale),
+	}, nil
+}
+
+func (s *Service) buildSaleRatioDraft(ctx context.Context, in CreateInput) (createDraft, error) {
+	saleRatio, err := parseOptionalPositiveMultiplier("sale_price_ratio", in.SalePriceRatio)
+	if err != nil {
+		return createDraft{}, err
+	}
+	if !saleRatio.Valid {
+		return createDraft{}, invalidArgument("sale_price_ratio", "sale_price_ratio is required")
+	}
+
+	model, err := s.lookupModel(ctx, in.ModelID)
+	if err != nil {
+		return createDraft{}, err
+	}
+	current, err := s.requireCurrentBase(ctx, in.ModelID)
+	if err != nil {
+		return createDraft{}, err
+	}
+
+	fastPrice := fastBaseFromRow(*current)
+	fastPrice.sale = fastSaleVectorFromRow(*current)
+	return createDraft{
+		model: model,
+		params: createParams(
+			in,
+			current.Currency,
+			current.PricingUnit,
+			amountsFromRow(*current),
+			longContextFromRow(*current),
+			fastPrice,
+			saleRatio,
+			saleVectorFromRow(*current),
+		),
+	}, nil
+}
+
+func (s *Service) buildSaleAbsoluteDraft(ctx context.Context, in CreateInput) (createDraft, error) {
+	sale, err := parseSaleVector("sale_prices", in.SalePrices)
+	if err != nil {
+		return createDraft{}, err
+	}
+	if !sale.configured {
+		return createDraft{}, invalidArgument("sale_prices", "sale_prices is required")
+	}
+
+	model, err := s.lookupModel(ctx, in.ModelID)
+	if err != nil {
+		return createDraft{}, err
+	}
+	current, err := s.requireCurrentBase(ctx, in.ModelID)
+	if err != nil {
+		return createDraft{}, err
+	}
+
+	fastPrice := fastBaseFromRow(*current)
+	if fastPrice.configured {
+		var saleIn *SalePriceVector
+		if in.FastPrices != nil {
+			saleIn = in.FastPrices.SalePrices
+		}
+		fastSale, err := parseSaleVector("fast_prices.sale_prices", saleIn)
+		if err != nil {
+			return createDraft{}, err
+		}
+		if !fastSale.configured {
+			return createDraft{}, invalidArgument(
+				"fast_prices.sale_prices",
+				"fast tier requires its own sale_prices when absolute sale prices are configured",
+			)
+		}
+		fastPrice.sale = fastSale
+	}
+
+	return createDraft{
+		model: model,
+		params: createParams(
+			in,
+			current.Currency,
+			current.PricingUnit,
+			amountsFromRow(*current),
+			longContextFromRow(*current),
+			fastPrice,
+			current.SalePriceRatio,
+			sale,
+		),
+	}, nil
+}
+
+func (s *Service) requireCurrentBase(ctx context.Context, modelID int64) (*sqlc.ListModelPricesByModelRow, error) {
+	current, err := s.currentEnabledPrice(ctx, modelID)
+	if err != nil {
+		return nil, err
+	}
+	if current == nil {
+		return nil, invalidArgument("intent", "sale pricing requires an effective base price")
+	}
+	return current, nil
+}
+
+func createParams(
+	in CreateInput,
+	currency, pricingUnit string,
+	amounts modelPriceAmounts,
+	longContext longContextConfig,
+	fastPrice fastPriceConfig,
+	saleRatio pgtype.Numeric,
+	sale saleVectorAmounts,
+) sqlc.CreateModelPriceParams {
+	return sqlc.CreateModelPriceParams{
 		ModelID:                         in.ModelID,
 		Currency:                        currency,
-		PricingUnit:                     in.PricingUnit,
+		PricingUnit:                     pricingUnit,
 		UncachedInputPrice:              amounts.uncachedInputPrice,
 		CacheReadInputPrice:             amounts.cacheReadInputPrice,
 		CacheWrite5mInputPrice:          amounts.cacheWrite5mInputPrice,
@@ -320,19 +604,79 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (ModelPrice, error
 		Status:                          in.Status,
 		EffectiveFrom:                   tsParam(&in.EffectiveFrom),
 		EffectiveTo:                     tsParam(in.EffectiveTo),
-	})
-	if err != nil {
-		return ModelPrice{}, storeFailed(err, "create model price")
 	}
+}
 
-	result := toModelPriceFromCreateRow(row)
-	result.ModelExternalID = model.ModelID
-	result.ModelDisplayName = model.DisplayName
-	result.FastPriceReference = officialFastPriceReference(model.ModelID)
-	return result, nil
+func amountsFromRow(row sqlc.ListModelPricesByModelRow) modelPriceAmounts {
+	return modelPriceAmounts{
+		uncachedInputPrice:      row.UncachedInputPrice,
+		cacheReadInputPrice:     row.CacheReadInputPrice,
+		cacheWrite5mInputPrice:  row.CacheWrite5mInputPrice,
+		cacheWrite1hInputPrice:  row.CacheWrite1hInputPrice,
+		cacheWrite30mInputPrice: row.CacheWrite30mInputPrice,
+		outputPrice:             row.OutputPrice,
+		reasoningOutputPrice:    row.ReasoningOutputPrice,
+	}
+}
+
+func longContextFromRow(row sqlc.ListModelPricesByModelRow) longContextConfig {
+	return longContextConfig{
+		enabled:          row.LongContextEnabled,
+		threshold:        row.LongContextThreshold,
+		inputMultiplier:  row.LongContextInputMultiplier,
+		outputMultiplier: row.LongContextOutputMultiplier,
+	}
+}
+
+func saleVectorFromRow(row sqlc.ListModelPricesByModelRow) saleVectorAmounts {
+	return saleVectorAmounts{
+		configured:              row.SaleUncachedInputPrice.Valid && row.SaleOutputPrice.Valid,
+		uncachedInputPrice:      row.SaleUncachedInputPrice,
+		cacheReadInputPrice:     row.SaleCacheReadInputPrice,
+		cacheWrite5mInputPrice:  row.SaleCacheWrite5mInputPrice,
+		cacheWrite1hInputPrice:  row.SaleCacheWrite1hInputPrice,
+		cacheWrite30mInputPrice: row.SaleCacheWrite30mInputPrice,
+		outputPrice:             row.SaleOutputPrice,
+		reasoningOutputPrice:    row.SaleReasoningOutputPrice,
+	}
+}
+
+func fastSaleVectorFromRow(row sqlc.ListModelPricesByModelRow) saleVectorAmounts {
+	return saleVectorAmounts{
+		configured:              row.FastSaleUncachedInputPrice.Valid && row.FastSaleOutputPrice.Valid,
+		uncachedInputPrice:      row.FastSaleUncachedInputPrice,
+		cacheReadInputPrice:     row.FastSaleCacheReadInputPrice,
+		cacheWrite5mInputPrice:  row.FastSaleCacheWrite5mInputPrice,
+		cacheWrite1hInputPrice:  row.FastSaleCacheWrite1hInputPrice,
+		cacheWrite30mInputPrice: row.FastSaleCacheWrite30mInputPrice,
+		outputPrice:             row.FastSaleOutputPrice,
+		reasoningOutputPrice:    row.FastSaleReasoningOutputPrice,
+	}
+}
+
+func fastBaseFromRow(row sqlc.ListModelPricesByModelRow) fastPriceConfig {
+	if row.FastServiceTierID <= 0 {
+		return fastPriceConfig{}
+	}
+	return fastPriceConfig{
+		configured:              true,
+		uncachedInputPrice:      row.FastUncachedInputPrice,
+		cacheReadInputPrice:     row.FastCacheReadInputPrice,
+		cacheWrite5mInputPrice:  row.FastCacheWrite5mInputPrice,
+		cacheWrite1hInputPrice:  row.FastCacheWrite1hInputPrice,
+		cacheWrite30mInputPrice: row.FastCacheWrite30mInputPrice,
+		outputPrice:             row.FastOutputPrice,
+		reasoningOutputPrice:    row.FastReasoningOutputPrice,
+		referenceSource:         row.FastReferenceSource,
+		referenceCheckedAt:      row.FastReferenceCheckedAt,
+	}
 }
 
 // Update 调整窗口/启停：改 effective_to（关闭窗口）与 status；金额不可改。重新启用或延长窗口时复查重叠。
+//
+// 停用与「把窗口关到当下」对客户是同一件事：模型立刻没有可解析售价。若这是最后一条
+// 供价窗口，写入前必须取得管理员确认，确认后在同一事务里连同模型一起下架——
+// 只改价格不下架，模型会停在「列表里有、一调失败」的状态。
 func (s *Service) Update(ctx context.Context, in UpdateInput) (ModelPrice, error) {
 	if in.ID <= 0 {
 		return ModelPrice{}, invalidArgument("id", "id must be positive")
@@ -340,13 +684,36 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (ModelPrice, error
 	if err := validateStatus(in.Status); err != nil {
 		return ModelPrice{}, err
 	}
+	if s.db == nil || s.queries == nil {
+		return ModelPrice{}, storeFailed(errors.New("supply linkage dependencies are unavailable"), "update model price")
+	}
 
-	existing, err := s.store.GetModelPrice(ctx, in.ID)
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return ModelPrice{}, storeFailed(err, "begin model price update transaction")
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	q := s.queries.WithTx(tx)
+	txService := s.withStore(q)
+
+	// 先读一次只为拿到 model_id：不知道属于哪个模型就无法确定该锁哪一行。
+	existing, err := q.GetModelPrice(ctx, in.ID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ModelPrice{}, notFound("model price not found")
 		}
 		return ModelPrice{}, storeFailed(err, "load model price")
+	}
+	// 取锁后重读：影响预览必须基于锁内事实，不复用锁外读到的行。
+	if err := supply.LockModels(ctx, q, []int64{existing.ModelID}); err != nil {
+		return ModelPrice{}, storeFailed(err, "lock model for price update")
+	}
+	existing, err = q.GetModelPrice(ctx, in.ID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ModelPrice{}, notFound("model price not found")
+		}
+		return ModelPrice{}, storeFailed(err, "reload model price in transaction")
 	}
 
 	if in.EffectiveTo != nil && !in.EffectiveTo.After(existing.EffectiveFrom.Time) {
@@ -354,12 +721,27 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (ModelPrice, error
 	}
 
 	if in.Status == StatusEnabled {
-		if err := s.ensureNoOverlap(ctx, existing.ModelID, existing.ID, existing.EffectiveFrom.Time, in.EffectiveTo); err != nil {
+		if err := txService.ensureNoOverlap(ctx, existing.ModelID, existing.ID, existing.EffectiveFrom.Time, in.EffectiveTo); err != nil {
 			return ModelPrice{}, err
 		}
 	}
 
-	row, err := s.store.UpdateModelPriceWindow(ctx, sqlc.UpdateModelPriceWindowParams{
+	var impact supply.Impact
+	if stopsSupplyingNow(in) {
+		impact, err = supply.PriceImpact(ctx, q, existing.ModelID, &in.ID)
+		if err != nil {
+			return ModelPrice{}, storeFailed(err, "compute model price disable impact")
+		}
+		if err := supply.Authorize(impact,
+			"model_price_disable_confirmation_required",
+			"撤掉这条价格后该模型没有可解析售价；确认后会连同模型一并下架",
+			in.Confirmation,
+		); err != nil {
+			return ModelPrice{}, err
+		}
+	}
+
+	row, err := q.UpdateModelPriceWindow(ctx, sqlc.UpdateModelPriceWindowParams{
 		ID:          in.ID,
 		Status:      in.Status,
 		EffectiveTo: tsParam(in.EffectiveTo),
@@ -371,16 +753,67 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (ModelPrice, error
 		return ModelPrice{}, storeFailed(err, "update model price")
 	}
 
-	rows, listErr := s.store.ListModelPricesByModel(ctx, row.ModelID)
+	if impact.RequiresConfirmation() {
+		if err := supply.DisableAffectedModels(ctx, q, impact, supply.ReasonPriceDisabled); err != nil {
+			return ModelPrice{}, storeFailed(err, "delist models losing sale price")
+		}
+	}
+
+	warnings, err := expiryWarnings(ctx, q, row.ModelID, row.ID, in.Status, in.EffectiveTo)
+	if err != nil {
+		return ModelPrice{}, err
+	}
+
+	rows, listErr := q.ListModelPricesByModel(ctx, row.ModelID)
 	if listErr != nil {
 		return ModelPrice{}, storeFailed(listErr, "reload model price")
 	}
 	for _, candidate := range rows {
-		if candidate.ID == row.ID {
-			return toModelPriceFromRow(candidate), nil
+		if candidate.ID != row.ID {
+			continue
 		}
+		result := toModelPriceFromRow(candidate)
+		result.Warnings = warnings
+		if err := tx.Commit(ctx); err != nil {
+			return ModelPrice{}, storeFailed(err, "commit model price update transaction")
+		}
+		return result, nil
 	}
 	return ModelPrice{}, storeFailed(pgx.ErrNoRows, "reload model price")
+}
+
+// stopsSupplyingNow 判断这次写入是否让该窗口此刻起停止供价。
+// 停用是显式的；把 effective_to 改到当下或过去与停用等价，客户侧看不出区别。
+// effective_to 落在未来只是预约到期，那条路由 expiryWarnings 提示，不在这里阻断。
+func stopsSupplyingNow(in UpdateInput) bool {
+	if in.Status == StatusDisabled {
+		return true
+	}
+	return in.EffectiveTo != nil && !in.EffectiveTo.After(time.Now())
+}
+
+// expiryWarnings 检查窗口到期后是否还有接续的可售窗口。
+//
+// 窗口自然到期不经过任何管理员操作，二次确认在那条路上没有触发时机，
+// 所以只能在设定到期时间的这一刻把话说在前面。
+func expiryWarnings(ctx context.Context, q *sqlc.Queries, modelID, priceID int64, status string, effectiveTo *time.Time) ([]string, error) {
+	if status != StatusEnabled || effectiveTo == nil || !effectiveTo.After(time.Now()) {
+		return nil, nil
+	}
+	hasSuccessor, err := q.ModelHasSuccessorSalePriceWindow(ctx, sqlc.ModelHasSuccessorSalePriceWindowParams{
+		ModelID:        modelID,
+		ExcludePriceID: priceID,
+		ExpiresAt:      pgtype.Timestamptz{Time: *effectiveTo, Valid: true},
+	})
+	if err != nil {
+		return nil, storeFailed(err, "check successor sale price window")
+	}
+	if hasSuccessor {
+		return nil, nil
+	}
+	return []string{
+		"该窗口到期后没有接续的可售价格，模型会在那一刻失去售价并开始调用失败；请提前配好下一个窗口。",
+	}, nil
 }
 
 // ensureNoOverlap 校验目标窗口与同一 model 现有启用窗口不重叠（半开区间 [from, to)）。
@@ -581,8 +1014,13 @@ func parseModelPriceAmounts(in CreateInput) (modelPriceAmounts, error) {
 	return out, nil
 }
 
+func markSaleConfigured(p ModelPrice) ModelPrice {
+	p.SaleConfigured = p.SalePriceRatio != nil || p.SalePrices != nil
+	return p
+}
+
 func toModelPrice(c sqlc.ModelPrice) ModelPrice {
-	return ModelPrice{
+	return markSaleConfigured(ModelPrice{
 		ID:                      c.ID,
 		ModelID:                 c.ModelID,
 		Currency:                c.Currency,
@@ -614,7 +1052,7 @@ func toModelPrice(c sqlc.ModelPrice) ModelPrice {
 		EffectiveTo:                 timePtr(c.EffectiveTo),
 		CreatedAt:                   c.CreatedAt.Time,
 		UpdatedAt:                   c.UpdatedAt.Time,
-	}
+	})
 }
 
 func toModelPriceFromCreateRow(c sqlc.CreateModelPriceRow) ModelPrice {
@@ -672,7 +1110,7 @@ func toModelPriceFromCreateRow(c sqlc.CreateModelPriceRow) ModelPrice {
 		c.FastReferenceSource,
 		c.FastReferenceCheckedAt,
 	)
-	return result
+	return markSaleConfigured(result)
 }
 
 func toModelPriceFromRow(c sqlc.ListModelPricesByModelRow) ModelPrice {
@@ -733,7 +1171,7 @@ func toModelPriceFromRow(c sqlc.ListModelPricesByModelRow) ModelPrice {
 		c.FastReferenceSource,
 		c.FastReferenceCheckedAt,
 	)
-	return result
+	return markSaleConfigured(result)
 }
 
 func fastPriceStatus(serviceTierID int64) string {

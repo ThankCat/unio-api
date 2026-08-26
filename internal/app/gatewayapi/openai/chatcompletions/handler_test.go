@@ -34,7 +34,7 @@ func TestRouterV1ChatCompletionWithMissingAPIKey(t *testing.T) {
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
 			UserID:    1,
-			KeyPrefix: "unio_sk_test",
+			KeyPrefix: "sk_unio_test",
 		},
 	}
 	handler := newTestRouter(authenticator, nil, nil)
@@ -54,7 +54,7 @@ func TestRouterV1ChatCompletionWithAPIKey(t *testing.T) {
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
 			UserID:    1,
-			KeyPrefix: "unio_sk_test",
+			KeyPrefix: "sk_unio_test",
 		},
 	}
 	handler := newTestRouter(authenticator, nil, nil)
@@ -72,7 +72,7 @@ func TestRouterV1ChatCompletionWithAPIKey(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", buf)
-	req.Header.Set("Authorization", "Bearer unio_sk_test")
+	req.Header.Set("Authorization", "Bearer sk_unio_test")
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -104,13 +104,13 @@ func TestRouterV1ChatCompletionWithInvalidBody(t *testing.T) {
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
 			UserID:    1,
-			KeyPrefix: "unio_sk_test",
+			KeyPrefix: "sk_unio_test",
 		},
 	}
 	handler := newTestRouter(authenticator, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{"))
-	req.Header.Set("Authorization", "Bearer unio_sk_test")
+	req.Header.Set("Authorization", "Bearer sk_unio_test")
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -219,14 +219,14 @@ func assertChatCompletionDecodeError(t *testing.T, reqBody string, contentType s
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
 			UserID:    1,
-			KeyPrefix: "unio_sk_test",
+			KeyPrefix: "sk_unio_test",
 		},
 	}
 	service := &fakeChatCompletionService{}
 	handler := newTestRouter(authenticator, service, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(reqBody))
-	req.Header.Set("Authorization", "Bearer unio_sk_test")
+	req.Header.Set("Authorization", "Bearer sk_unio_test")
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
@@ -269,7 +269,7 @@ func TestRouterV1ChatCompletionWithMissingModel(t *testing.T) {
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
 			UserID:    1,
-			KeyPrefix: "unio_sk_test",
+			KeyPrefix: "sk_unio_test",
 		},
 	}
 	handler := newTestRouter(authenticator, nil, nil)
@@ -282,7 +282,7 @@ func TestRouterV1ChatCompletionWithMissingModel(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", buf)
-	req.Header.Set("Authorization", "Bearer unio_sk_test")
+	req.Header.Set("Authorization", "Bearer sk_unio_test")
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -310,7 +310,7 @@ func TestRouterV1ChatCompletionWithMissingMessages(t *testing.T) {
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
 			UserID:    1,
-			KeyPrefix: "unio_sk_test",
+			KeyPrefix: "sk_unio_test",
 		},
 	}
 	handler := newTestRouter(authenticator, nil, nil)
@@ -326,7 +326,7 @@ func TestRouterV1ChatCompletionWithMissingMessages(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", buf)
-	req.Header.Set("Authorization", "Bearer unio_sk_test")
+	req.Header.Set("Authorization", "Bearer sk_unio_test")
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -398,7 +398,7 @@ func TestRouterV1ChatCompletionCallsService(t *testing.T) {
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
 			UserID:    1,
-			KeyPrefix: "unio_sk_test",
+			KeyPrefix: "sk_unio_test",
 		},
 	}
 
@@ -433,7 +433,7 @@ func TestRouterV1ChatCompletionCallsService(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", buf)
-	req.Header.Set("Authorization", "Bearer unio_sk_test")
+	req.Header.Set("Authorization", "Bearer sk_unio_test")
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -509,7 +509,7 @@ func TestRouterV1ChatCompletionMapsRoutingErrors(t *testing.T) {
 				principal: &auth.APIKeyPrincipal{
 					APIKeyID:  1,
 					UserID:    1,
-					KeyPrefix: "unio_sk_test",
+					KeyPrefix: "sk_unio_test",
 				},
 			}
 			service := &fakeChatCompletionService{err: tc.err}
@@ -527,7 +527,7 @@ func TestRouterV1ChatCompletionMapsRoutingErrors(t *testing.T) {
 			}
 
 			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", buf)
-			req.Header.Set("Authorization", "Bearer unio_sk_test")
+			req.Header.Set("Authorization", "Bearer sk_unio_test")
 			rec := httptest.NewRecorder()
 
 			handler.ServeHTTP(rec, req)
@@ -562,7 +562,7 @@ func TestRouterV1ChatCompletionMapsInsufficientQuota(t *testing.T) {
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
 			UserID:    1,
-			KeyPrefix: "unio_sk_test",
+			KeyPrefix: "sk_unio_test",
 		},
 	}
 	service := &fakeChatCompletionService{
@@ -582,7 +582,7 @@ func TestRouterV1ChatCompletionMapsInsufficientQuota(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", buf)
-	req.Header.Set("Authorization", "Bearer unio_sk_test")
+	req.Header.Set("Authorization", "Bearer sk_unio_test")
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -627,7 +627,7 @@ func TestRouterV1ChatCompletionMapsTemporarilyReservedBalance(t *testing.T) {
 				principal: &auth.APIKeyPrincipal{
 					APIKeyID:  1,
 					UserID:    1,
-					KeyPrefix: "unio_sk_test",
+					KeyPrefix: "sk_unio_test",
 				},
 			}, service, nil)
 
@@ -644,7 +644,7 @@ func TestRouterV1ChatCompletionMapsTemporarilyReservedBalance(t *testing.T) {
 				t.Fatalf("encode request body: %v", err)
 			}
 			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", buf)
-			req.Header.Set("Authorization", "Bearer unio_sk_test")
+			req.Header.Set("Authorization", "Bearer sk_unio_test")
 			rec := httptest.NewRecorder()
 
 			handler.ServeHTTP(rec, req)
@@ -675,7 +675,7 @@ func TestRouterV1ChatCompletionPreservesExplicitZeroTemperature(t *testing.T) {
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
 			UserID:    1,
-			KeyPrefix: "unio_sk_test",
+			KeyPrefix: "sk_unio_test",
 		},
 	}
 	service := &fakeChatCompletionService{
@@ -711,7 +711,7 @@ func TestRouterV1ChatCompletionPreservesExplicitZeroTemperature(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", buf)
-	req.Header.Set("Authorization", "Bearer unio_sk_test")
+	req.Header.Set("Authorization", "Bearer sk_unio_test")
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -940,7 +940,7 @@ func assertChatCompletionInvalidRequest(t *testing.T, reqBody ChatCompletionRequ
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
 			UserID:    1,
-			KeyPrefix: "unio_sk_test",
+			KeyPrefix: "sk_unio_test",
 		},
 	}
 	service := &fakeChatCompletionService{}
@@ -952,7 +952,7 @@ func assertChatCompletionInvalidRequest(t *testing.T, reqBody ChatCompletionRequ
 	}
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", buf)
-	req.Header.Set("Authorization", "Bearer unio_sk_test")
+	req.Header.Set("Authorization", "Bearer sk_unio_test")
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -1012,7 +1012,7 @@ func TestChatCompletionMissingModelReturnsOpenAIError(t *testing.T) {
 	authenticator := &fakeAPIKeyAuthenticator{principal: &auth.APIKeyPrincipal{
 		APIKeyID:  1,
 		UserID:    1,
-		KeyPrefix: "unio_sk_test",
+		KeyPrefix: "sk_unio_test",
 	}}
 	router := newTestRouter(authenticator, nil, nil)
 
@@ -1027,7 +1027,7 @@ func TestChatCompletionMissingModelReturnsOpenAIError(t *testing.T) {
 		t.Fatalf("encode request body: %v", err)
 	}
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", buf)
-	req.Header.Set("Authorization", "Bearer unio_sk_test")
+	req.Header.Set("Authorization", "Bearer sk_unio_test")
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -1067,7 +1067,7 @@ func TestChatCompletionMissingMessagesReturnsOpenAIError(t *testing.T) {
 	authenticator := &fakeAPIKeyAuthenticator{principal: &auth.APIKeyPrincipal{
 		APIKeyID:  1,
 		UserID:    1,
-		KeyPrefix: "unio_sk_test",
+		KeyPrefix: "sk_unio_test",
 	}}
 	router := newTestRouter(authenticator, nil, nil)
 
@@ -1080,7 +1080,7 @@ func TestChatCompletionMissingMessagesReturnsOpenAIError(t *testing.T) {
 		t.Fatalf("encode request body: %v", err)
 	}
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", buf)
-	req.Header.Set("Authorization", "Bearer unio_sk_test")
+	req.Header.Set("Authorization", "Bearer sk_unio_test")
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -1142,7 +1142,7 @@ func TestRouterV1ChatCompletionWithStreamTrueWritesSSE(t *testing.T) {
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
 			UserID:    1,
-			KeyPrefix: "unio_sk_test",
+			KeyPrefix: "sk_unio_test",
 		},
 	}, service, nil)
 
@@ -1160,7 +1160,7 @@ func TestRouterV1ChatCompletionWithStreamTrueWritesSSE(t *testing.T) {
 		t.Fatalf("encode request body: %v", err)
 	}
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", reqBuf)
-	req.Header.Set("Authorization", "Bearer unio_sk_test")
+	req.Header.Set("Authorization", "Bearer sk_unio_test")
 
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -1235,7 +1235,7 @@ func TestRouterV1ChatCompletionStreamReturnsJSONErrorBeforeFirstChunk(t *testing
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
 			UserID:    1,
-			KeyPrefix: "unio_sk_test",
+			KeyPrefix: "sk_unio_test",
 		},
 	}, service, nil)
 
@@ -1252,7 +1252,7 @@ func TestRouterV1ChatCompletionStreamReturnsJSONErrorBeforeFirstChunk(t *testing
 		t.Fatalf("encode request body: %v", err)
 	}
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", reqBuf)
-	req.Header.Set("Authorization", "Bearer unio_sk_test")
+	req.Header.Set("Authorization", "Bearer sk_unio_test")
 
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -1293,7 +1293,7 @@ func TestRouterV1ChatCompletionStreamMapsRoutingErrorBeforeFirstChunk(t *testing
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
 			UserID:    1,
-			KeyPrefix: "unio_sk_test",
+			KeyPrefix: "sk_unio_test",
 		},
 	}, service, nil)
 
@@ -1310,7 +1310,7 @@ func TestRouterV1ChatCompletionStreamMapsRoutingErrorBeforeFirstChunk(t *testing
 		t.Fatalf("encode request body: %v", err)
 	}
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", reqBuf)
-	req.Header.Set("Authorization", "Bearer unio_sk_test")
+	req.Header.Set("Authorization", "Bearer sk_unio_test")
 
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -1345,7 +1345,7 @@ func TestRouterV1ChatCompletionStreamMapsInsufficientQuotaBeforeFirstChunk(t *te
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
 			UserID:    1,
-			KeyPrefix: "unio_sk_test",
+			KeyPrefix: "sk_unio_test",
 		},
 	}, service, nil)
 
@@ -1362,7 +1362,7 @@ func TestRouterV1ChatCompletionStreamMapsInsufficientQuotaBeforeFirstChunk(t *te
 		t.Fatalf("encode request body: %v", err)
 	}
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", reqBuf)
-	req.Header.Set("Authorization", "Bearer unio_sk_test")
+	req.Header.Set("Authorization", "Bearer sk_unio_test")
 
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -1417,7 +1417,7 @@ func TestRouterV1ChatCompletionStreamWritesSSEErrorAfterChunkStarted(t *testing.
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
 			UserID:    1,
-			KeyPrefix: "unio_sk_test",
+			KeyPrefix: "sk_unio_test",
 		},
 	}, service, nil)
 
@@ -1434,7 +1434,7 @@ func TestRouterV1ChatCompletionStreamWritesSSEErrorAfterChunkStarted(t *testing.
 		t.Fatalf("encode request body: %v", err)
 	}
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", reqBuf)
-	req.Header.Set("Authorization", "Bearer unio_sk_test")
+	req.Header.Set("Authorization", "Bearer sk_unio_test")
 
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)

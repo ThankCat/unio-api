@@ -34,6 +34,7 @@ const (
 	operationReset                  = "reset"
 	operationSnapshot               = "snapshot"
 	operationSnapshotMany           = "snapshot_many"
+	operationObserveChannels        = "observe_channels"
 	operationStateIntegrity         = "state_integrity"
 	operationRuntimeReadiness       = "runtime_readiness"
 	operationBeginRuntimeReconcile  = "begin_runtime_reconcile"

@@ -41,6 +41,7 @@ type adminHTTPDeps struct {
 	ChannelOpsService            channel.ChannelOpsService
 	ModelService                 model.ModelService
 	ModelOpsService              model.ModelOpsService
+	ModelRoutingService          model.ModelRoutingService
 	ChannelModelService          channel.ChannelModelService
 	ChannelModelInventoryService channel.ChannelModelInventoryService
 	ChannelPriceService          channel.ChannelPriceService
@@ -66,7 +67,8 @@ type adminHTTPDeps struct {
 
 	CatalogService model.CatalogService
 
-	DashboardService overview.DashboardService
+	DashboardService   overview.DashboardService
+	LiveTrafficService overview.LiveTrafficService
 
 	RecoveryJobQueryService   system.RecoveryJobQueryService
 	RuntimeDiagnosticsService system.RuntimeDiagnosticsService
@@ -102,6 +104,7 @@ func NewAdminHTTPHandler(deps adminHTTPDeps) http.Handler {
 		ChannelOpsService:            deps.ChannelOpsService,
 		ModelService:                 deps.ModelService,
 		ModelOpsService:              deps.ModelOpsService,
+		ModelRoutingService:          deps.ModelRoutingService,
 		ChannelModelService:          deps.ChannelModelService,
 		ChannelModelInventoryService: deps.ChannelModelInventoryService,
 		ChannelPriceService:          deps.ChannelPriceService,
@@ -125,7 +128,8 @@ func NewAdminHTTPHandler(deps adminHTTPDeps) http.Handler {
 
 		CatalogService: deps.CatalogService,
 
-		DashboardService: deps.DashboardService,
+		DashboardService:   deps.DashboardService,
+		LiveTrafficService: deps.LiveTrafficService,
 
 		RecoveryJobQueryService:   deps.RecoveryJobQueryService,
 		RuntimeDiagnosticsService: deps.RuntimeDiagnosticsService,

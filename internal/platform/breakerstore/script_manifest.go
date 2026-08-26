@@ -15,6 +15,7 @@ var luaScriptManifest = []luaScriptSpec{
 	{name: "attempt.reset", main: "lua/ops/reset.lua"},
 	{name: "attempt.snapshot", main: "lua/ops/snapshot.lua"},
 	{name: "attempt.snapshot_many", helpers: []string{luaRedisInstancePath, luaAuthoritativePath}, main: "lua/ops/snapshot_many.lua"},
+	{name: "attempt.observe_channels", helpers: []string{luaAuthoritativePath}, main: "lua/ops/observe_channels.lua"},
 	{name: "attempt.set_cooldown", main: "lua/ops/set_cooldown.lua"},
 	{name: "attempt.cooldown_remaining", main: "lua/ops/cooldown_remaining.lua"},
 	{name: "attempt.record_sample", main: "lua/ops/record_sample.lua"},

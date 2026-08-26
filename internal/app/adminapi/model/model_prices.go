@@ -11,10 +11,11 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/modelprice"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/supply"
 )
 
-// ModelPriceService 定义 adminapi 操作模型基准售价（model_prices）所需的最小能力（DEC-026）。
-// 客户最终售价 = 模型基准价 × 线路倍率；此处只管基准售价（无成本，成本在渠道侧）。
+// ModelPriceService 定义 adminapi 操作模型定价（model_prices）所需的最小能力（DEC-026）。
+// 创建必须带 intent（base / sale_ratio / sale_absolute）；草稿行可以只有基准价。
 type ModelPriceService interface {
 	List(ctx context.Context, modelID int64) ([]modelprice.ModelPrice, error)
 	Create(ctx context.Context, in modelprice.CreateInput) (modelprice.ModelPrice, error)
@@ -40,6 +41,7 @@ type modelPriceDTO struct {
 	ReasoningOutputPrice        *string                `json:"reasoning_output_price"`
 	SalePriceRatio              *string                `json:"sale_price_ratio"`
 	SalePrices                  *salePriceVectorDTO    `json:"sale_prices"`
+	SaleConfigured              bool                   `json:"sale_configured"`
 	LongContextEnabled          bool                   `json:"long_context_enabled"`
 	LongContextThreshold        *int64                 `json:"long_context_threshold"`
 	LongContextInputMultiplier  *string                `json:"long_context_input_multiplier"`
@@ -52,6 +54,8 @@ type modelPriceDTO struct {
 	EffectiveTo                 *string                `json:"effective_to"`
 	CreatedAt                   string                 `json:"created_at"`
 	UpdatedAt                   string                 `json:"updated_at"`
+	// Warnings 是不阻断写入、但管理员应当知道的后果，例如窗口到期后无接续售价。
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // salePriceVectorDTO 是一组对外绝对售价：整组给齐或整组留空，非空时优先于售价倍率。
@@ -106,9 +110,10 @@ type fastPriceRequest struct {
 	ReferenceCheckedAt      *string             `json:"reference_checked_at"`
 }
 
-// createModelPriceRequest 的 sale_price_ratio 与 sale_prices 至少给一个：
-// 前者是「基准价 × 倍率」，后者是钉死的绝对售价，两者都缺则这条价格行卖不出去。
+// createModelPriceRequest 必须带 intent：base / sale_ratio / sale_absolute。
+// 没有 intent 的旧请求返回 400，避免静默按「整行手填」走。
 type createModelPriceRequest struct {
+	Intent                      string              `json:"intent"`
 	Currency                    string              `json:"currency"`
 	PricingUnit                 string              `json:"pricing_unit"`
 	UncachedInputPrice          string              `json:"uncached_input_price"`
@@ -129,11 +134,18 @@ type createModelPriceRequest struct {
 	Status                      string              `json:"status"`
 	EffectiveFrom               string              `json:"effective_from"`
 	EffectiveTo                 *string             `json:"effective_to"`
+	// 替换窗口若让模型失去可解析售价，需携带影响指纹确认；确认后模型一并下架。
+	ConfirmSupplyImpact       bool   `json:"confirm_supply_impact"`
+	ExpectedImpactFingerprint string `json:"expected_impact_fingerprint"`
 }
 
 type updateModelPriceRequest struct {
 	Status      string  `json:"status"`
 	EffectiveTo *string `json:"effective_to"`
+	// 撤掉模型最后一条可解析售价时需携带影响指纹确认；确认后模型一并下架。
+	// 价格侧不提供「保留模型」选项，所以没有 selected_models。
+	ConfirmSupplyImpact       bool   `json:"confirm_supply_impact"`
+	ExpectedImpactFingerprint string `json:"expected_impact_fingerprint"`
 }
 
 type modelPricesHandler struct {
@@ -192,6 +204,7 @@ func (h *modelPricesHandler) create(w http.ResponseWriter, r *http.Request) {
 
 	p, err := h.service.Create(r.Context(), modelprice.CreateInput{
 		ModelID:                     modelID,
+		Intent:                      req.Intent,
 		Currency:                    req.Currency,
 		PricingUnit:                 req.PricingUnit,
 		UncachedInputPrice:          req.UncachedInputPrice,
@@ -212,6 +225,10 @@ func (h *modelPricesHandler) create(w http.ResponseWriter, r *http.Request) {
 		Status:                      req.Status,
 		EffectiveFrom:               from,
 		EffectiveTo:                 to,
+		Confirmation: supply.Confirmation{
+			Confirm:             req.ConfirmSupplyImpact,
+			ExpectedFingerprint: req.ExpectedImpactFingerprint,
+		},
 	})
 	if err != nil {
 		adminhttp.WriteServiceError(w, err)
@@ -244,6 +261,10 @@ func (h *modelPricesHandler) update(w http.ResponseWriter, r *http.Request) {
 		ID:          id,
 		Status:      req.Status,
 		EffectiveTo: to,
+		Confirmation: supply.Confirmation{
+			Confirm:             req.ConfirmSupplyImpact,
+			ExpectedFingerprint: req.ExpectedImpactFingerprint,
+		},
 	})
 	if err != nil {
 		adminhttp.WriteServiceError(w, err)
@@ -270,6 +291,7 @@ func toModelPriceDTO(p modelprice.ModelPrice) modelPriceDTO {
 		ReasoningOutputPrice:        p.ReasoningOutputPrice,
 		SalePriceRatio:              p.SalePriceRatio,
 		SalePrices:                  saleVectorDTO(p.SalePrices),
+		SaleConfigured:              p.SaleConfigured,
 		LongContextEnabled:          p.LongContextEnabled,
 		LongContextThreshold:        p.LongContextThreshold,
 		LongContextInputMultiplier:  p.LongContextInputMultiplier,
@@ -279,6 +301,7 @@ func toModelPriceDTO(p modelprice.ModelPrice) modelPriceDTO {
 		EffectiveFrom:               p.EffectiveFrom.UTC().Format(time.RFC3339),
 		CreatedAt:                   p.CreatedAt.UTC().Format(time.RFC3339),
 		UpdatedAt:                   p.UpdatedAt.UTC().Format(time.RFC3339),
+		Warnings:                    p.Warnings,
 	}
 	if p.FastPrices != nil {
 		fast := fastPriceDTO{

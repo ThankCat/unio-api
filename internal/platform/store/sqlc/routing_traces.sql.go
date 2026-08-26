@@ -126,6 +126,422 @@ func (q *Queries) GetRoutingDecisionTraceByRequestID(ctx context.Context, reques
 	return i, err
 }
 
+const listChannelNames = `-- name: ListChannelNames :many
+SELECT c.id, c.name, c.status
+FROM channels c
+WHERE c.id = ANY($1::bigint[])
+ORDER BY c.id
+`
+
+type ListChannelNamesRow struct {
+	ID     int64
+	Name   string
+	Status string
+}
+
+// ListChannelNames 按 id 批量取渠道名，供选路统计把 channel_id 翻译成可读名称。
+func (q *Queries) ListChannelNames(ctx context.Context, channelIds []int64) ([]ListChannelNamesRow, error) {
+	rows, err := q.db.Query(ctx, listChannelNames, channelIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListChannelNamesRow
+	for rows.Next() {
+		var i ListChannelNamesRow
+		if err := rows.Scan(&i.ID, &i.Name, &i.Status); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const liveTrafficChannels = `-- name: LiveTrafficChannels :many
+SELECT
+    c.id AS channel_id,
+    c.name AS channel_name,
+    c.status AS channel_status,
+    c.credential_valid,
+    c.priority,
+    c.concurrency_limit,
+    p.id AS provider_id,
+    p.name AS provider_name,
+    p.status AS provider_status,
+    (
+        SELECT COUNT(*) FROM channel_models cm
+        WHERE cm.channel_id = c.id AND cm.status = 'enabled'
+    ) AS bound_models
+FROM channels c
+JOIN providers p ON p.id = c.provider_id
+WHERE c.status <> 'archived'
+ORDER BY c.id
+`
+
+type LiveTrafficChannelsRow struct {
+	ChannelID        int64
+	ChannelName      string
+	ChannelStatus    string
+	CredentialValid  bool
+	Priority         int32
+	ConcurrencyLimit pgtype.Int4
+	ProviderID       int64
+	ProviderName     string
+	ProviderStatus   string
+	BoundModels      int64
+}
+
+// LiveTrafficChannels 列出参与流量的渠道及其静态事实，运行态由 Redis 补齐。
+// 归档渠道不出现；停用渠道保留，因为「配了却不在跑」本身是要看的信息。
+func (q *Queries) LiveTrafficChannels(ctx context.Context) ([]LiveTrafficChannelsRow, error) {
+	rows, err := q.db.Query(ctx, liveTrafficChannels)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []LiveTrafficChannelsRow
+	for rows.Next() {
+		var i LiveTrafficChannelsRow
+		if err := rows.Scan(
+			&i.ChannelID,
+			&i.ChannelName,
+			&i.ChannelStatus,
+			&i.CredentialValid,
+			&i.Priority,
+			&i.ConcurrencyLimit,
+			&i.ProviderID,
+			&i.ProviderName,
+			&i.ProviderStatus,
+			&i.BoundModels,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const liveTrafficModels = `-- name: LiveTrafficModels :many
+SELECT
+    r.requested_model_id,
+    COUNT(*) FILTER (WHERE r.status IN ('succeeded', 'failed')) AS request_total,
+    COUNT(*) FILTER (WHERE r.status = 'succeeded') AS request_succeeded
+FROM request_records r
+WHERE r.created_at >= $1::timestamptz
+GROUP BY 1
+HAVING COUNT(*) > 0
+ORDER BY request_total DESC
+LIMIT $2
+`
+
+type LiveTrafficModelsParams struct {
+	FromTime pgtype.Timestamptz
+	RowLimit int32
+}
+
+type LiveTrafficModelsRow struct {
+	RequestedModelID string
+	RequestTotal     int64
+	RequestSucceeded int64
+}
+
+// LiveTrafficModels 统计本分钟各模型的请求量。
+// 与渠道侧的 Redis 观测不同源：模型维度的 in-flight 需要改准入热路径才能统计，
+// 不值得为一个展示字段承担那个风险，所以这里只给已落库的请求数。
+func (q *Queries) LiveTrafficModels(ctx context.Context, arg LiveTrafficModelsParams) ([]LiveTrafficModelsRow, error) {
+	rows, err := q.db.Query(ctx, liveTrafficModels, arg.FromTime, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []LiveTrafficModelsRow
+	for rows.Next() {
+		var i LiveTrafficModelsRow
+		if err := rows.Scan(&i.RequestedModelID, &i.RequestTotal, &i.RequestSucceeded); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const modelRoutingExclusionStats = `-- name: ModelRoutingExclusionStats :many
+WITH exclusions AS (
+    SELECT
+        candidate.value->>'excluded_reason' AS excluded_reason,
+        (candidate.value->>'channel_id')::bigint AS channel_id
+    FROM routing_decision_traces t
+    CROSS JOIN LATERAL jsonb_array_elements(
+        COALESCE(t.trace_payload->'candidates', '[]'::jsonb)
+    ) AS candidate(value)
+    WHERE t.requested_model_id = $1
+      AND t.trace_status = 'complete'
+      AND t.created_at >= $2::timestamptz
+      AND t.created_at < $3::timestamptz
+      AND COALESCE((candidate.value->>'eligible')::boolean, false) = false
+      AND COALESCE(candidate.value->>'excluded_reason', '') <> ''
+), per_reason_channel AS (
+    SELECT excluded_reason, channel_id, COUNT(*) AS hits
+    FROM exclusions
+    GROUP BY 1, 2
+)
+SELECT
+    e.excluded_reason::text AS excluded_reason,
+    SUM(e.hits)::bigint AS occurrences,
+    ((array_agg(e.channel_id ORDER BY e.hits DESC, e.channel_id))[1])::bigint AS sample_channel_id,
+    COUNT(DISTINCT e.channel_id)::bigint AS channels_touched
+FROM per_reason_channel e
+GROUP BY 1
+ORDER BY occurrences DESC, 1
+`
+
+type ModelRoutingExclusionStatsParams struct {
+	RequestedModelID string
+	FromTime         pgtype.Timestamptz
+	ToTime           pgtype.Timestamptz
+}
+
+type ModelRoutingExclusionStatsRow struct {
+	ExcludedReason  string
+	Occurrences     int64
+	SampleChannelID int64
+	ChannelsTouched int64
+}
+
+// ModelRoutingExclusionStats 统计候选为什么没被用上。
+//
+// 成本提示：trace_payload.candidates 装的是全池非 archived 渠道，不是该模型的绑定渠道，
+// 因此展开后的元素数约等于「选路次数 × 全池渠道数」。调用方必须限制时间窗（当前 24 小时），
+// 否则这条查询会随保留期线性变慢。
+//
+// sample_channel_id 取该原因下出现次数最多的渠道，用于在界面上指认「主要是谁」。
+func (q *Queries) ModelRoutingExclusionStats(ctx context.Context, arg ModelRoutingExclusionStatsParams) ([]ModelRoutingExclusionStatsRow, error) {
+	rows, err := q.db.Query(ctx, modelRoutingExclusionStats, arg.RequestedModelID, arg.FromTime, arg.ToTime)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ModelRoutingExclusionStatsRow
+	for rows.Next() {
+		var i ModelRoutingExclusionStatsRow
+		if err := rows.Scan(
+			&i.ExcludedReason,
+			&i.Occurrences,
+			&i.SampleChannelID,
+			&i.ChannelsTouched,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const modelRoutingOutcomeStats = `-- name: ModelRoutingOutcomeStats :many
+SELECT
+    COALESCE(t.final_result, 'unknown')::text AS final_result,
+    COUNT(*) AS occurrences
+FROM routing_decision_traces t
+WHERE t.requested_model_id = $1
+  AND t.trace_status = 'complete'
+  AND t.created_at >= $2::timestamptz
+  AND t.created_at < $3::timestamptz
+GROUP BY 1
+ORDER BY occurrences DESC, 1
+`
+
+type ModelRoutingOutcomeStatsParams struct {
+	RequestedModelID string
+	FromTime         pgtype.Timestamptz
+	ToTime           pgtype.Timestamptz
+}
+
+type ModelRoutingOutcomeStatsRow struct {
+	FinalResult string
+	Occurrences int64
+}
+
+// ModelRoutingOutcomeStats 统计选路终态分布（success / no_available_channel / ...）。
+func (q *Queries) ModelRoutingOutcomeStats(ctx context.Context, arg ModelRoutingOutcomeStatsParams) ([]ModelRoutingOutcomeStatsRow, error) {
+	rows, err := q.db.Query(ctx, modelRoutingOutcomeStats, arg.RequestedModelID, arg.FromTime, arg.ToTime)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ModelRoutingOutcomeStatsRow
+	for rows.Next() {
+		var i ModelRoutingOutcomeStatsRow
+		if err := rows.Scan(&i.FinalResult, &i.Occurrences); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const modelRoutingSelectionStats = `-- name: ModelRoutingSelectionStats :many
+
+SELECT
+    t.selected_channel_id,
+    COUNT(*) AS selections
+FROM routing_decision_traces t
+WHERE t.requested_model_id = $1
+  AND t.trace_status = 'complete'
+  AND t.created_at >= $2::timestamptz
+  AND t.created_at < $3::timestamptz
+GROUP BY 1
+ORDER BY selections DESC, t.selected_channel_id
+`
+
+type ModelRoutingSelectionStatsParams struct {
+	RequestedModelID string
+	FromTime         pgtype.Timestamptz
+	ToTime           pgtype.Timestamptz
+}
+
+type ModelRoutingSelectionStatsRow struct {
+	SelectedChannelID pgtype.Int8
+	Selections        int64
+}
+
+// 以下三个聚合共用同一个窗口口径：按 requested_model_id（本表冗余列，不必 JOIN
+// request_records）加 created_at 范围，命中 idx_routing_decision_traces_model_created。
+// 只统计 trace_status='complete'：partial 是进行中或进程崩溃遗留，payload 不完整；
+// legacy_sampled 是改造前的采样行，schema 不同。
+// ModelRoutingSelectionStats 统计流量最终落在哪条渠道。
+// selected_channel_id 为 NULL 表示这次选路没能选出渠道（无可用候选等），单独归一行。
+func (q *Queries) ModelRoutingSelectionStats(ctx context.Context, arg ModelRoutingSelectionStatsParams) ([]ModelRoutingSelectionStatsRow, error) {
+	rows, err := q.db.Query(ctx, modelRoutingSelectionStats, arg.RequestedModelID, arg.FromTime, arg.ToTime)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ModelRoutingSelectionStatsRow
+	for rows.Next() {
+		var i ModelRoutingSelectionStatsRow
+		if err := rows.Scan(&i.SelectedChannelID, &i.Selections); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const modelRoutingTraceCount = `-- name: ModelRoutingTraceCount :one
+SELECT COUNT(*) AS total
+FROM routing_decision_traces t
+WHERE t.requested_model_id = $1
+  AND t.created_at >= $2::timestamptz
+  AND t.created_at < $3::timestamptz
+`
+
+type ModelRoutingTraceCountParams struct {
+	RequestedModelID string
+	FromTime         pgtype.Timestamptz
+	ToTime           pgtype.Timestamptz
+}
+
+func (q *Queries) ModelRoutingTraceCount(ctx context.Context, arg ModelRoutingTraceCountParams) (int64, error) {
+	row := q.db.QueryRow(ctx, modelRoutingTraceCount, arg.RequestedModelID, arg.FromTime, arg.ToTime)
+	var total int64
+	err := row.Scan(&total)
+	return total, err
+}
+
+const modelRoutingTraceList = `-- name: ModelRoutingTraceList :many
+SELECT
+    t.created_at,
+    t.final_result,
+    t.eligible_count,
+    COALESCE(jsonb_array_length(t.trace_payload->'candidates'), 0)::int AS candidate_count,
+    t.selected_channel_id,
+    t.fallback_count,
+    t.capacity_wait_result,
+    r.request_id
+FROM routing_decision_traces t
+JOIN request_records r ON r.id = t.request_record_id
+WHERE t.requested_model_id = $1
+  AND t.created_at >= $2::timestamptz
+  AND t.created_at < $3::timestamptz
+ORDER BY t.created_at DESC
+LIMIT $5 OFFSET $4
+`
+
+type ModelRoutingTraceListParams struct {
+	RequestedModelID string
+	FromTime         pgtype.Timestamptz
+	ToTime           pgtype.Timestamptz
+	PageOffset       int32
+	PageLimit        int32
+}
+
+type ModelRoutingTraceListRow struct {
+	CreatedAt          pgtype.Timestamptz
+	FinalResult        pgtype.Text
+	EligibleCount      int32
+	CandidateCount     int32
+	SelectedChannelID  pgtype.Int8
+	FallbackCount      int32
+	CapacityWaitResult pgtype.Text
+	RequestID          string
+}
+
+// ModelRoutingTraceList 是最近选路列表（分页），供逐条下钻到完整 trace。
+// candidate_count 用 payload 里的候选数而非 pool_size：后者是全池渠道数，
+// 与界面上「候选 N 条」不是一回事。
+func (q *Queries) ModelRoutingTraceList(ctx context.Context, arg ModelRoutingTraceListParams) ([]ModelRoutingTraceListRow, error) {
+	rows, err := q.db.Query(ctx, modelRoutingTraceList,
+		arg.RequestedModelID,
+		arg.FromTime,
+		arg.ToTime,
+		arg.PageOffset,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ModelRoutingTraceListRow
+	for rows.Next() {
+		var i ModelRoutingTraceListRow
+		if err := rows.Scan(
+			&i.CreatedAt,
+			&i.FinalResult,
+			&i.EligibleCount,
+			&i.CandidateCount,
+			&i.SelectedChannelID,
+			&i.FallbackCount,
+			&i.CapacityWaitResult,
+			&i.RequestID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const modelRuntimePool = `-- name: ModelRuntimePool :many
 SELECT
     c.id AS channel_id,

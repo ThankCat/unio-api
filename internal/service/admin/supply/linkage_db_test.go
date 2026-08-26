@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -157,6 +158,21 @@ func (f *fixture) pricing(channelID, modelID int64) {
 		ON CONFLICT DO NOTHING
 	`, channelID, modelID); err != nil {
 		f.t.Fatalf("insert channel price: %v", err)
+	}
+}
+
+// basePriceOnly 只写生效基准价，故意不配倍率或绝对售价：用于验证草稿行不可启用。
+func (f *fixture) basePriceOnly(modelID int64) {
+	f.t.Helper()
+	if _, err := f.pool.Exec(f.ctx, `
+		INSERT INTO model_prices (
+			model_id, currency, pricing_unit, uncached_input_price, output_price,
+			status, effective_from
+		)
+		VALUES ($1, 'USD', 'per_1m_tokens', 100, 200, 'enabled', now() - interval '1 hour')
+		ON CONFLICT DO NOTHING
+	`, modelID); err != nil {
+		f.t.Fatalf("insert draft base price: %v", err)
 	}
 }
 
@@ -366,6 +382,42 @@ func TestModelEnableRequiresModelPrice(t *testing.T) {
 	if _, err := newModelService(f).Update(f.ctx, adminmodel.UpdateInput{
 		ID: modelID, DisplayName: "supply-test-model", OwnedBy: "test", Status: "enabled"}); err != nil {
 		t.Fatalf("enable model after pricing it: %v", err)
+	}
+	if got := f.modelStatus(modelID); got != "enabled" {
+		t.Fatalf("model status = %q, want enabled", got)
+	}
+}
+
+// 加法侧守卫（售价）：有生效基准价但没有倍率/绝对售价时不允许启用。
+func TestModelEnableRequiresSalePrice(t *testing.T) {
+	f := newFixture(t)
+	modelID := f.model(uniqueName("openai/supply-no-sale"), "disabled")
+	providerID := f.provider(uniqueName("supply-no-sale"), "enabled")
+	channelID := f.channel(providerID, uniqueName("supply-no-sale-channel"), "openai", "enabled")
+	f.binding(channelID, modelID, "enabled")
+	f.channelCostOnly(channelID, modelID)
+	f.basePriceOnly(modelID)
+
+	_, err := newModelService(f).Update(f.ctx, adminmodel.UpdateInput{
+		ID: modelID, DisplayName: "supply-test-model", OwnedBy: "test", Status: "enabled"})
+	if err == nil {
+		t.Fatal("enabling a model without a resolvable sale price must be rejected")
+	}
+	if got := err.Error(); !strings.Contains(got, "售价") {
+		t.Fatalf("enable error should mention missing sale price, got %q", got)
+	}
+	if got := f.modelStatus(modelID); got != "disabled" {
+		t.Fatalf("rejected enable must not change status, got %q", got)
+	}
+
+	if _, err := f.pool.Exec(f.ctx, `
+		UPDATE model_prices SET sale_price_ratio = 1 WHERE model_id = $1
+	`, modelID); err != nil {
+		t.Fatalf("add sale ratio to draft price: %v", err)
+	}
+	if _, err := newModelService(f).Update(f.ctx, adminmodel.UpdateInput{
+		ID: modelID, DisplayName: "supply-test-model", OwnedBy: "test", Status: "enabled"}); err != nil {
+		t.Fatalf("enable model after adding a sale price: %v", err)
 	}
 	if got := f.modelStatus(modelID); got != "enabled" {
 		t.Fatalf("model status = %q, want enabled", got)

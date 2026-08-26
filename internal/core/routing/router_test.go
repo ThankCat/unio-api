@@ -502,10 +502,93 @@ func TestRouterPlanChatPrefersAbsoluteSalePriceOverRatio(t *testing.T) {
 	}
 }
 
+// Standard 已走绝对售价时，Fast 不能回落到倍率；缺 Fast 绝对售价就丢掉 Fast，绝不混算。
+func TestRouterPlanChatDoesNotMixFastRatioWhenStandardAbsoluteConfigured(t *testing.T) {
+	row := salePriceRow()
+	row.SaleUncachedInputPrice = numeric(7, 0)
+	row.SaleOutputPrice = numeric(9, 0)
+	row.SalePriceRatio = numeric(25, -1) // 2.5，绝对售价在场时不得用于 Fast
+	row.FastModelPriceServiceTierID = 88
+	row.FastUncachedInputPrice = numeric(10, 0)
+	row.FastOutputPrice = numeric(20, 0)
+	store := &fakeStore{rows: []sqlc.FindModelCandidatesRow{row}}
+	router := NewRouter(store, 30*time.Second)
+
+	plan, err := router.PlanChat(context.Background(), ChatRouteRequest{
+		UserID: 42, ModelID: "openai/gpt-4.1", IngressProtocol: ProtocolOpenAI})
+	if err != nil {
+		t.Fatalf("PlanChat returned error: %v", err)
+	}
+	candidate := plan.Candidates[0]
+	if got := numericFloat(t, candidate.SalePrice.UncachedInputPrice); got != 7 {
+		t.Fatalf("standard sale = %v, want 7", got)
+	}
+	if candidate.FastModelPriceServiceTierID != 0 {
+		t.Fatal("Fast must not attach by mixing ratio under an absolute override")
+	}
+}
+
+// 倍率实体生效时，即使库里留着 Fast 绝对售价，Fast 也必须按倍率算，不能一边倍率一边绝对。
+func TestRouterPlanChatDoesNotUseFastAbsoluteWhenStandardUsesRatio(t *testing.T) {
+	row := salePriceRow()
+	row.SalePriceRatio = numeric(25, -1) // 2.5
+	row.FastModelPriceServiceTierID = 88
+	row.FastUncachedInputPrice = numeric(10, 0)
+	row.FastOutputPrice = numeric(20, 0)
+	row.FastSaleUncachedInputPrice = numeric(11, 0)
+	row.FastSaleOutputPrice = numeric(22, 0)
+	store := &fakeStore{rows: []sqlc.FindModelCandidatesRow{row}}
+	router := NewRouter(store, 30*time.Second)
+
+	plan, err := router.PlanChat(context.Background(), ChatRouteRequest{
+		UserID: 42, ModelID: "openai/gpt-4.1", IngressProtocol: ProtocolOpenAI})
+	if err != nil {
+		t.Fatalf("PlanChat returned error: %v", err)
+	}
+	candidate := plan.Candidates[0]
+	if got := numericFloat(t, candidate.SalePrice.UncachedInputPrice); got != 25 {
+		t.Fatalf("standard sale = %v, want 25 (10 × 2.5)", got)
+	}
+	if candidate.FastModelPriceServiceTierID != 88 {
+		t.Fatalf("Fast tier id = %d, want 88", candidate.FastModelPriceServiceTierID)
+	}
+	if got := numericFloat(t, candidate.FastSalePrice.UncachedInputPrice); got != 25 {
+		t.Fatalf("fast sale = %v, want 25 (Fast 基准 × 倍率，忽略残留绝对售价)", got)
+	}
+}
+
+// 绝对售价实体生效时，Standard 与 Fast 都只走各自的绝对售价。
+func TestRouterPlanChatUsesFastAbsoluteWithStandardAbsolute(t *testing.T) {
+	row := salePriceRow()
+	row.SaleUncachedInputPrice = numeric(7, 0)
+	row.SaleOutputPrice = numeric(9, 0)
+	row.SalePriceRatio = numeric(25, -1) // 2.5，应被整组忽略
+	row.FastModelPriceServiceTierID = 88
+	row.FastUncachedInputPrice = numeric(10, 0)
+	row.FastOutputPrice = numeric(20, 0)
+	row.FastSaleUncachedInputPrice = numeric(11, 0)
+	row.FastSaleOutputPrice = numeric(22, 0)
+	store := &fakeStore{rows: []sqlc.FindModelCandidatesRow{row}}
+	router := NewRouter(store, 30*time.Second)
+
+	plan, err := router.PlanChat(context.Background(), ChatRouteRequest{
+		UserID: 42, ModelID: "openai/gpt-4.1", IngressProtocol: ProtocolOpenAI})
+	if err != nil {
+		t.Fatalf("PlanChat returned error: %v", err)
+	}
+	candidate := plan.Candidates[0]
+	if got := numericFloat(t, candidate.FastSalePrice.UncachedInputPrice); got != 11 {
+		t.Fatalf("fast sale = %v, want 11 (Fast 绝对售价)", got)
+	}
+	if candidate.PriceRatio.Valid {
+		t.Fatal("绝对售价路径下快照倍率必须留空")
+	}
+}
+
 // 售价无法解析时排除该候选，绝不猜一个倍率把请求放过去。
 //
-// 倍率与绝对售价都为空的价格行会被 ck_model_prices_sale_configured 拦在库外，
-// 走到这里说明数据已经越过约束（手改库、约束被摘等），此时宁可 no_available_channel
+// 倍率与绝对售价都为空的价格行是草稿：库里允许存在，但不可售。
+// 走到这里说明候选查询没把它滤掉，此时宁可 no_available_channel
 // 也不能兜底成 1.0——那等于按基准价原价卖，是一次静默的定价事故。
 func TestRouterPlanChatExcludesCandidateWhenSalePriceUnresolvable(t *testing.T) {
 	row := salePriceRow()

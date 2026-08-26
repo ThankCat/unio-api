@@ -392,6 +392,12 @@ func (s *Service) enableModel(ctx context.Context, modelID int64, params sqlc.Up
 		return Model{}, storeFailed(err, "lock model for enable")
 	}
 	if err := supply.EnsureRuntimeSupply(ctx, q, modelID); err != nil {
+		if errors.Is(err, supply.ErrNoBasePrice) {
+			return Model{}, invalidArgument("status", "该模型还没有生效基准价，先配基准价再启用")
+		}
+		if errors.Is(err, supply.ErrNoSalePrice) {
+			return Model{}, invalidArgument("status", "该模型还没有售价（倍率或绝对售价），先配售价再启用")
+		}
 		if errors.Is(err, supply.ErrNoRuntimeSupply) {
 			return Model{}, invalidArgument("status", "该模型还没有可用渠道，先绑定一条可用渠道再启用")
 		}

@@ -41,7 +41,7 @@ func newMessagesAuthenticator() *fakeMessagesAuthenticator {
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
 			UserID:    1,
-			KeyPrefix: "unio_sk_test",
+			KeyPrefix: "sk_unio_test",
 		},
 	}
 }
@@ -182,7 +182,7 @@ func encodeMessageBody(t *testing.T, stream bool) *bytes.Buffer {
 // newMessagesRequest 构造一个带合法 x-api-key 与 anthropic-version 的 /v1/messages 请求。
 func newMessagesRequest(body io.Reader) *http.Request {
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages", body)
-	req.Header.Set("x-api-key", "unio_sk_test")
+	req.Header.Set("x-api-key", "sk_unio_test")
 	req.Header.Set("anthropic-version", "2023-06-01")
 	return req
 }
@@ -247,7 +247,7 @@ func TestRouterV1MessagesWithBearerAPIKey(t *testing.T) {
 	handler := newMessagesTestRouter(newMessagesAuthenticator(), &fakeMessagesService{}, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages", encodeMessageBody(t, false))
-	req.Header.Set("Authorization", "Bearer unio_sk_test")
+	req.Header.Set("Authorization", "Bearer sk_unio_test")
 	req.Header.Set("anthropic-version", "2023-06-01")
 	rec := httptest.NewRecorder()
 
@@ -263,7 +263,7 @@ func TestRouterV1MessagesMissingAnthropicVersion(t *testing.T) {
 	handler := newMessagesTestRouter(newMessagesAuthenticator(), service, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages", encodeMessageBody(t, false))
-	req.Header.Set("x-api-key", "unio_sk_test")
+	req.Header.Set("x-api-key", "sk_unio_test")
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -289,7 +289,7 @@ func TestRouterV1MessagesUnsupportedAnthropicVersion(t *testing.T) {
 	handler := newMessagesTestRouter(newMessagesAuthenticator(), service, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages", encodeMessageBody(t, false))
-	req.Header.Set("x-api-key", "unio_sk_test")
+	req.Header.Set("x-api-key", "sk_unio_test")
 	req.Header.Set("anthropic-version", "1999-01-01")
 	rec := httptest.NewRecorder()
 
@@ -312,7 +312,7 @@ func TestRouterV1MessagesInvalidBody(t *testing.T) {
 	handler := newMessagesTestRouter(newMessagesAuthenticator(), &fakeMessagesService{}, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader("{"))
-	req.Header.Set("x-api-key", "unio_sk_test")
+	req.Header.Set("x-api-key", "sk_unio_test")
 	req.Header.Set("anthropic-version", "2023-06-01")
 	rec := httptest.NewRecorder()
 

@@ -28,7 +28,7 @@ func TestOpenAISDKBlackboxHTTPNonStream(t *testing.T) {
 		"messages": [{"role": "user", "content": "hello from sdk"}],
 		"temperature": 0.7
 	}`))
-	req.Header.Set("Authorization", "Bearer unio_sk_test")
+	req.Header.Set("Authorization", "Bearer sk_unio_test")
 	req.Header.Set("Content-Type", "application/json")
 
 	rec := httptest.NewRecorder()
@@ -63,7 +63,7 @@ func TestOpenAISDKBlackboxHTTPStreamIncludeUsage(t *testing.T) {
 		"stream": true,
 		"stream_options": {"include_usage": true}
 	}`))
-	req.Header.Set("Authorization", "Bearer unio_sk_test")
+	req.Header.Set("Authorization", "Bearer sk_unio_test")
 	req.Header.Set("Content-Type", "application/json")
 
 	rec := httptest.NewRecorder()
@@ -115,7 +115,7 @@ func newSDKBlackboxHTTPService(t *testing.T, stream bool) (*ChatCompletionServic
 type sdkBlackboxAuthenticator struct{}
 
 func (sdkBlackboxAuthenticator) AuthenticateAPIKey(_ context.Context, _ string) (*auth.APIKeyPrincipal, error) {
-	return &auth.APIKeyPrincipal{APIKeyID: 1, UserID: 42, KeyPrefix: "unio_sk_test"}, nil
+	return &auth.APIKeyPrincipal{APIKeyID: 1, UserID: 42, KeyPrefix: "sk_unio_test"}, nil
 }
 
 func newSDKBlackboxHandler(service *ChatCompletionService) http.Handler {

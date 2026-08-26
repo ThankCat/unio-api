@@ -33,6 +33,8 @@ const (
 	ReasonBindingDisabled = "binding_disabled"
 	// ReasonChannelDisabled 该模型最后一条可用渠道被停用。
 	ReasonChannelDisabled = "channel_disabled"
+	// ReasonPriceDisabled 该模型最后一条可解析售价被撤销。
+	ReasonPriceDisabled = "price_disabled"
 )
 
 // AffectedModel 是影响预览中将失去供给的一个模型。
@@ -230,6 +232,57 @@ func ModelImpact(ctx context.Context, q *sqlc.Queries, modelID int64, publicMode
 	}, nil
 }
 
+// PriceImpact 在锁内计算撤掉一条价格窗口的影响：该模型是否因此失去可解析售价。
+// excludePriceID 为 nil 表示当前窗口整组被替换（Create 的 replace_overlapping_enabled 路径）。
+// 调用方必须已锁定该 Model。
+func PriceImpact(ctx context.Context, q *sqlc.Queries, modelID int64, excludePriceID *int64) (Impact, error) {
+	exclude := pgtype.Int8{}
+	if excludePriceID != nil {
+		exclude = pgtype.Int8{Int64: *excludePriceID, Valid: true}
+	}
+	rows, err := q.ListModelsLosingSalePrice(ctx, sqlc.ListModelsLosingSalePriceParams{
+		ModelID:        modelID,
+		ExcludePriceID: exclude,
+	})
+	if err != nil {
+		return Impact{}, fmt.Errorf("compute model price supply impact: %w", err)
+	}
+	out := make([]AffectedModel, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, AffectedModel{
+			ModelID:          row.ModelID,
+			PublicModelID:    row.PublicModelID,
+			ModelDisplayName: row.ModelDisplayName,
+			// 价格侧不给「保留」选项，两个字段同为 404：确认即下架。
+			KeptResult:     "404",
+			SelectedResult: "404",
+		})
+	}
+	return Impact{Kind: "model_price_disable", AffectedModels: out}, nil
+}
+
+// DisableAffectedModels 停用影响范围内的全部模型，不看管理员的勾选。
+//
+// 与 DisableSelectedModels 的差别是产品口径而非实现细节：渠道故障会自己恢复，
+// 所以那边允许保留模型 enabled 等渠道回来；撤价不会自己恢复，保留只能让模型
+// 一直停在「列表里有、一调失败」的状态，因此这里强制下架。
+// 必须与影响计算处于同一事务、同一 Model 锁内。
+func DisableAffectedModels(ctx context.Context, q *sqlc.Queries, im Impact, reason string) error {
+	for _, am := range im.AffectedModels {
+		affected, err := q.DisableModelSupply(ctx, sqlc.DisableModelSupplyParams{
+			ID:     am.ModelID,
+			Reason: pgtype.Text{String: reason, Valid: true},
+		})
+		if err != nil {
+			return fmt.Errorf("disable model supply: %w", err)
+		}
+		if affected == 0 {
+			return fmt.Errorf("model %d drifted during supply transaction", am.ModelID)
+		}
+	}
+	return nil
+}
+
 // DisableSelectedModels 只停用管理员明确选择且属于最新影响范围的模型。
 // 必须与影响计算处于同一事务、同一 Model 锁内；锁保证集合在提交前不会漂移。
 func DisableSelectedModels(ctx context.Context, q *sqlc.Queries, im Impact, c Confirmation, reason string) error {
@@ -261,21 +314,42 @@ func DisableSelectedModels(ctx context.Context, q *sqlc.Queries, im Impact, c Co
 	return nil
 }
 
-// EnsureRuntimeSupply 是启用模型的前置守卫：没有可用渠道就不允许 enabled，
-// 否则「enabled 即可调用」这条不变量当场被打破。必须在 Model 锁内调用。
+// EnsureRuntimeSupply 是启用模型的前置守卫：没有可用渠道、没有生效基准价、
+// 或没有可解析售价，都不允许 enabled，否则「enabled 即可调用」当场被打破。
+// 必须在 Model 锁内调用。
 func EnsureRuntimeSupply(ctx context.Context, q *sqlc.Queries, modelID int64) error {
 	supported, err := q.ModelHasRuntimeSupply(ctx, modelID)
 	if err != nil {
 		return fmt.Errorf("check model runtime supply: %w", err)
 	}
-	if !supported {
-		return ErrNoRuntimeSupply
+	if supported {
+		return nil
 	}
-	return nil
+	hasBase, err := q.ModelHasEffectiveBasePrice(ctx, modelID)
+	if err != nil {
+		return fmt.Errorf("check model base price: %w", err)
+	}
+	if !hasBase {
+		return ErrNoBasePrice
+	}
+	hasSale, err := q.ModelHasResolvableSalePrice(ctx, modelID)
+	if err != nil {
+		return fmt.Errorf("check model sale price: %w", err)
+	}
+	if !hasSale {
+		return ErrNoSalePrice
+	}
+	return ErrNoRuntimeSupply
 }
 
 // ErrNoRuntimeSupply 表示模型当前没有任何可用渠道，不能启用。
 var ErrNoRuntimeSupply = fmt.Errorf("model has no usable channel")
+
+// ErrNoBasePrice 表示模型没有生效基准价，不能启用。
+var ErrNoBasePrice = fmt.Errorf("model has no effective base price")
+
+// ErrNoSalePrice 表示模型有基准价但没有倍率或绝对售价，不能启用。
+var ErrNoSalePrice = fmt.Errorf("model has no resolvable sale price")
 
 func affectedFromLosingConfigured(rows []sqlc.ListModelsLosingConfiguredSupplyRow) []AffectedModel {
 	out := make([]AffectedModel, 0, len(rows))

@@ -387,9 +387,9 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindModel
 		)
 	}
 
-	// 客户售价定在模型上，两级解析：模型配了绝对售价就用它，否则基准价 × 该模型自己的倍率。
-	// 两者都随价格行走（ck_model_prices_sale_configured 保证至少有一个），所以售价只取决于
-	// 命中的价格行；与命中哪条渠道无关，同一请求的所有候选共享同一售价。
+	// 客户售价定在模型上，两套独立实体：绝对售价整组覆盖，否则基准价 × 该模型自己的倍率。
+	// 两者都随价格行走、可以共存，但不能混算；都空则 ResolveCustomerPrice 失败，本候选被排除。
+	// 售价只取决于命中的价格行，与命中哪条渠道无关，同一请求的所有候选共享同一售价。
 	basePrice := billing.CustomerPriceSnapshot{
 		Currency:                row.BaseCurrency,
 		PricingUnit:             row.BasePricingUnit,
@@ -442,10 +442,9 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindModel
 			ReasoningOutputPrice:    row.FastReasoningOutputPrice,
 			FormulaVersion:          billing.FormulaVersionV1,
 		}
-		// Fast 档同样两级解析，绝对售价列取自该档自己的 service tier 行，倍率与 Standard 共用
-		// 同一个模型倍率。模型只配了 Standard 绝对售价（倍率为空）而 Fast 又没配绝对售价时，
-		// 这里解析失败并降级为忽略 Fast——那种组合在配置期已被毛利守卫拦下，走到这里属于兜底。
-		fastResolved, fastErr := billing.ResolveCustomerPrice(fastBasePrice, ratio, billing.SaleOverride{
+		// Fast 与 Standard 必须走同一套售价实体：绝对售价整组覆盖时两边都用绝对售价，
+		// 否则两边都用各自基准价 × 同一倍率。缺 Fast 绝对售价时忽略 Fast，绝不回落到倍率。
+		fastOverride := billing.SaleOverride{
 			UncachedInputPrice:      row.FastSaleUncachedInputPrice,
 			CacheReadInputPrice:     row.FastSaleCacheReadInputPrice,
 			CacheWrite5mInputPrice:  row.FastSaleCacheWrite5mInputPrice,
@@ -453,16 +452,28 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindModel
 			CacheWrite30mInputPrice: row.FastSaleCacheWrite30mInputPrice,
 			OutputPrice:             row.FastSaleOutputPrice,
 			ReasoningOutputPrice:    row.FastSaleReasoningOutputPrice,
-		})
-		if fastErr == nil {
-			fastModelPriceServiceTierID = row.FastModelPriceServiceTierID
-			fastSalePrice = fastResolved
-		} else {
-			logging.Warn(r.logger, "routing", "candidate", "fast sale price ignored because it is invalid",
+		}
+		if saleOverride.Configured() && !fastOverride.Configured() {
+			logging.Warn(r.logger, "routing", "candidate", "fast sale price ignored because absolute override requires fast absolute",
 				zap.Int64("channel_id", row.ChannelID),
 				zap.Int64("model_price_service_tier_id", row.FastModelPriceServiceTierID),
-				zap.Error(fastErr),
 			)
+		} else {
+			override := billing.SaleOverride{}
+			if saleOverride.Configured() {
+				override = fastOverride
+			}
+			fastResolved, fastErr := billing.ResolveCustomerPrice(fastBasePrice, ratio, override)
+			if fastErr == nil {
+				fastModelPriceServiceTierID = row.FastModelPriceServiceTierID
+				fastSalePrice = fastResolved
+			} else {
+				logging.Warn(r.logger, "routing", "candidate", "fast sale price ignored because it is invalid",
+					zap.Int64("channel_id", row.ChannelID),
+					zap.Int64("model_price_service_tier_id", row.FastModelPriceServiceTierID),
+					zap.Error(fastErr),
+				)
+			}
 		}
 	}
 

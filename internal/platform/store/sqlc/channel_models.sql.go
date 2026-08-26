@@ -61,9 +61,10 @@ SELECT
     fast_base.sale_cache_write_30m_input_price AS fast_sale_cache_write_30m_input_price,
     fast_base.sale_output_price AS fast_sale_output_price,
     fast_base.sale_reasoning_output_price AS fast_sale_reasoning_output_price,
-    -- 售价的两种表达，都挂在模型自己的价格行上（ck_model_prices_sale_configured 保证至少有一个）：
-    -- 绝对售价整组非空时直接用；否则 Go 侧回退 base × sale_price_ratio。
-    -- Fast 档共用同一个倍率，故这里只带一列。
+    -- 售价的两种表达都挂在模型自己的价格行上，是两套独立实体：绝对售价整组非空时
+    -- Standard 与 Fast 都只走绝对售价；否则 Go 侧回退 base × sale_price_ratio。
+    -- 两者都空则该行不可售，候选会被排除。Fast 与 Standard 必须走同一套实体，不能混算。
+    -- 倍率不分档，故这里只带一列。
     base.sale_price_ratio,
     base.sale_uncached_input_price,
     base.sale_cache_read_input_price,

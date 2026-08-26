@@ -30,7 +30,7 @@ func TestRouterModelsRequiresAPIKey(t *testing.T) {
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
 			UserID:    42,
-			KeyPrefix: "unio_sk_test",
+			KeyPrefix: "sk_unio_test",
 		},
 	}
 	modelCatalogService := &routerTestModelCatalogService{
@@ -62,7 +62,7 @@ func TestRouterModelsSuccess(t *testing.T) {
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
 			UserID:    42,
-			KeyPrefix: "unio_sk_test",
+			KeyPrefix: "sk_unio_test",
 		},
 	}
 	modelCatalogService := &routerTestModelCatalogService{
@@ -77,7 +77,7 @@ func TestRouterModelsSuccess(t *testing.T) {
 	handler := newTestRouter(authenticator, nil, nil, modelCatalogService)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
-	req.Header.Set("Authorization", "Bearer unio_sk_test")
+	req.Header.Set("Authorization", "Bearer sk_unio_test")
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -86,8 +86,8 @@ func TestRouterModelsSuccess(t *testing.T) {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
 	}
 
-	if authenticator.token != "unio_sk_test" {
-		t.Fatalf("expected token %q, got %q", "unio_sk_test", authenticator.token)
+	if authenticator.token != "sk_unio_test" {
+		t.Fatalf("expected token %q, got %q", "sk_unio_test", authenticator.token)
 	}
 
 	var body struct {
@@ -110,7 +110,6 @@ func TestRouterModelsSuccess(t *testing.T) {
 	if !modelCatalogService.called {
 		t.Fatal("expected model catalog service to be called")
 	}
-
 
 	if modelCatalogService.requiredCapabilities != nil {
 		t.Fatalf("expected no capability filter, got %v", modelCatalogService.requiredCapabilities)
@@ -148,14 +147,14 @@ func TestRouterModelsCapabilityFilterParsed(t *testing.T) {
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
 			UserID:    42,
-			KeyPrefix: "unio_sk_test",
+			KeyPrefix: "sk_unio_test",
 		},
 	}
 	modelCatalogService := &routerTestModelCatalogService{}
 	handler := newTestRouter(authenticator, nil, nil, modelCatalogService)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/models?capability=image.input,%20tools.function%20,", nil)
-	req.Header.Set("Authorization", "Bearer unio_sk_test")
+	req.Header.Set("Authorization", "Bearer sk_unio_test")
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -180,7 +179,7 @@ func TestRouterModelsServiceError(t *testing.T) {
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
 			UserID:    1,
-			KeyPrefix: "unio_sk_test",
+			KeyPrefix: "sk_unio_test",
 		},
 	}
 	handler := newTestRouter(authenticator, nil, nil, &routerTestModelCatalogService{
@@ -188,7 +187,7 @@ func TestRouterModelsServiceError(t *testing.T) {
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
-	req.Header.Set("Authorization", "Bearer unio_sk_test")
+	req.Header.Set("Authorization", "Bearer sk_unio_test")
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)

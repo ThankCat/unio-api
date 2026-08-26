@@ -38,6 +38,7 @@ type Store struct {
 	reset                     *redis.Script
 	snapshot                  *redis.Script
 	snapshotMany              *redis.Script
+	observeChannels           *redis.Script
 	setCooldown               *redis.Script
 	cooldownRemain            *redis.Script
 	recordSample              *redis.Script
@@ -108,6 +109,7 @@ func NewStore(client redis.Cmdable, keyNamespace string, observers ...OperationO
 		reset:                     redis.NewScript(luaScript("attempt.reset")),
 		snapshot:                  redis.NewScript(luaScript("attempt.snapshot")),
 		snapshotMany:              redis.NewScript(luaScript("attempt.snapshot_many")),
+		observeChannels:           redis.NewScript(luaScript("attempt.observe_channels")),
 		setCooldown:               redis.NewScript(luaScript("attempt.set_cooldown")),
 		cooldownRemain:            redis.NewScript(luaScript("attempt.cooldown_remaining")),
 		recordSample:              redis.NewScript(luaScript("attempt.record_sample")),

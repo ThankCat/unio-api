@@ -331,6 +331,75 @@ func (q *Queries) ListModelsLosingRuntimeSupply(ctx context.Context, channelID i
 	return items, nil
 }
 
+const listModelsLosingSalePrice = `-- name: ListModelsLosingSalePrice :many
+SELECT m.id AS model_id,
+       m.model_id AS public_model_id,
+       m.display_name AS model_display_name
+FROM models m
+WHERE m.status = 'enabled'
+  AND m.id = $1
+  -- 目标窗口此刻确实在供价：撤一条本来就不可售的草稿行，对客户没有新影响。
+  AND EXISTS (
+      SELECT 1
+      FROM model_prices target
+      WHERE target.model_id = m.id
+        AND ($2::bigint IS NULL
+             OR target.id = $2::bigint)
+        AND target.status = 'enabled'
+        AND target.effective_from <= now()
+        AND (target.effective_to IS NULL OR target.effective_to > now())
+        AND (target.sale_uncached_input_price IS NOT NULL OR target.sale_price_ratio IS NOT NULL)
+  )
+  -- 排除目标窗口后已无其他可售窗口。exclude 为空时该子查询恒无行，
+  -- 对应 replace 语义：当前窗口整组失效，剩余集合为空。
+  AND NOT EXISTS (
+      SELECT 1
+      FROM model_prices mp
+      WHERE mp.model_id = m.id
+        AND $2::bigint IS NOT NULL
+        AND mp.id <> $2::bigint
+        AND mp.status = 'enabled'
+        AND mp.effective_from <= now()
+        AND (mp.effective_to IS NULL OR mp.effective_to > now())
+        AND (mp.sale_uncached_input_price IS NOT NULL OR mp.sale_price_ratio IS NOT NULL)
+  )
+ORDER BY m.id
+`
+
+type ListModelsLosingSalePriceParams struct {
+	ModelID        int64
+	ExcludePriceID pgtype.Int8
+}
+
+type ListModelsLosingSalePriceRow struct {
+	ModelID          int64
+	PublicModelID    string
+	ModelDisplayName string
+}
+
+// ListModelsLosingSalePrice 判断撤掉某条价格窗口后，该 enabled 模型是否失去可解析售价。
+// exclude_price_id 为空表示整组当前窗口都会被替换（Create 的 replace_overlapping_enabled 路径）。
+// 返回非空即「撤了它模型就没法卖了」，调用方必须先取得管理员确认。
+func (q *Queries) ListModelsLosingSalePrice(ctx context.Context, arg ListModelsLosingSalePriceParams) ([]ListModelsLosingSalePriceRow, error) {
+	rows, err := q.db.Query(ctx, listModelsLosingSalePrice, arg.ModelID, arg.ExcludePriceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListModelsLosingSalePriceRow
+	for rows.Next() {
+		var i ListModelsLosingSalePriceRow
+		if err := rows.Scan(&i.ModelID, &i.PublicModelID, &i.ModelDisplayName); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listModelsWithoutRuntimeSupply = `-- name: ListModelsWithoutRuntimeSupply :many
 SELECT m.id AS model_id,
        m.model_id AS public_model_id,
@@ -516,6 +585,44 @@ func (q *Queries) ModelHasConfiguredSupply(ctx context.Context, modelID int64) (
 	return supported, err
 }
 
+const modelHasEffectiveBasePrice = `-- name: ModelHasEffectiveBasePrice :one
+SELECT EXISTS (
+    SELECT 1 FROM model_prices mp
+    WHERE mp.model_id = $1
+      AND mp.status = 'enabled'
+      AND mp.effective_from <= now()
+      AND (mp.effective_to IS NULL OR mp.effective_to > now())
+) AS has_base
+`
+
+// ModelHasEffectiveBasePrice 判断该 Model 此刻是否有一条生效中的基准价窗口。
+// 草稿行（有基准价、无售价）这里为真；与 ModelHasResolvableSalePrice 合起来区分启用失败原因。
+func (q *Queries) ModelHasEffectiveBasePrice(ctx context.Context, modelID int64) (bool, error) {
+	row := q.db.QueryRow(ctx, modelHasEffectiveBasePrice, modelID)
+	var has_base bool
+	err := row.Scan(&has_base)
+	return has_base, err
+}
+
+const modelHasResolvableSalePrice = `-- name: ModelHasResolvableSalePrice :one
+SELECT EXISTS (
+    SELECT 1 FROM model_prices mp
+    WHERE mp.model_id = $1
+      AND mp.status = 'enabled'
+      AND mp.effective_from <= now()
+      AND (mp.effective_to IS NULL OR mp.effective_to > now())
+      AND (mp.sale_uncached_input_price IS NOT NULL OR mp.sale_price_ratio IS NOT NULL)
+) AS has_sale
+`
+
+// ModelHasResolvableSalePrice 判断生效基准价窗口上是否已配倍率或绝对售价。
+func (q *Queries) ModelHasResolvableSalePrice(ctx context.Context, modelID int64) (bool, error) {
+	row := q.db.QueryRow(ctx, modelHasResolvableSalePrice, modelID)
+	var has_sale bool
+	err := row.Scan(&has_sale)
+	return has_sale, err
+}
+
 const modelHasRuntimeSupply = `-- name: ModelHasRuntimeSupply :one
 SELECT EXISTS (
     SELECT 1
@@ -533,6 +640,7 @@ SELECT EXISTS (
             AND mp.status = 'enabled'
             AND mp.effective_from <= now()
             AND (mp.effective_to IS NULL OR mp.effective_to > now())
+            AND (mp.sale_uncached_input_price IS NOT NULL OR mp.sale_price_ratio IS NOT NULL)
       )
       AND (
           EXISTS (
@@ -556,10 +664,38 @@ SELECT EXISTS (
 // 基准价条件必须与 FindModelCandidates 取 base 的那个 INNER JOIN LATERAL 对齐：
 // 那边没有生效基准价就没有候选。少了这一条，一个没配价的模型能被成功 enable、
 // 出现在 /v1/models 里，却对每次调用都返回 404。
-// 售价本身不用单独判：ck_model_prices_sale_configured 保证存在价格行即可解析出售价。
+// 售价也要可解析：允许库里只有基准价的草稿行，但那种行不可售，不能拿来 enable。
 func (q *Queries) ModelHasRuntimeSupply(ctx context.Context, modelID int64) (bool, error) {
 	row := q.db.QueryRow(ctx, modelHasRuntimeSupply, modelID)
 	var supported bool
 	err := row.Scan(&supported)
 	return supported, err
+}
+
+const modelHasSuccessorSalePriceWindow = `-- name: ModelHasSuccessorSalePriceWindow :one
+SELECT EXISTS (
+    SELECT 1
+    FROM model_prices mp
+    WHERE mp.model_id = $1
+      AND mp.id <> $2
+      AND mp.status = 'enabled'
+      AND mp.effective_from <= $3::timestamptz
+      AND (mp.effective_to IS NULL OR mp.effective_to > $3::timestamptz)
+      AND (mp.sale_uncached_input_price IS NOT NULL OR mp.sale_price_ratio IS NOT NULL)
+) AS has_successor
+`
+
+type ModelHasSuccessorSalePriceWindowParams struct {
+	ModelID        int64
+	ExcludePriceID int64
+	ExpiresAt      pgtype.Timestamptz
+}
+
+// ModelHasSuccessorSalePriceWindow 判断给定到期时刻之后是否还有接续的可售窗口。
+// 窗口自然到期没有任何管理员操作可以拦截，创建带到期时间的窗口时用它当场提示。
+func (q *Queries) ModelHasSuccessorSalePriceWindow(ctx context.Context, arg ModelHasSuccessorSalePriceWindowParams) (bool, error) {
+	row := q.db.QueryRow(ctx, modelHasSuccessorSalePriceWindow, arg.ModelID, arg.ExcludePriceID, arg.ExpiresAt)
+	var has_successor bool
+	err := row.Scan(&has_successor)
+	return has_successor, err
 }

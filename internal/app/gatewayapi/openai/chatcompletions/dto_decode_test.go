@@ -182,7 +182,7 @@ func TestRouterV1ChatCompletionPreservesThinkingExtension(t *testing.T) {
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
 			UserID:    1,
-			KeyPrefix: "unio_sk_test",
+			KeyPrefix: "sk_unio_test",
 		},
 	}
 	service := &fakeChatCompletionService{
@@ -209,7 +209,7 @@ func TestRouterV1ChatCompletionPreservesThinkingExtension(t *testing.T) {
 		"thinking": {"type": "enabled"}
 	}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
-	req.Header.Set("Authorization", "Bearer unio_sk_test")
+	req.Header.Set("Authorization", "Bearer sk_unio_test")
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -230,7 +230,7 @@ func TestRouterV1ChatCompletionPassesTypedServiceTierToService(t *testing.T) {
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
 			UserID:    1,
-			KeyPrefix: "unio_sk_test",
+			KeyPrefix: "sk_unio_test",
 		},
 	}
 	service := &fakeChatCompletionService{
@@ -257,7 +257,7 @@ func TestRouterV1ChatCompletionPassesTypedServiceTierToService(t *testing.T) {
 		"service_tier": "auto"
 	}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
-	req.Header.Set("Authorization", "Bearer unio_sk_test")
+	req.Header.Set("Authorization", "Bearer sk_unio_test")
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)

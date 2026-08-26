@@ -112,7 +112,7 @@ SELECT EXISTS (
 -- 基准价条件必须与 FindModelCandidates 取 base 的那个 INNER JOIN LATERAL 对齐：
 -- 那边没有生效基准价就没有候选。少了这一条，一个没配价的模型能被成功 enable、
 -- 出现在 /v1/models 里，却对每次调用都返回 404。
--- 售价本身不用单独判：ck_model_prices_sale_configured 保证存在价格行即可解析出售价。
+-- 售价也要可解析：允许库里只有基准价的草稿行，但那种行不可售，不能拿来 enable。
 SELECT EXISTS (
     SELECT 1
     FROM channel_models cm
@@ -129,6 +129,7 @@ SELECT EXISTS (
             AND mp.status = 'enabled'
             AND mp.effective_from <= now()
             AND (mp.effective_to IS NULL OR mp.effective_to > now())
+            AND (mp.sale_uncached_input_price IS NOT NULL OR mp.sale_price_ratio IS NOT NULL)
       )
       AND (
           EXISTS (
@@ -143,6 +144,79 @@ SELECT EXISTS (
           )
       )
 ) AS supported;
+
+-- name: ModelHasEffectiveBasePrice :one
+-- ModelHasEffectiveBasePrice 判断该 Model 此刻是否有一条生效中的基准价窗口。
+-- 草稿行（有基准价、无售价）这里为真；与 ModelHasResolvableSalePrice 合起来区分启用失败原因。
+SELECT EXISTS (
+    SELECT 1 FROM model_prices mp
+    WHERE mp.model_id = sqlc.arg(model_id)
+      AND mp.status = 'enabled'
+      AND mp.effective_from <= now()
+      AND (mp.effective_to IS NULL OR mp.effective_to > now())
+) AS has_base;
+
+-- name: ModelHasResolvableSalePrice :one
+-- ModelHasResolvableSalePrice 判断生效基准价窗口上是否已配倍率或绝对售价。
+SELECT EXISTS (
+    SELECT 1 FROM model_prices mp
+    WHERE mp.model_id = sqlc.arg(model_id)
+      AND mp.status = 'enabled'
+      AND mp.effective_from <= now()
+      AND (mp.effective_to IS NULL OR mp.effective_to > now())
+      AND (mp.sale_uncached_input_price IS NOT NULL OR mp.sale_price_ratio IS NOT NULL)
+) AS has_sale;
+
+-- name: ListModelsLosingSalePrice :many
+-- ListModelsLosingSalePrice 判断撤掉某条价格窗口后，该 enabled 模型是否失去可解析售价。
+-- exclude_price_id 为空表示整组当前窗口都会被替换（Create 的 replace_overlapping_enabled 路径）。
+-- 返回非空即「撤了它模型就没法卖了」，调用方必须先取得管理员确认。
+SELECT m.id AS model_id,
+       m.model_id AS public_model_id,
+       m.display_name AS model_display_name
+FROM models m
+WHERE m.status = 'enabled'
+  AND m.id = sqlc.arg(model_id)
+  -- 目标窗口此刻确实在供价：撤一条本来就不可售的草稿行，对客户没有新影响。
+  AND EXISTS (
+      SELECT 1
+      FROM model_prices target
+      WHERE target.model_id = m.id
+        AND (sqlc.narg(exclude_price_id)::bigint IS NULL
+             OR target.id = sqlc.narg(exclude_price_id)::bigint)
+        AND target.status = 'enabled'
+        AND target.effective_from <= now()
+        AND (target.effective_to IS NULL OR target.effective_to > now())
+        AND (target.sale_uncached_input_price IS NOT NULL OR target.sale_price_ratio IS NOT NULL)
+  )
+  -- 排除目标窗口后已无其他可售窗口。exclude 为空时该子查询恒无行，
+  -- 对应 replace 语义：当前窗口整组失效，剩余集合为空。
+  AND NOT EXISTS (
+      SELECT 1
+      FROM model_prices mp
+      WHERE mp.model_id = m.id
+        AND sqlc.narg(exclude_price_id)::bigint IS NOT NULL
+        AND mp.id <> sqlc.narg(exclude_price_id)::bigint
+        AND mp.status = 'enabled'
+        AND mp.effective_from <= now()
+        AND (mp.effective_to IS NULL OR mp.effective_to > now())
+        AND (mp.sale_uncached_input_price IS NOT NULL OR mp.sale_price_ratio IS NOT NULL)
+  )
+ORDER BY m.id;
+
+-- name: ModelHasSuccessorSalePriceWindow :one
+-- ModelHasSuccessorSalePriceWindow 判断给定到期时刻之后是否还有接续的可售窗口。
+-- 窗口自然到期没有任何管理员操作可以拦截，创建带到期时间的窗口时用它当场提示。
+SELECT EXISTS (
+    SELECT 1
+    FROM model_prices mp
+    WHERE mp.model_id = sqlc.arg(model_id)
+      AND mp.id <> sqlc.arg(exclude_price_id)
+      AND mp.status = 'enabled'
+      AND mp.effective_from <= sqlc.arg(expires_at)::timestamptz
+      AND (mp.effective_to IS NULL OR mp.effective_to > sqlc.arg(expires_at)::timestamptz)
+      AND (mp.sale_uncached_input_price IS NOT NULL OR mp.sale_price_ratio IS NOT NULL)
+) AS has_successor;
 
 -- name: ListModelRuntimeProtocols :many
 -- ListModelRuntimeProtocols 返回该 Model 当前可用渠道覆盖的入口协议集合。

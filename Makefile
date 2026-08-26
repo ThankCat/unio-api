@@ -45,6 +45,13 @@ check-env:
 		fi; \
 		exit 1; \
 	fi
+	@if grep -qE '^[A-Za-z_][A-Za-z0-9_]*=[^#]*[<>]' "$(ENV_FILE)"; then \
+		echo "$(ENV_FILE) 存在未替换的 <...> 占位符："; \
+		grep -nE '^[A-Za-z_][A-Za-z0-9_]*=[^#]*[<>]' "$(ENV_FILE)"; \
+		echo "尖括号是 shell 重定向符，source 会在该行语法报错并中止——后面所有变量会静默变成空值，"; \
+		echo "服务照常启动但行为诡异（如 CORS 全部拒绝、连错数据库）。请填入真实值后重试。"; \
+		exit 1; \
+	fi
 
 check-air:
 	@if ! command -v air >/dev/null 2>&1; then \

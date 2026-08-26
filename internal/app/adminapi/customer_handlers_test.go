@@ -47,7 +47,7 @@ func (f *fakeAPIKeyService) List(context.Context, customer.APIKeyListParams) ([]
 	return f.list, int64(len(f.list)), nil
 }
 func (f *fakeAPIKeyService) Get(context.Context, int64) (customer.APIKey, error) {
-	return customer.APIKey{ID: 1, KeyPrefix: "unio_sk_abc", Status: "active", SpentTotal: "0"}, nil
+	return customer.APIKey{ID: 1, KeyPrefix: "sk_unio_a3f9k2m1", Status: "active", SpentTotal: "0"}, nil
 }
 func (f *fakeAPIKeyService) Create(context.Context, customer.APIKeyCreateParams) (customer.CreatedAPIKey, error) {
 	return f.created, nil
@@ -147,8 +147,8 @@ func TestCreateAdjustmentInsufficientBalanceReturns422(t *testing.T) {
 func TestCreateAPIKeyReturnsPlaintext(t *testing.T) {
 	handler := newQueryRouter(t, adminapi.RouterDeps{APIKeyService: &fakeAPIKeyService{
 		created: customer.CreatedAPIKey{
-			APIKey:    customer.APIKey{ID: 5, UserID: 100, Name: "ci", KeyPrefix: "unio_sk_abc", Status: "active", SpentTotal: "0"},
-			Plaintext: "unio_sk_secretsecret",
+			APIKey:    customer.APIKey{ID: 5, UserID: 100, Name: "ci", KeyPrefix: "sk_unio_a3f9k2m1", Status: "active", SpentTotal: "0"},
+			Plaintext: "sk_unio_a3f9k2m1x7bq4vzn8dht",
 		},
 	}})
 
@@ -158,11 +158,40 @@ func TestCreateAPIKeyReturnsPlaintext(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d (%s)", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "unio_sk_secretsecret") {
+	if !strings.Contains(rec.Body.String(), "sk_unio_a3f9k2m1x7bq4vzn8dht") {
 		t.Fatalf("create response must return one-time plaintext: %s", rec.Body.String())
 	}
 	if strings.Contains(rec.Body.String(), "key_hash") {
 		t.Fatalf("api key response must not contain key_hash: %s", rec.Body.String())
+	}
+}
+
+// 明文只在创建响应里出现一次。这条守住的是「创建之外的任何接口都不许带 plaintext」——
+// 一旦谁把它加回 apiKeyDTO，前端就会重新长出「稍后再复制」的入口。
+func TestAPIKeyReadEndpointsOmitPlaintext(t *testing.T) {
+	handler := newQueryRouter(t, adminapi.RouterDeps{APIKeyService: &fakeAPIKeyService{
+		list: []customer.APIKey{
+			{ID: 5, UserID: 100, Name: "ci", KeyPrefix: "sk_unio_a3f9k2m1", Status: "active", SpentTotal: "0"},
+		},
+		updated: customer.APIKey{ID: 5, UserID: 100, Name: "ci", KeyPrefix: "sk_unio_a3f9k2m1", Status: "disabled", SpentTotal: "0"},
+		revoked: customer.APIKey{ID: 5, UserID: 100, Name: "ci", KeyPrefix: "sk_unio_a3f9k2m1", Status: "revoked", SpentTotal: "0"},
+	}})
+
+	for _, tc := range []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{http.MethodPatch, "/v1/api-keys/5", `{"disabled":true}`},
+		{http.MethodPost, "/v1/api-keys/5/revoke", ""},
+	} {
+		rec := doAdmin(t, handler, tc.method, tc.path, tc.body, true)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s %s: expected 200, got %d (%s)", tc.method, tc.path, rec.Code, rec.Body.String())
+		}
+		if strings.Contains(rec.Body.String(), "plaintext") {
+			t.Fatalf("%s %s must not expose plaintext: %s", tc.method, tc.path, rec.Body.String())
+		}
 	}
 }
 

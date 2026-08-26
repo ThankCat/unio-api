@@ -6,6 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
+
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 )
 
@@ -39,7 +42,62 @@ func (rejectingStore) UpdateModelPriceWindow(context.Context, sqlc.UpdateModelPr
 	return sqlc.ModelPrice{}, errStoreUnreachable
 }
 
-// baseCreateInput 是一条只差售价配置的合法入参。
+// capturingStore 让 Create 走到写库前记下参数，用来断言三种 intent 的复制/清空。
+type capturingStore struct {
+	rejectingStore
+	model  sqlc.Model
+	prices []sqlc.ListModelPricesByModelRow
+	got    *sqlc.CreateModelPriceParams
+}
+
+func (s *capturingStore) LookupModelByID(context.Context, int64) (sqlc.Model, error) {
+	return s.model, nil
+}
+
+func (s *capturingStore) ListModelPricesByModel(context.Context, int64) ([]sqlc.ListModelPricesByModelRow, error) {
+	return s.prices, nil
+}
+
+func (s *capturingStore) ListEnabledModelPriceWindows(context.Context, sqlc.ListEnabledModelPriceWindowsParams) ([]sqlc.ListEnabledModelPriceWindowsRow, error) {
+	return nil, nil
+}
+
+func (s *capturingStore) CreateModelPrice(_ context.Context, arg sqlc.CreateModelPriceParams) (sqlc.CreateModelPriceRow, error) {
+	cp := arg
+	s.got = &cp
+	return sqlc.CreateModelPriceRow{}, errStoreUnreachable
+}
+
+func mustNumeric(s string) pgtype.Numeric {
+	var n pgtype.Numeric
+	if err := n.Scan(s); err != nil {
+		panic(err)
+	}
+	return n
+}
+
+func testModel() sqlc.Model {
+	return sqlc.Model{ID: 7, ModelID: "gpt-test", DisplayName: "GPT Test"}
+}
+
+func currentEnabledRow() sqlc.ListModelPricesByModelRow {
+	now := time.Now().UTC()
+	return sqlc.ListModelPricesByModelRow{
+		ID:                 11,
+		ModelID:            7,
+		Currency:           "USD",
+		PricingUnit:        PricingUnitPer1MTokens,
+		UncachedInputPrice: mustNumeric("2.5"),
+		OutputPrice:        mustNumeric("15"),
+		SalePriceRatio:     mustNumeric("0.2"),
+		Status:             StatusEnabled,
+		EffectiveFrom:      pgtype.Timestamptz{Time: now.Add(-time.Hour), Valid: true},
+		ModelExternalID:    "gpt-test",
+		ModelDisplayName:   "GPT Test",
+	}
+}
+
+// baseCreateInput 是一条只差 intent / 售价配置的合法入参。
 func baseCreateInput() CreateInput {
 	return CreateInput{
 		ModelID:            7,
@@ -52,64 +110,229 @@ func baseCreateInput() CreateInput {
 	}
 }
 
-// 售价必须可解析：倍率与绝对售价全缺时这条价格行卖不出去，要在入口就说清楚。
-func TestCreateRequiresSaleConfiguration(t *testing.T) {
-	svc := NewService(rejectingStore{})
+func TestCreateRequiresIntent(t *testing.T) {
+	svc := NewService(rejectingStore{}, nil, nil)
 
 	_, err := svc.Create(context.Background(), baseCreateInput())
-	if err == nil {
-		t.Fatal("price without sale ratio or absolute sale prices must be rejected")
+	if err == nil || errors.Is(err, errStoreUnreachable) {
+		t.Fatal("create without intent must be rejected before touching the store")
 	}
-	if errors.Is(err, errStoreUnreachable) {
-		t.Fatal("validation must happen before touching the store")
+	if failure.CodeOf(err) != failure.CodeAdminInvalidArgument {
+		t.Fatalf("error code = %q, want invalid argument", failure.CodeOf(err))
 	}
 }
 
-// 没有倍率时 Fast 档没有任何售价来源，必须自带绝对售价，否则落库即被毛利守卫拒绝。
-func TestCreateRequiresFastSalePricesWithoutRatio(t *testing.T) {
-	svc := NewService(rejectingStore{})
+// 配基准价允许草稿：没有倍率也没有绝对售价时校验放行，售价留给后续入口。
+func TestCreateAllowsBaseWithoutSale(t *testing.T) {
+	svc := NewService(rejectingStore{}, nil, nil)
 
 	in := baseCreateInput()
-	in.SalePrices = &SalePriceVector{UncachedInputPrice: "5", OutputPrice: "30"}
-	in.FastPrices = &FastPriceInput{UncachedInputPrice: "4", OutputPrice: "24"}
-
-	_, err := svc.Create(context.Background(), in)
-	if err == nil {
-		t.Fatal("fast tier without its own sale prices must be rejected when ratio is absent")
-	}
-	if errors.Is(err, errStoreUnreachable) {
-		t.Fatal("validation must happen before touching the store")
-	}
-
-	// 给 Fast 补上绝对售价后校验应当放行——走到存储层才失败，说明拦截原因确实是缺 Fast 售价。
-	in.FastPrices.SalePrices = &SalePriceVector{UncachedInputPrice: "8", OutputPrice: "48"}
-	if _, err := svc.Create(context.Background(), in); !errors.Is(err, errStoreUnreachable) {
-		t.Fatalf("expected to reach the store once fast sale prices are supplied, got %v", err)
+	in.Intent = IntentBase
+	if _, err := svc.createInLock(context.Background(), nil, in); !errors.Is(err, errStoreUnreachable) {
+		t.Fatalf("base-only draft must pass validation, got %v", err)
 	}
 }
 
-// 倍率在场时 Fast 档可以只配基准价：售价按 Fast 基准价 × 模型倍率解析。
-func TestCreateAllowsFastWithoutSalePricesWhenRatioPresent(t *testing.T) {
-	svc := NewService(rejectingStore{})
+func TestCreateIntentBaseCopiesCurrentSale(t *testing.T) {
+	store := &capturingStore{model: testModel(), prices: []sqlc.ListModelPricesByModelRow{currentEnabledRow()}}
+	svc := NewService(store, nil, nil)
+
+	in := baseCreateInput()
+	in.Intent = IntentBase
+	in.UncachedInputPrice = "3"
+	in.OutputPrice = "18"
+	if _, err := svc.createInLock(context.Background(), nil, in); !errors.Is(err, errStoreUnreachable) {
+		t.Fatalf("expected to reach the store, got %v", err)
+	}
+	if store.got == nil {
+		t.Fatal("create params were not captured")
+	}
+	if got := numericString(store.got.UncachedInputPrice); got != "3" {
+		t.Fatalf("base input = %s, want 3", got)
+	}
+	if got := numericString(store.got.OutputPrice); got != "18" {
+		t.Fatalf("base output = %s, want 18", got)
+	}
+	if got := numericString(store.got.SalePriceRatio); got != "0.2" {
+		t.Fatalf("copied sale ratio = %s, want 0.2", got)
+	}
+	if store.got.SaleUncachedInputPrice.Valid {
+		t.Fatal("base intent must not invent absolute sale prices")
+	}
+}
+
+func TestCreateIntentSaleRatioCopiesBaseAndKeepsAbsolute(t *testing.T) {
+	current := currentEnabledRow()
+	current.SaleUncachedInputPrice = mustNumeric("5")
+	current.SaleOutputPrice = mustNumeric("30")
+	store := &capturingStore{model: testModel(), prices: []sqlc.ListModelPricesByModelRow{current}}
+	svc := NewService(store, nil, nil)
+
+	ratio := "0.5"
+	in := CreateInput{
+		ModelID:        7,
+		Intent:         IntentSaleRatio,
+		SalePriceRatio: &ratio,
+		Status:         StatusEnabled,
+		EffectiveFrom:  time.Now().UTC(),
+	}
+	if _, err := svc.createInLock(context.Background(), nil, in); !errors.Is(err, errStoreUnreachable) {
+		t.Fatalf("expected to reach the store, got %v", err)
+	}
+	if store.got == nil {
+		t.Fatal("create params were not captured")
+	}
+	if got := numericString(store.got.UncachedInputPrice); got != "2.5" {
+		t.Fatalf("copied base input = %s, want 2.5", got)
+	}
+	if got := numericString(store.got.SalePriceRatio); got != "0.5" {
+		t.Fatalf("sale ratio = %s, want 0.5", got)
+	}
+	if got := numericString(store.got.SaleUncachedInputPrice); got != "5" {
+		t.Fatalf("kept absolute input = %s, want 5", got)
+	}
+	if got := numericString(store.got.SaleOutputPrice); got != "30" {
+		t.Fatalf("kept absolute output = %s, want 30", got)
+	}
+}
+
+func TestCreateIntentSaleAbsoluteCopiesBaseAndKeepsRatio(t *testing.T) {
+	store := &capturingStore{model: testModel(), prices: []sqlc.ListModelPricesByModelRow{currentEnabledRow()}}
+	svc := NewService(store, nil, nil)
+
+	in := CreateInput{
+		ModelID: 7,
+		Intent:  IntentSaleAbsolute,
+		SalePrices: &SalePriceVector{
+			UncachedInputPrice: "5",
+			OutputPrice:        "30",
+		},
+		Status:        StatusEnabled,
+		EffectiveFrom: time.Now().UTC(),
+	}
+	if _, err := svc.createInLock(context.Background(), nil, in); !errors.Is(err, errStoreUnreachable) {
+		t.Fatalf("expected to reach the store, got %v", err)
+	}
+	if store.got == nil {
+		t.Fatal("create params were not captured")
+	}
+	if got := numericString(store.got.UncachedInputPrice); got != "2.5" {
+		t.Fatalf("copied base input = %s, want 2.5", got)
+	}
+	if got := numericString(store.got.SalePriceRatio); got != "0.2" {
+		t.Fatalf("kept sale ratio = %s, want 0.2", got)
+	}
+	if got := numericString(store.got.SaleUncachedInputPrice); got != "5" {
+		t.Fatalf("sale input = %s, want 5", got)
+	}
+}
+
+func TestCreateSaleIntentRequiresEffectiveBase(t *testing.T) {
+	store := &capturingStore{model: testModel()}
+	svc := NewService(store, nil, nil)
 
 	ratio := "0.2"
-	in := baseCreateInput()
-	in.SalePriceRatio = &ratio
-	in.FastPrices = &FastPriceInput{UncachedInputPrice: "4", OutputPrice: "24"}
+	_, err := svc.createInLock(context.Background(), nil, CreateInput{
+		ModelID:        7,
+		Intent:         IntentSaleRatio,
+		SalePriceRatio: &ratio,
+		Status:         StatusEnabled,
+		EffectiveFrom:  time.Now().UTC(),
+	})
+	if err == nil || errors.Is(err, errStoreUnreachable) || store.got != nil {
+		t.Fatal("sale pricing without an effective base must be rejected before insert")
+	}
+}
 
-	if _, err := svc.Create(context.Background(), in); !errors.Is(err, errStoreUnreachable) {
+// 有 Fast 基准价时，绝对售价必须连 Fast 一起给。倍率即使还在，也不能拿来补 Fast。
+func TestCreateRequiresFastSalePricesWhenAbsoluteConfigured(t *testing.T) {
+	current := currentEnabledRow()
+	current.FastServiceTierID = 8
+	current.FastUncachedInputPrice = mustNumeric("4")
+	current.FastOutputPrice = mustNumeric("24")
+	store := &capturingStore{model: testModel(), prices: []sqlc.ListModelPricesByModelRow{current}}
+	svc := NewService(store, nil, nil)
+
+	in := CreateInput{
+		ModelID: 7,
+		Intent:  IntentSaleAbsolute,
+		SalePrices: &SalePriceVector{
+			UncachedInputPrice: "5",
+			OutputPrice:        "30",
+		},
+		Status:        StatusEnabled,
+		EffectiveFrom: time.Now().UTC(),
+	}
+	_, err := svc.createInLock(context.Background(), nil, in)
+	if err == nil || errors.Is(err, errStoreUnreachable) || store.got != nil {
+		t.Fatal("fast tier without its own sale prices must be rejected even when ratio exists")
+	}
+
+	in.FastPrices = &FastPriceInput{
+		SalePrices: &SalePriceVector{UncachedInputPrice: "8", OutputPrice: "48"},
+	}
+	if _, err := svc.createInLock(context.Background(), nil, in); !errors.Is(err, errStoreUnreachable) {
+		t.Fatalf("expected to reach the store once fast sale prices are supplied, got %v", err)
+	}
+	if store.got == nil {
+		t.Fatal("create params were not captured")
+	}
+	if got := numericString(store.got.SalePriceRatio); got != "0.2" {
+		t.Fatalf("kept sale ratio = %s, want 0.2", got)
+	}
+	if got := numericString(store.got.FastSaleUncachedInputPrice); got != "8" {
+		t.Fatalf("fast sale input = %s, want 8", got)
+	}
+}
+
+// 只改倍率时 Fast 基准价照抄；已有 Fast 绝对售价也照抄，不当成互斥清掉。
+func TestCreateSaleRatioCopiesFastBaseAndKeepsFastAbsolute(t *testing.T) {
+	current := currentEnabledRow()
+	current.FastServiceTierID = 8
+	current.FastUncachedInputPrice = mustNumeric("4")
+	current.FastOutputPrice = mustNumeric("24")
+	current.SaleUncachedInputPrice = mustNumeric("5")
+	current.SaleOutputPrice = mustNumeric("30")
+	current.FastSaleUncachedInputPrice = mustNumeric("8")
+	current.FastSaleOutputPrice = mustNumeric("48")
+	store := &capturingStore{model: testModel(), prices: []sqlc.ListModelPricesByModelRow{current}}
+	svc := NewService(store, nil, nil)
+
+	ratio := "0.4"
+	in := CreateInput{
+		ModelID:        7,
+		Intent:         IntentSaleRatio,
+		SalePriceRatio: &ratio,
+		Status:         StatusEnabled,
+		EffectiveFrom:  time.Now().UTC(),
+	}
+	if _, err := svc.createInLock(context.Background(), nil, in); !errors.Is(err, errStoreUnreachable) {
 		t.Fatalf("expected to reach the store, got %v", err)
+	}
+	if store.got == nil || !store.got.FastConfigured {
+		t.Fatal("sale_ratio must copy Fast base from the current window")
+	}
+	if got := numericString(store.got.FastSaleUncachedInputPrice); got != "8" {
+		t.Fatalf("kept fast absolute input = %s, want 8", got)
+	}
+	if got := numericString(store.got.SaleUncachedInputPrice); got != "5" {
+		t.Fatalf("kept standard absolute input = %s, want 5", got)
 	}
 }
 
 // 倍率必须为正：0 或负数意味着白送或倒付钱。
 func TestCreateRejectsNonPositiveSaleRatio(t *testing.T) {
-	svc := NewService(rejectingStore{})
+	svc := NewService(rejectingStore{}, nil, nil)
 
 	for _, ratio := range []string{"0", "-0.5"} {
-		in := baseCreateInput()
-		in.SalePriceRatio = &ratio
-		if _, err := svc.Create(context.Background(), in); err == nil || errors.Is(err, errStoreUnreachable) {
+		in := CreateInput{
+			ModelID:        7,
+			Intent:         IntentSaleRatio,
+			SalePriceRatio: &ratio,
+			Status:         StatusEnabled,
+			EffectiveFrom:  time.Now().UTC(),
+		}
+		if _, err := svc.createInLock(context.Background(), nil, in); err == nil || errors.Is(err, errStoreUnreachable) {
 			t.Fatalf("sale ratio %q must be rejected, got %v", ratio, err)
 		}
 	}

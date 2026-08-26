@@ -19,8 +19,16 @@ func newKeyBuilder(namespace string) keyBuilder {
 	return keyBuilder{base: namespace + ":", prefix: namespace + ":breaker:v2:"}
 }
 
+// concurrencyKeySuffix 挂在 channel key 之后，指向该渠道的并发租约 zset。
+const concurrencyKeySuffix = ":conc"
+
 func (k keyBuilder) channel(id int64) string {
 	return k.prefix + "channel:" + strconv.FormatInt(id, 10)
+}
+
+// channelConcurrency 是渠道并发租约 zset：member 为 permit，score 为租约到期时刻。
+func (k keyBuilder) channelConcurrency(id int64) string {
+	return k.channel(id) + concurrencyKeySuffix
 }
 
 func (k keyBuilder) provider(id int64) string {

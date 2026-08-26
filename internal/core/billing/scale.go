@@ -27,8 +27,8 @@ func (o SaleOverride) Configured() bool {
 
 // ResolveCustomerPrice 两级解析客户售价：模型配了绝对售价就直接用，否则基准价 × 该模型的售价倍率。
 //
-// 绝对售价与倍率是互斥的两种表达，不做混合：绝对售价存在时倍率完全不参与，避免「这一项按绝对价、
-// 那一项按倍率」这种无法向管理员解释的口径。两条路径都产出可直接入库的 NUMERIC(20,10) 快照，
+// 绝对售价与倍率是两套独立实体，不做混合：绝对售价整组覆盖时倍率完全不参与，避免「这一项按绝对价、
+// 那一项按倍率」或「Standard 走绝对、Fast 走倍率」。两条路径都产出可直接入库的 NUMERIC(20,10) 快照，
 // Currency / PricingUnit / FormulaVersion 一律取自基准价（绝对售价只覆盖单价，不改计价单位）。
 func ResolveCustomerPrice(base CustomerPriceSnapshot, ratio pgtype.Numeric, override SaleOverride) (CustomerPriceSnapshot, error) {
 	if !override.Configured() {

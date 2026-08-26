@@ -17,6 +17,7 @@ type ModelOpsService interface {
 	Channels(ctx context.Context, modelID int64, from, to time.Time) ([]modelops.ChannelRow, error)
 	PerformanceTimeseries(ctx context.Context, modelID int64, interval string, from, to time.Time) ([]modelops.PerfPoint, error)
 	Requests(ctx context.Context, modelID int64, from, to time.Time, limit, offset int32) ([]modelops.RequestRow, int64, error)
+	Errors(ctx context.Context, modelID int64, from, to time.Time) ([]modelops.ErrorRow, error)
 }
 
 type modelOpsHandler struct {
@@ -48,37 +49,55 @@ type modelOpsRowDTO struct {
 	BaseCacheWrite30mInputPrice *string `json:"base_cache_write_30m_input_price"`
 	BaseOutputPrice             *string `json:"base_output_price"`
 	BaseReasoningOutputPrice    *string `json:"base_reasoning_output_price"`
-	// 售价：绝对售价整组非空时直接生效，否则基准价 × 倍率。两者至少有一个。
-	BaseSalePriceRatio         *string `json:"base_sale_price_ratio"`
-	BaseSaleUncachedInputPrice *string `json:"base_sale_uncached_input_price"`
-	BaseSaleOutputPrice        *string `json:"base_sale_output_price"`
+	// 售价：绝对售价整组非空时整组覆盖，否则基准价 × 倍率。两套实体可共存，不能混算。
+	BaseSalePriceRatio              *string `json:"base_sale_price_ratio"`
+	BaseSaleUncachedInputPrice      *string `json:"base_sale_uncached_input_price"`
+	BaseSaleCacheReadInputPrice     *string `json:"base_sale_cache_read_input_price"`
+	BaseSaleCacheWrite5mInputPrice  *string `json:"base_sale_cache_write_5m_input_price"`
+	BaseSaleCacheWrite1hInputPrice  *string `json:"base_sale_cache_write_1h_input_price"`
+	BaseSaleCacheWrite30mInputPrice *string `json:"base_sale_cache_write_30m_input_price"`
+	BaseSaleOutputPrice             *string `json:"base_sale_output_price"`
+	BaseSaleReasoningOutputPrice    *string `json:"base_sale_reasoning_output_price"`
 	// 当前生效基准价的长上下文阶梯；无基准价或未启用时 enabled=false。
-	BaseLongContextEnabled          bool    `json:"base_long_context_enabled"`
-	BaseLongContextThreshold        *int64  `json:"base_long_context_threshold"`
-	BaseLongContextInputMultiplier  *string `json:"base_long_context_input_multiplier"`
-	BaseLongContextOutputMultiplier *string `json:"base_long_context_output_multiplier"`
-	BaseFastPriceConfigured         bool    `json:"base_fast_price_configured"`
-	BaseFastUncachedInputPrice      *string `json:"base_fast_uncached_input_price"`
-	BaseFastCacheReadInputPrice     *string `json:"base_fast_cache_read_input_price"`
-	BaseFastCacheWrite5mInputPrice  *string `json:"base_fast_cache_write_5m_input_price"`
-	BaseFastCacheWrite1hInputPrice  *string `json:"base_fast_cache_write_1h_input_price"`
-	BaseFastCacheWrite30mInputPrice *string `json:"base_fast_cache_write_30m_input_price"`
-	BaseFastOutputPrice             *string `json:"base_fast_output_price"`
-	BaseFastReasoningOutputPrice    *string `json:"base_fast_reasoning_output_price"`
+	BaseLongContextEnabled              bool    `json:"base_long_context_enabled"`
+	BaseLongContextThreshold            *int64  `json:"base_long_context_threshold"`
+	BaseLongContextInputMultiplier      *string `json:"base_long_context_input_multiplier"`
+	BaseLongContextOutputMultiplier     *string `json:"base_long_context_output_multiplier"`
+	BaseFastPriceConfigured             bool    `json:"base_fast_price_configured"`
+	BaseFastUncachedInputPrice          *string `json:"base_fast_uncached_input_price"`
+	BaseFastCacheReadInputPrice         *string `json:"base_fast_cache_read_input_price"`
+	BaseFastCacheWrite5mInputPrice      *string `json:"base_fast_cache_write_5m_input_price"`
+	BaseFastCacheWrite1hInputPrice      *string `json:"base_fast_cache_write_1h_input_price"`
+	BaseFastCacheWrite30mInputPrice     *string `json:"base_fast_cache_write_30m_input_price"`
+	BaseFastOutputPrice                 *string `json:"base_fast_output_price"`
+	BaseFastReasoningOutputPrice        *string `json:"base_fast_reasoning_output_price"`
+	BaseFastSaleUncachedInputPrice      *string `json:"base_fast_sale_uncached_input_price"`
+	BaseFastSaleCacheReadInputPrice     *string `json:"base_fast_sale_cache_read_input_price"`
+	BaseFastSaleCacheWrite5mInputPrice  *string `json:"base_fast_sale_cache_write_5m_input_price"`
+	BaseFastSaleCacheWrite1hInputPrice  *string `json:"base_fast_sale_cache_write_1h_input_price"`
+	BaseFastSaleCacheWrite30mInputPrice *string `json:"base_fast_sale_cache_write_30m_input_price"`
+	BaseFastSaleOutputPrice             *string `json:"base_fast_sale_output_price"`
+	BaseFastSaleReasoningOutputPrice    *string `json:"base_fast_sale_reasoning_output_price"`
 }
 
 type modelOpsDetailDTO struct {
-	RequestTotal      int64   `json:"request_total"`
-	RequestSucceeded  int64   `json:"request_succeeded"`
-	SuccessRate       float64 `json:"success_rate"`
-	LatencyAvg        float64 `json:"latency_avg"`
-	LatencyP50        float64 `json:"latency_p50"`
-	LatencyP95        float64 `json:"latency_p95"`
+	RequestTotal     int64   `json:"request_total"`
+	RequestSucceeded int64   `json:"request_succeeded"`
+	SuccessRate      float64 `json:"success_rate"`
+	LatencyAvg       float64 `json:"latency_avg"`
+	LatencyP50       float64 `json:"latency_p50"`
+	LatencyP90       float64 `json:"latency_p90"`
+	LatencyP95       float64 `json:"latency_p95"`
+	LatencyP99       float64 `json:"latency_p99"`
+	// gateway_ttft_sample 为 0 时 p95 无意义：该区间没有流式请求。
+	GatewayTTFTP95    float64 `json:"gateway_ttft_p95"`
+	GatewayTTFTSample int64   `json:"gateway_ttft_sample"`
 	OutputTokens      int64   `json:"output_tokens"`
 	InputTokens       int64   `json:"input_tokens"`
 	CacheReadRate     float64 `json:"cache_read_rate"`
 	TPS               float64 `json:"tps"`
 	RevenueUSD        string  `json:"revenue_usd"`
+	CostUSD           string  `json:"cost_usd"`
 	MarginUSD         string  `json:"margin_usd"`
 	MarginRate        float64 `json:"margin_rate"`
 	SupplyAvailable   bool    `json:"supply_available"`
@@ -111,6 +130,18 @@ type modelOpsPerfPointDTO struct {
 	RequestTotal     int64   `json:"request_total"`
 	RequestSucceeded int64   `json:"request_succeeded"`
 	LatencyP95       float64 `json:"latency_p95"`
+	RevenueUSD       string  `json:"revenue_usd"`
+	CostUSD          string  `json:"cost_usd"`
+	MarginUSD        string  `json:"margin_usd"`
+}
+
+// modelOpsErrorDTO 是排障分区的错误聚合行；occurrences 降序，占比由前端按总数换算。
+type modelOpsErrorDTO struct {
+	ErrorCode       string `json:"error_code"`
+	Occurrences     int64  `json:"occurrences"`
+	LastSeenAt      string `json:"last_seen_at"`
+	SampleRequestID string `json:"sample_request_id"`
+	ChannelsTouched int64  `json:"channels_touched"`
 }
 
 type modelOpsRequestDTO struct {
@@ -158,44 +189,56 @@ func (h *modelOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 	out := make([]modelOpsRowDTO, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, modelOpsRowDTO{
-			ID:                              row.ID,
-			ModelID:                         row.ModelID,
-			DisplayName:                     row.DisplayName,
-			OwnedBy:                         row.OwnedBy,
-			Family:                          row.Family,
-			DisabledReason:                  row.DisabledReason,
-			Status:                          row.Status,
-			CreatedAt:                       adminhttp.RFC3339(row.CreatedAt),
-			MaxOutputTokens:                 row.MaxOutputTokens,
-			ContextWindowTokens:             row.ContextWindowTokens,
-			BindingsTotal:                   row.BindingsTotal,
-			BindingsAvailable:               row.BindingsAvailable,
-			CapabilitiesDeclaredCount:       row.CapabilitiesDeclaredCount,
-			HasPrice:                        row.HasPrice,
-			SupplyAvailable:                 row.SupplyAvailable,
-			BaseCurrency:                    row.BaseCurrency,
-			BaseUncachedInputPrice:          row.BaseUncachedInputPrice,
-			BaseCacheReadInputPrice:         row.BaseCacheReadInputPrice,
-			BaseCacheWrite5mInputPrice:      row.BaseCacheWrite5mInputPrice,
-			BaseCacheWrite1hInputPrice:      row.BaseCacheWrite1hInputPrice,
-			BaseCacheWrite30mInputPrice:     row.BaseCacheWrite30mInputPrice,
-			BaseOutputPrice:                 row.BaseOutputPrice,
-			BaseReasoningOutputPrice:        row.BaseReasoningOutputPrice,
-			BaseSalePriceRatio:              row.BaseSalePriceRatio,
-			BaseSaleUncachedInputPrice:      row.BaseSaleUncachedInputPrice,
-			BaseSaleOutputPrice:             row.BaseSaleOutputPrice,
-			BaseLongContextEnabled:          row.BaseLongContextEnabled,
-			BaseLongContextThreshold:        row.BaseLongContextThreshold,
-			BaseLongContextInputMultiplier:  row.BaseLongContextInputMultiplier,
-			BaseLongContextOutputMultiplier: row.BaseLongContextOutputMultiplier,
-			BaseFastPriceConfigured:         row.BaseFastPriceConfigured,
-			BaseFastUncachedInputPrice:      row.BaseFastUncachedInputPrice,
-			BaseFastCacheReadInputPrice:     row.BaseFastCacheReadInputPrice,
-			BaseFastCacheWrite5mInputPrice:  row.BaseFastCacheWrite5mInputPrice,
-			BaseFastCacheWrite1hInputPrice:  row.BaseFastCacheWrite1hInputPrice,
-			BaseFastCacheWrite30mInputPrice: row.BaseFastCacheWrite30mInputPrice,
-			BaseFastOutputPrice:             row.BaseFastOutputPrice,
-			BaseFastReasoningOutputPrice:    row.BaseFastReasoningOutputPrice,
+			ID:                                  row.ID,
+			ModelID:                             row.ModelID,
+			DisplayName:                         row.DisplayName,
+			OwnedBy:                             row.OwnedBy,
+			Family:                              row.Family,
+			DisabledReason:                      row.DisabledReason,
+			Status:                              row.Status,
+			CreatedAt:                           adminhttp.RFC3339(row.CreatedAt),
+			MaxOutputTokens:                     row.MaxOutputTokens,
+			ContextWindowTokens:                 row.ContextWindowTokens,
+			BindingsTotal:                       row.BindingsTotal,
+			BindingsAvailable:                   row.BindingsAvailable,
+			CapabilitiesDeclaredCount:           row.CapabilitiesDeclaredCount,
+			HasPrice:                            row.HasPrice,
+			SupplyAvailable:                     row.SupplyAvailable,
+			BaseCurrency:                        row.BaseCurrency,
+			BaseUncachedInputPrice:              row.BaseUncachedInputPrice,
+			BaseCacheReadInputPrice:             row.BaseCacheReadInputPrice,
+			BaseCacheWrite5mInputPrice:          row.BaseCacheWrite5mInputPrice,
+			BaseCacheWrite1hInputPrice:          row.BaseCacheWrite1hInputPrice,
+			BaseCacheWrite30mInputPrice:         row.BaseCacheWrite30mInputPrice,
+			BaseOutputPrice:                     row.BaseOutputPrice,
+			BaseReasoningOutputPrice:            row.BaseReasoningOutputPrice,
+			BaseSalePriceRatio:                  row.BaseSalePriceRatio,
+			BaseSaleUncachedInputPrice:          row.BaseSaleUncachedInputPrice,
+			BaseSaleCacheReadInputPrice:         row.BaseSaleCacheReadInputPrice,
+			BaseSaleCacheWrite5mInputPrice:      row.BaseSaleCacheWrite5mInputPrice,
+			BaseSaleCacheWrite1hInputPrice:      row.BaseSaleCacheWrite1hInputPrice,
+			BaseSaleCacheWrite30mInputPrice:     row.BaseSaleCacheWrite30mInputPrice,
+			BaseSaleOutputPrice:                 row.BaseSaleOutputPrice,
+			BaseSaleReasoningOutputPrice:        row.BaseSaleReasoningOutputPrice,
+			BaseLongContextEnabled:              row.BaseLongContextEnabled,
+			BaseLongContextThreshold:            row.BaseLongContextThreshold,
+			BaseLongContextInputMultiplier:      row.BaseLongContextInputMultiplier,
+			BaseLongContextOutputMultiplier:     row.BaseLongContextOutputMultiplier,
+			BaseFastPriceConfigured:             row.BaseFastPriceConfigured,
+			BaseFastUncachedInputPrice:          row.BaseFastUncachedInputPrice,
+			BaseFastCacheReadInputPrice:         row.BaseFastCacheReadInputPrice,
+			BaseFastCacheWrite5mInputPrice:      row.BaseFastCacheWrite5mInputPrice,
+			BaseFastCacheWrite1hInputPrice:      row.BaseFastCacheWrite1hInputPrice,
+			BaseFastCacheWrite30mInputPrice:     row.BaseFastCacheWrite30mInputPrice,
+			BaseFastOutputPrice:                 row.BaseFastOutputPrice,
+			BaseFastReasoningOutputPrice:        row.BaseFastReasoningOutputPrice,
+			BaseFastSaleUncachedInputPrice:      row.BaseFastSaleUncachedInputPrice,
+			BaseFastSaleCacheReadInputPrice:     row.BaseFastSaleCacheReadInputPrice,
+			BaseFastSaleCacheWrite5mInputPrice:  row.BaseFastSaleCacheWrite5mInputPrice,
+			BaseFastSaleCacheWrite1hInputPrice:  row.BaseFastSaleCacheWrite1hInputPrice,
+			BaseFastSaleCacheWrite30mInputPrice: row.BaseFastSaleCacheWrite30mInputPrice,
+			BaseFastSaleOutputPrice:             row.BaseFastSaleOutputPrice,
+			BaseFastSaleReasoningOutputPrice:    row.BaseFastSaleReasoningOutputPrice,
 		})
 	}
 	adminhttp.WriteList(w, http.StatusOK, out, page, total)
@@ -223,12 +266,17 @@ func (h *modelOpsHandler) detail(w http.ResponseWriter, r *http.Request) {
 		SuccessRate:       d.SuccessRate,
 		LatencyAvg:        d.LatencyAvg,
 		LatencyP50:        d.LatencyP50,
+		LatencyP90:        d.LatencyP90,
 		LatencyP95:        d.LatencyP95,
+		LatencyP99:        d.LatencyP99,
+		GatewayTTFTP95:    d.GatewayTTFTP95,
+		GatewayTTFTSample: d.GatewayTTFTSample,
 		OutputTokens:      d.OutputTokens,
 		InputTokens:       d.InputTokens,
 		CacheReadRate:     d.CacheReadRate,
 		TPS:               d.TPS,
 		RevenueUSD:        d.RevenueUSD,
+		CostUSD:           d.CostUSD,
 		MarginUSD:         d.MarginUSD,
 		MarginRate:        d.MarginRate,
 		SupplyAvailable:   d.SupplyAvailable,
@@ -298,7 +346,15 @@ func (h *modelOpsHandler) performance(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]modelOpsPerfPointDTO, 0, len(points))
 	for _, p := range points {
-		out = append(out, modelOpsPerfPointDTO{Bucket: adminhttp.RFC3339(p.Bucket), RequestTotal: p.RequestTotal, RequestSucceeded: p.RequestSucceeded, LatencyP95: p.LatencyP95})
+		out = append(out, modelOpsPerfPointDTO{
+			Bucket:           adminhttp.RFC3339(p.Bucket),
+			RequestTotal:     p.RequestTotal,
+			RequestSucceeded: p.RequestSucceeded,
+			LatencyP95:       p.LatencyP95,
+			RevenueUSD:       p.RevenueUSD,
+			CostUSD:          p.CostUSD,
+			MarginUSD:        p.MarginUSD,
+		})
 	}
 	adminhttp.WriteData(w, http.StatusOK, out)
 }
@@ -332,4 +388,33 @@ func (h *modelOpsHandler) requests(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	adminhttp.WriteList(w, http.StatusOK, out, page, total)
+}
+
+func (h *modelOpsHandler) errors(w http.ResponseWriter, r *http.Request) {
+	id, err := adminhttp.PathID(r)
+	if err != nil {
+		adminhttp.WriteServiceError(w, err)
+		return
+	}
+	from, to, _, err := adminhttp.RangeWindow(r)
+	if err != nil {
+		adminhttp.WriteServiceError(w, err)
+		return
+	}
+	rows, err := h.service.Errors(r.Context(), id, from, to)
+	if err != nil {
+		adminhttp.WriteServiceError(w, err)
+		return
+	}
+	out := make([]modelOpsErrorDTO, 0, len(rows))
+	for _, e := range rows {
+		out = append(out, modelOpsErrorDTO{
+			ErrorCode:       e.ErrorCode,
+			Occurrences:     e.Occurrences,
+			LastSeenAt:      adminhttp.RFC3339(e.LastSeenAt),
+			SampleRequestID: e.SampleRequestID,
+			ChannelsTouched: e.ChannelsTouched,
+		})
+	}
+	adminhttp.WriteData(w, http.StatusOK, out)
 }

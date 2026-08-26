@@ -8,6 +8,7 @@ type Deps struct {
 	OpsService     ModelOpsService
 	PriceService   ModelPriceService
 	CatalogService CatalogService
+	RoutingService ModelRoutingService
 }
 
 // Register 注册模型模块路由。静态 /models/ops 与 /models/from-catalog 均置于 /models/{id} 之前。
@@ -20,6 +21,15 @@ func Register(r chi.Router, d Deps) {
 		r.Get("/models/{id}/ops/channels", moh.channels)
 		r.Get("/models/{id}/ops/performance", moh.performance)
 		r.Get("/models/{id}/ops/requests", moh.requests)
+		r.Get("/models/{id}/ops/errors", moh.errors)
+	}
+
+	// 选路观测：Route 实体移除后，候选排序与负载分布只能从模型这一侧看。
+	if d.RoutingService != nil {
+		mrh := &modelRoutingHandler{service: d.RoutingService}
+		r.Get("/models/{id}/ops/candidates", mrh.candidates)
+		r.Get("/models/{id}/ops/routing-stats", mrh.stats)
+		r.Get("/models/{id}/ops/routing-traces", mrh.traces)
 	}
 
 	if d.Service != nil {
@@ -34,7 +44,7 @@ func Register(r chi.Router, d Deps) {
 
 	if d.PriceService != nil {
 		mph := &modelPricesHandler{service: d.PriceService}
-		// DEC-026：模型基准售价挂在 model 下；金额不可改，PATCH 调窗口/启停用价格 id 定位。
+		// DEC-026：模型定价挂在 model 下；POST 必须带 intent。金额不可改，PATCH 调窗口/启停用价格 id 定位。
 		r.Get("/models/{id}/prices", mph.list)
 		r.Post("/models/{id}/prices", mph.create)
 		r.Patch("/model-prices/{id}", mph.update)
