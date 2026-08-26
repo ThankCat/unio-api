@@ -276,6 +276,11 @@ func (s *Service) Archive(ctx context.Context, id int64) (StatusChangeResult, er
 	if current.Status == StatusArchived {
 		return StatusChangeResult{}, notFound("provider not found or already archived")
 	}
+	// 归档是「这个服务商以后不用了」的终态动作。启用中直接归档等于让在跑的流量突然失去落点，
+	// 必须先显式停用，让运维确认流量归零后再收尾。
+	if current.Status != StatusDisabled {
+		return StatusChangeResult{}, archiveRequiresDisabled("disable the provider before archiving it")
+	}
 	channels, err := s.store.CountNonArchivedChannelsByProvider(ctx, id)
 	if err != nil {
 		return StatusChangeResult{}, storeFailed(err, "count provider channels")
@@ -421,6 +426,9 @@ func notFound(message string) error {
 }
 func conflict(message string) error {
 	return failure.New(failure.CodeAdminConflict, failure.WithMessage(message))
+}
+func archiveRequiresDisabled(message string) error {
+	return failure.New(failure.CodeAdminArchiveRequiresDisabled, failure.WithMessage(message))
 }
 func runtimeUnavailable(message string) error {
 	return failure.New(failure.CodeGatewayBreakerStoreUnavailable, failure.WithMessage(message))

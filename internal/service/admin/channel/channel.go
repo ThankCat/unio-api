@@ -861,6 +861,20 @@ func (s *Service) Archive(ctx context.Context, id int64) error {
 	if id <= 0 {
 		return invalidArgument("id", "channel id must be positive")
 	}
+	cur, err := s.store.GetChannel(ctx, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return notFound("channel not found")
+		}
+		return storeFailed(err, "get channel")
+	}
+	if cur.Status == StatusArchived {
+		return notFound("channel not found or already archived")
+	}
+	// 启用中的渠道还在承接流量，归档等于让它悄无声息地退出。先停用，让运维看到流量归零再收尾。
+	if cur.Status != StatusDisabled {
+		return archiveRequiresDisabled("disable the channel before archiving it")
+	}
 	enabledBindings, err := s.store.CountEnabledBindingsByChannel(ctx, id)
 	if err != nil {
 		return storeFailed(err, "check channel archive binding impact")
@@ -1211,6 +1225,10 @@ func notFound(message string) error {
 
 func conflict(message string) error {
 	return failure.New(failure.CodeAdminConflict, failure.WithMessage(message))
+}
+
+func archiveRequiresDisabled(message string) error {
+	return failure.New(failure.CodeAdminArchiveRequiresDisabled, failure.WithMessage(message))
 }
 
 func storeFailed(cause error, message string) error {

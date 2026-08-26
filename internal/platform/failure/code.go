@@ -487,6 +487,10 @@ const (
 	// CodeAdminConflict 表示 admin 写入违反唯一约束（如 slug、provider 内 channel 名重复）。
 	CodeAdminConflict Code = "admin_conflict"
 
+	// CodeAdminArchiveRequiresDisabled 表示归档目标仍处于启用态，必须先停用。
+	// 与 CodeAdminConflict 分开是为了让前端能把「先停用」和「先处理下级依赖」给出不同引导。
+	CodeAdminArchiveRequiresDisabled Code = "admin_archive_requires_disabled"
+
 	// CodeAdminAdapterBindingUnsupported 表示 channel 的 (protocol, adapter_key) 复合键未在当前进程 adapter registry 注册。
 	CodeAdminAdapterBindingUnsupported Code = "admin_adapter_binding_unsupported"
 
