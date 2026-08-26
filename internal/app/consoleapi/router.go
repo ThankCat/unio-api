@@ -9,6 +9,7 @@ import (
 
 	consoleapikeys "github.com/ThankCat/unio-gateway/internal/app/consoleapi/apikeys"
 	consoleauth "github.com/ThankCat/unio-gateway/internal/app/consoleapi/auth"
+	consolemeta "github.com/ThankCat/unio-gateway/internal/app/consoleapi/meta"
 	consolemiddleware "github.com/ThankCat/unio-gateway/internal/app/consoleapi/middleware"
 	consolerequests "github.com/ThankCat/unio-gateway/internal/app/consoleapi/requests"
 	"github.com/ThankCat/unio-gateway/internal/app/consoleapi/transport"
@@ -67,6 +68,11 @@ func NewRouter(deps Deps) (http.Handler, error) {
 			CookieSecure: deps.Config.CookieSecure,
 			Service:      deps.AuthService,
 			ErrorWriter:  errorWriter,
+		})
+		// 接入元信息只读进程配置，不查库也不需要身份：用户在登录页就该能看到往哪儿发请求。
+		consolemeta.Register(r, consolemeta.Deps{
+			GatewayPublicBaseURL: deps.Config.GatewayPublicBaseURL,
+			DocsBaseURL:          deps.Config.DocsBaseURL,
 		})
 		if deps.RequestService != nil || deps.UsageService != nil || deps.APIKeyService != nil {
 			r.Group(func(r chi.Router) {

@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/ThankCat/unio-gateway/internal/core/apikey"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 )
 
@@ -232,7 +233,7 @@ func TestCreateDoesNotPersistPlaintext(t *testing.T) {
 	if created.Plaintext == "" {
 		t.Fatal("expected the one-time plaintext to be returned")
 	}
-	if !strings.HasPrefix(created.Plaintext, "sk_unio_") || len(created.Plaintext) != 32 {
+	if !strings.HasPrefix(created.Plaintext, "sk_unio_") || len(created.Plaintext) != apikey.MaxPlaintextLen {
 		t.Fatalf("plaintext = %q", created.Plaintext)
 	}
 	// 落库参数里不能有任何等于明文的字段。

@@ -120,6 +120,12 @@ type ConsoleConfig struct {
 	TrustedProxyCIDRs     []string
 	AccessTokenTTL        time.Duration
 	RefreshTokenTTL       time.Duration
+	// GatewayPublicBaseURL 是网关对外暴露的推理入口，Console 把它展示给用户当 base_url。
+	// 与 GATEWAY_HTTP_ADDR 是两件事：后者是进程监听地址，前者是用户侧看到的地址
+	// （通常带域名与 TLS，且经过反代）。留空表示未配置，Console 的接入区会隐藏。
+	GatewayPublicBaseURL string
+	// DocsBaseURL 是接入文档站点根地址，用于拼各协议的文档链接。留空则不展示文档入口。
+	DocsBaseURL string
 }
 
 // ModelCatalogSyncConfig 保存 models.dev 模型目录同步参数；默认关闭（opt-in），
@@ -832,6 +838,8 @@ func Load() (Config, error) {
 			TrustedProxyCIDRs:     splitCommaSeparated(os.Getenv("CONSOLE_TRUSTED_PROXY_CIDRS")),
 			AccessTokenTTL:        consoleAccessTokenTTL,
 			RefreshTokenTTL:       consoleRefreshTokenTTL,
+			GatewayPublicBaseURL:  strings.TrimRight(strings.TrimSpace(os.Getenv("GATEWAY_PUBLIC_BASE_URL")), "/"),
+			DocsBaseURL:           strings.TrimRight(strings.TrimSpace(os.Getenv("CONSOLE_DOCS_BASE_URL")), "/"),
 		},
 		TokenEstimate: TokenEstimateConfig{
 			CountMedia:        tokenEstimateCountMedia,

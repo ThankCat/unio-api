@@ -39,6 +39,12 @@ type LiveChannel struct {
 	// 每分钟开始时会归零，界面文案必须写「本分钟」而不是「近 1 分钟」。
 	RequestsThisMinute *int64
 	TokensThisMinute   *int64
+	// TTFTAvgMs / TTFTSamples 取 AggregateChannelSamples 的 30 分钟对齐窗口，
+	// 与上面两个「本分钟」字段不是同一时间口径，界面必须分别标注。
+	// 只有流式且真正吐出了有效 Token 的请求才产生样本，所以样本数远小于请求数；
+	// 无样本时为 nil 而不是 0——0ms 会被读成「快到没有延迟」。
+	TTFTAvgMs   *int64
+	TTFTSamples *int64
 }
 
 // LiveModel 是流量视图里的一个模型（本分钟请求量）。
@@ -65,6 +71,10 @@ type LiveTraffic struct {
 	TokensThisMinute    int64
 	ActiveChannels      int64
 	UnavailableChannels int64
+	// TTFTAvgMs 是全网关首字延迟，按样本量加权而不是对渠道均值再取平均——
+	// 后者会让只跑了几个请求的慢渠道和跑了几万个请求的快渠道等权。
+	TTFTAvgMs   *int64
+	TTFTSamples *int64
 }
 
 // LiveTraffic 返回网关此刻的流量分布。
@@ -141,6 +151,7 @@ func (s *Service) LiveTraffic(ctx context.Context) (LiveTraffic, error) {
 		out.RuntimeErrorCode = "runtime_reader_unavailable"
 	}
 
+	var ttftSumMs, ttftCount int64
 	for _, row := range channels {
 		channel := LiveChannel{
 			ChannelID:       row.ChannelID,
@@ -177,6 +188,14 @@ func (s *Service) LiveTraffic(ctx context.Context) (LiveTraffic, error) {
 		if sample, ok := samples[row.ChannelID]; ok {
 			rpm := sample.RPM
 			channel.RequestsThisMinute = &rpm
+			if sample.TTFTCount > 0 {
+				avg := sample.TTFTSumMs / sample.TTFTCount
+				count := sample.TTFTCount
+				channel.TTFTAvgMs = &avg
+				channel.TTFTSamples = &count
+				ttftSumMs += sample.TTFTSumMs
+				ttftCount += sample.TTFTCount
+			}
 		}
 		if snapshot, ok := tpm[row.ChannelID]; ok {
 			tokens := snapshot.TPM()
@@ -187,6 +206,11 @@ func (s *Service) LiveTraffic(ctx context.Context) (LiveTraffic, error) {
 			out.UnavailableChannels++
 		}
 		out.Channels = append(out.Channels, channel)
+	}
+	if ttftCount > 0 {
+		avg := ttftSumMs / ttftCount
+		out.TTFTAvgMs = &avg
+		out.TTFTSamples = &ttftCount
 	}
 	return out, nil
 }

@@ -11,13 +11,17 @@ const (
 	keyPrefix       = "sk_unio_"
 	prefixRandomLen = 8
 	// randomLen 是明文 key 随机部分的字符数。
-	// 24 个 base36 字符约 124 bit 熵，加上 8 字符前缀刚好落在 32 字符总长上限内。
-	randomLen = 24
+	//
+	// 取 48 是为了和 OpenAI 传统 key（sk- 后跟 48 字符）的随机段等长：用户往 SDK 里
+	// 粘贴时，两家 key 在输入框里占的宽度一致，不会因为我们的明显偏短而显得像被截断了。
+	// 48 个 base36 字符约 248 bit 熵，远超碰撞与暴力枚举所需。
+	randomLen = 48
 	// base36Alphabet 只含小写字母和数字：明文全小写，复制粘贴时不会因大小写误读，
 	// 也避开 base64 的 - 和 _（会被 URL 或 shell 转义）。
 	base36Alphabet = "0123456789abcdefghijklmnopqrstuvwxyz"
 	// MaxPlaintextLen 是明文 key 的总长上限，供调用方做防御性校验。
-	MaxPlaintextLen = 32
+	// = len(keyPrefix) + randomLen。
+	MaxPlaintextLen = 56
 )
 
 // Key 表示一次新生成的 API Key。

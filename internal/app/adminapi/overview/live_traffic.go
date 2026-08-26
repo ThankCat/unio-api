@@ -35,6 +35,10 @@ type liveChannelDTO struct {
 	CooldownRemainingMs *int64 `json:"cooldown_remaining_ms"`
 	RequestsThisMinute  *int64 `json:"requests_this_minute"`
 	TokensThisMinute    *int64 `json:"tokens_this_minute"`
+	// ttft_* 取 30 分钟对齐窗口，不是上面两个字段的「本分钟」口径；
+	// 只有流式请求产生样本，无样本时为 null 而不是 0。
+	TTFTAvgMs   *int64 `json:"ttft_avg_ms"`
+	TTFTSamples *int64 `json:"ttft_samples"`
 }
 
 type liveModelDTO struct {
@@ -56,6 +60,9 @@ type liveTrafficDTO struct {
 	TokensThisMinute    int64 `json:"tokens_this_minute"`
 	ActiveChannels      int64 `json:"active_channels"`
 	UnavailableChannels int64 `json:"unavailable_channels"`
+	// 全网关首字延迟，按样本量加权；无样本时为 null。
+	TTFTAvgMs   *int64 `json:"ttft_avg_ms"`
+	TTFTSamples *int64 `json:"ttft_samples"`
 
 	Channels []liveChannelDTO `json:"channels"`
 	Models   []liveModelDTO   `json:"models"`
@@ -81,6 +88,8 @@ func (h *liveTrafficHandler) live(w http.ResponseWriter, r *http.Request) {
 		TokensThisMinute:    snapshot.TokensThisMinute,
 		ActiveChannels:      snapshot.ActiveChannels,
 		UnavailableChannels: snapshot.UnavailableChannels,
+		TTFTAvgMs:           snapshot.TTFTAvgMs,
+		TTFTSamples:         snapshot.TTFTSamples,
 		Channels:            make([]liveChannelDTO, 0, len(snapshot.Channels)),
 		Models:              make([]liveModelDTO, 0, len(snapshot.Models)),
 	}
@@ -102,6 +111,8 @@ func (h *liveTrafficHandler) live(w http.ResponseWriter, r *http.Request) {
 			CooldownRemainingMs: channel.CooldownRemainingMs,
 			RequestsThisMinute:  channel.RequestsThisMinute,
 			TokensThisMinute:    channel.TokensThisMinute,
+			TTFTAvgMs:           channel.TTFTAvgMs,
+			TTFTSamples:         channel.TTFTSamples,
 		})
 	}
 	for _, model := range snapshot.Models {
