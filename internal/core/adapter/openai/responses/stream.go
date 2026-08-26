@@ -178,27 +178,31 @@ func (a *Adapter) StreamResponse(ctx context.Context, ch channel.Runtime, req Re
 		case eventResponseFailed:
 			env := decodeEnvelope(data)
 			code, message := "", "upstream responses failed"
+			parsed := false
 			if env != nil && env.Response != nil && env.Response.Error != nil {
 				code = env.Response.Error.Code
 				if env.Response.Error.Message != "" {
 					message = env.Response.Error.Message
+					parsed = true
 				}
 			}
 			// P2-10：内联透传给客户端前重建为脱敏最小信封（去 base_url 等基础设施细节），仍保留 Codex 所需 error.code/message 形状。
 			chunk.Data = sanitizedResponsesFailedEvent(responseID, code, message)
-			streamErr = newUpstreamStreamError(meta, code, message)
+			streamErr = newUpstreamStreamErrorWithPayload(meta, code, message, unparsedPayload(data, code, parsed))
 		case eventError:
 			env := decodeEnvelope(data)
 			code, message := "", "upstream responses stream error"
+			parsed := false
 			if env != nil {
 				code = env.Code
 				if env.Message != "" {
 					message = env.Message
+					parsed = true
 				}
 			}
 			// P2-10：同上，error 事件重建为脱敏最小信封后再透传。
 			chunk.Data = sanitizedResponsesErrorEvent(code, message)
-			streamErr = newUpstreamStreamError(meta, code, message)
+			streamErr = newUpstreamStreamErrorWithPayload(meta, code, message, unparsedPayload(data, code, parsed))
 		}
 
 		// 终态错误事件也先原文透传（Codex 据 response.failed/error 映射 ApiError），再以结构化错误中断。
@@ -273,6 +277,15 @@ func peekEventType(data []byte) string {
 		return ""
 	}
 	return probe.Type
+}
+
+// unparsedPayload 在上游错误既没落在 code 也没落在 message 上时，返回原始事件供诊断留痕。
+// 两者任一取到就说明上游按约定表达了错误，再附原文只是把同样的内容重复一遍。
+func unparsedPayload(data []byte, code string, parsed bool) []byte {
+	if parsed || code != "" {
+		return nil
+	}
+	return data
 }
 
 // decodeEnvelope 解析封套事件 data；解析失败返回 nil（不阻断流，按未知事件原文透传）。

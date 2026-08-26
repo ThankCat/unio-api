@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
@@ -75,9 +76,24 @@ func newUpstreamSendErrorWithContextCause(cause error, ctxCause error, operation
 // meta 携带本次流式调用的 HTTP 状态与 request id；cause 用 CodeAdapterUpstreamStatus，保持与
 // 非流式错误同一审计 error_code 维度。
 func newUpstreamStreamError(meta adapter.UpstreamMetadata, code, message string) error {
+	return newUpstreamStreamErrorWithPayload(meta, code, message, nil)
+}
+
+// maxDiagnosticPayloadLen 限制附进诊断详情的上游原文长度。
+const maxDiagnosticPayloadLen = 512
+
+// newUpstreamStreamErrorWithPayload 在 newUpstreamStreamError 之上多接一份上游事件原文。
+//
+// 上游把错误放在 code/message 之外的字段上时（中转常见），detail 只会剩一句默认文案，
+// 排障既看不到上游说了什么，也分不清是上游的问题还是我们解析错了。raw 非空时把原文截断后
+// 附进 detail——它只进 internal_error_detail，不进 meta.ErrorMessage，后者要回给客户。
+func newUpstreamStreamErrorWithPayload(meta adapter.UpstreamMetadata, code, message string, raw []byte) error {
 	detail := message
 	if code != "" {
 		detail = fmt.Sprintf("%s: %s", code, message)
+	}
+	if payload := diagnosticPayload(raw); payload != "" {
+		detail = fmt.Sprintf("%s; upstream payload: %s", detail, payload)
 	}
 	// 与内联透传共用同一套脱敏：首字前失败时内联事件会被丢弃（首字前不向客户暴露失败渠道事件），
 	// 上游真实原因只能靠这里带到最终错误响应，否则客户永远只看到一句通用文案。
@@ -92,6 +108,24 @@ func newUpstreamStreamError(meta adapter.UpstreamMetadata, code, message string)
 			failure.WithMessage(fmt.Sprintf("openai responses adapter upstream stream failed (%s)", detail)),
 		),
 	)
+}
+
+// diagnosticPayload 把上游事件原文压成单行、截断到上限，供内部排障阅读。
+// 空白折叠是为了让整条 detail 留在一行日志里，否则多行 JSON 会把日志切碎。
+func diagnosticPayload(raw []byte) string {
+	payload := strings.Join(strings.Fields(string(raw)), " ")
+	if payload == "" {
+		return ""
+	}
+	if len(payload) > maxDiagnosticPayloadLen {
+		// 按 rune 边界回退，避免把多字节字符截成乱码。
+		cut := maxDiagnosticPayloadLen
+		for cut > 0 && !utf8.RuneStart(payload[cut]) {
+			cut--
+		}
+		payload = strings.TrimSpace(payload[:cut]) + "…"
+	}
+	return payload
 }
 
 func upstreamCategoryForStreamError(code string) adapter.UpstreamErrorCategory {
