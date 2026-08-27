@@ -15,8 +15,8 @@ type fakeChatRouteStore struct {
 	rows []sqlc.FindModelCandidatesRow
 }
 
-func (s *fakeChatRouteStore) ModelExistsByID(ctx context.Context, requestedModelID string) (bool, error) {
-	return true, nil
+func (s *fakeChatRouteStore) ModelIngressQualification(ctx context.Context, arg sqlc.ModelIngressQualificationParams) (sqlc.ModelIngressQualificationRow, error) {
+	return sqlc.ModelIngressQualificationRow{ModelExists: true, ProtocolSupported: true}, nil
 }
 
 func (s *fakeChatRouteStore) FindModelCandidates(ctx context.Context, arg sqlc.FindModelCandidatesParams) ([]sqlc.FindModelCandidatesRow, error) {

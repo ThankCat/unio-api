@@ -49,11 +49,11 @@ func (s *fakeAuthService) SendChallenge(_ context.Context, _, _, ip string) (ser
 	return serviceauth.Challenge{ID: "vch_test", ExpiresIn: 600, ResendAfter: 30}, nil
 }
 
-func (s *fakeAuthService) Register(context.Context, string, string, string, string, string) (serviceauth.User, serviceauth.TokenPair, *consoleservice.Error) {
+func (s *fakeAuthService) Register(context.Context, string, string, string, string, string, string) (serviceauth.User, serviceauth.TokenPair, *consoleservice.Error) {
 	return serviceauth.User{}, serviceauth.TokenPair{}, nil
 }
 
-func (s *fakeAuthService) PasswordLogin(_ context.Context, _, _, ip string) (serviceauth.User, serviceauth.TokenPair, *consoleservice.Error) {
+func (s *fakeAuthService) PasswordLogin(_ context.Context, _, _, ip, _ string) (serviceauth.User, serviceauth.TokenPair, *consoleservice.Error) {
 	s.loginCalled = true
 	s.loginIP = ip
 	return serviceauth.User{UID: testUserUID, Email: "user@example.com", DisplayName: "user"}, serviceauth.TokenPair{
@@ -81,7 +81,7 @@ func (s *fakeAuthService) AuthenticatePrincipal(_ context.Context, accessToken s
 	return serviceauth.Principal{UserID: 42, UID: testUserUID}, nil
 }
 
-func (s *fakeAuthService) EmailCodeLogin(context.Context, string, string, string, string) (serviceauth.User, serviceauth.TokenPair, *consoleservice.Error) {
+func (s *fakeAuthService) EmailCodeLogin(context.Context, string, string, string, string, string) (serviceauth.User, serviceauth.TokenPair, *consoleservice.Error) {
 	return serviceauth.User{}, serviceauth.TokenPair{}, nil
 }
 
@@ -107,6 +107,24 @@ func (s *fakeAuthService) Refresh(context.Context, string) (serviceauth.TokenPai
 func (s *fakeAuthService) Logout(context.Context, string) *consoleservice.Error { return nil }
 
 func (s *fakeAuthService) LogoutAll(context.Context, string) *consoleservice.Error { return nil }
+
+func (s *fakeAuthService) UpdateDisplayName(context.Context, string, string) (serviceauth.User, *consoleservice.Error) {
+	return serviceauth.User{}, nil
+}
+
+func (s *fakeAuthService) ChangePassword(context.Context, string, string, string) *consoleservice.Error {
+	return nil
+}
+
+func (s *fakeAuthService) ListSessions(context.Context, string) ([]serviceauth.SessionEntry, *consoleservice.Error) {
+	return nil, nil
+}
+
+func (s *fakeAuthService) RevokeSession(context.Context, string, string) *consoleservice.Error {
+	return nil
+}
+
+func (s *fakeAuthService) LogoutOthers(context.Context, string) *consoleservice.Error { return nil }
 
 func newTestRouter(t *testing.T, service *fakeAuthService) http.Handler {
 	t.Helper()

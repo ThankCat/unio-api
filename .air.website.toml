@@ -1,0 +1,18 @@
+# air 热加载配置：website-server（营销站公开只读 API，/v1/models 等）。
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  cmd = "go build -o ./tmp/website-server ./cmd/website-server"
+  bin = "./tmp/website-server"
+  include_ext = ["go"]
+  exclude_dir = ["tmp", "docs", "migrations", "sql", ".git", ".idea"]
+  exclude_regex = ["_test\\.go"]
+  delay = 800
+  kill_delay = "3s"
+  send_interrupt = true
+  stop_on_error = true
+  log = "build-errors-website.log"
+
+[misc]
+  clean_on_exit = false

@@ -155,6 +155,45 @@ func (q *Queries) GetConsoleUserByUID(ctx context.Context, uid pgtype.UUID) (Get
 	return i, err
 }
 
+const updateConsoleDisplayName = `-- name: UpdateConsoleDisplayName :one
+UPDATE users
+SET display_name = $1, updated_at = now()
+WHERE id = $2
+RETURNING id, uid, email, password_hash, display_name, status, created_at, updated_at
+`
+
+type UpdateConsoleDisplayNameParams struct {
+	DisplayName string
+	ID          int64
+}
+
+type UpdateConsoleDisplayNameRow struct {
+	ID           int64
+	Uid          pgtype.UUID
+	Email        string
+	PasswordHash string
+	DisplayName  string
+	Status       string
+	CreatedAt    pgtype.Timestamptz
+	UpdatedAt    pgtype.Timestamptz
+}
+
+func (q *Queries) UpdateConsoleDisplayName(ctx context.Context, arg UpdateConsoleDisplayNameParams) (UpdateConsoleDisplayNameRow, error) {
+	row := q.db.QueryRow(ctx, updateConsoleDisplayName, arg.DisplayName, arg.ID)
+	var i UpdateConsoleDisplayNameRow
+	err := row.Scan(
+		&i.ID,
+		&i.Uid,
+		&i.Email,
+		&i.PasswordHash,
+		&i.DisplayName,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const updateConsolePassword = `-- name: UpdateConsolePassword :one
 UPDATE users
 SET password_hash = $1, updated_at = now()

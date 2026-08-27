@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/ThankCat/unio-gateway/internal/core/apikey"
@@ -33,18 +32,21 @@ type fakeStore struct {
 	getArg     sqlc.GetConsoleAPIKeyParams
 	dailyArg   sqlc.ListConsoleAPIKeyDailyChargeParams
 	modelsArg  sqlc.ListConsoleAPIKeyTopModelsParams
-	createArg  sqlc.CreateConsoleAPIKeyParams
-	updateArg  sqlc.UpdateConsoleAPIKeyParams
-	revokeArg  sqlc.RevokeConsoleAPIKeyParams
-	deleteArg  sqlc.DeleteConsoleAPIKeyParams
-	summaryUID int64
-	windowArg  sqlc.SummarizeConsoleAPIKeyWindowParams
+	createArg    sqlc.CreateConsoleAPIKeyParams
+	updateArg    sqlc.UpdateConsoleAPIKeyParams
+	revokeArg    sqlc.RevokeConsoleAPIKeyParams
+	deleteArg    sqlc.DeleteConsoleAPIKeyParams
+	lifecycleArg sqlc.GetConsoleAPIKeyLifecycleParams
+	summaryUID   int64
+	windowArg    sqlc.SummarizeConsoleAPIKeyWindowParams
 
 	getErr       error
 	updateErr    error
 	revokeErr    error
 	deleteErr    error
 	deleteRows   int64
+	lifecycleRow sqlc.GetConsoleAPIKeyLifecycleRow
+	lifecycleErr error
 	dailyRows    []sqlc.ListConsoleAPIKeyDailyChargeRow
 	listRows     []sqlc.ListConsoleAPIKeysRow
 	createdRow   sqlc.CreateConsoleAPIKeyRow
@@ -80,7 +82,7 @@ func (s *fakeStore) GetConsoleAPIKey(_ context.Context, arg sqlc.GetConsoleAPIKe
 	return sqlc.GetConsoleAPIKeyRow{
 		ID:        arg.ID,
 		Name:      "prod",
-		KeyPrefix: "sk_unio_a3f9k2m1",
+		KeyPrefix: "sk-unio-a3f9k2m1",
 		CreatedAt: pgtype.Timestamptz{Time: testNow, Valid: true},
 		UpdatedAt: pgtype.Timestamptz{Time: testNow, Valid: true},
 	}, nil
@@ -120,7 +122,7 @@ func (s *fakeStore) UpdateConsoleAPIKey(_ context.Context, arg sqlc.UpdateConsol
 	return sqlc.UpdateConsoleAPIKeyRow{
 		ID:         arg.ID,
 		Name:       arg.Name,
-		KeyPrefix:  "sk_unio_a3f9k2m1",
+		KeyPrefix:  "sk-unio-a3f9k2m1",
 		SpendLimit: arg.SpendLimit,
 		ExpiresAt:  arg.ExpiresAt,
 		DisabledAt: arg.DisabledAt,
@@ -137,7 +139,7 @@ func (s *fakeStore) RevokeConsoleAPIKey(_ context.Context, arg sqlc.RevokeConsol
 	return sqlc.RevokeConsoleAPIKeyRow{
 		ID:        arg.ID,
 		Name:      "prod",
-		KeyPrefix: "sk_unio_a3f9k2m1",
+		KeyPrefix: "sk-unio-a3f9k2m1",
 		RevokedAt: pgtype.Timestamptz{Time: testNow, Valid: true},
 		CreatedAt: pgtype.Timestamptz{Time: testNow, Valid: true},
 		UpdatedAt: pgtype.Timestamptz{Time: testNow, Valid: true},
@@ -147,6 +149,11 @@ func (s *fakeStore) RevokeConsoleAPIKey(_ context.Context, arg sqlc.RevokeConsol
 func (s *fakeStore) DeleteConsoleAPIKey(_ context.Context, arg sqlc.DeleteConsoleAPIKeyParams) (int64, error) {
 	s.deleteArg = arg
 	return s.deleteRows, s.deleteErr
+}
+
+func (s *fakeStore) GetConsoleAPIKeyLifecycle(_ context.Context, arg sqlc.GetConsoleAPIKeyLifecycleParams) (sqlc.GetConsoleAPIKeyLifecycleRow, error) {
+	s.lifecycleArg = arg
+	return s.lifecycleRow, s.lifecycleErr
 }
 
 func newTestService(store *fakeStore) *Service {
@@ -233,7 +240,7 @@ func TestCreateDoesNotPersistPlaintext(t *testing.T) {
 	if created.Plaintext == "" {
 		t.Fatal("expected the one-time plaintext to be returned")
 	}
-	if !strings.HasPrefix(created.Plaintext, "sk_unio_") || len(created.Plaintext) != apikey.MaxPlaintextLen {
+	if !strings.HasPrefix(created.Plaintext, "sk-unio-") || len(created.Plaintext) != apikey.MaxPlaintextLen {
 		t.Fatalf("plaintext = %q", created.Plaintext)
 	}
 	// 落库参数里不能有任何等于明文的字段。
@@ -441,8 +448,8 @@ func TestListForwardsTimeZoneAndDefaultsToUTC(t *testing.T) {
 func TestListFetchesTrendsInOneQuery(t *testing.T) {
 	store := &fakeStore{
 		listRows: []sqlc.ListConsoleAPIKeysRow{
-			{ID: 1, Name: "a", KeyPrefix: "sk_unio_aaaaaaaa"},
-			{ID: 2, Name: "b", KeyPrefix: "sk_unio_bbbbbbbb"},
+			{ID: 1, Name: "a", KeyPrefix: "sk-unio-aaaaaaaa"},
+			{ID: 2, Name: "b", KeyPrefix: "sk-unio-bbbbbbbb"},
 		},
 		dailyRows: []sqlc.ListConsoleAPIKeyDailyChargeRow{
 			{ApiKeyID: 1, BucketStart: pgtype.Timestamptz{Time: testNow, Valid: true}, RequestCount: 3},
@@ -483,17 +490,39 @@ func TestGetScopesTrendToOneKey(t *testing.T) {
 	}
 }
 
-// 有调用历史的密钥删不掉，要提示改用吊销——那些请求记录是计费和审计的依据。
-func TestDeleteMapsForeignKeyViolationToConflict(t *testing.T) {
-	svc := newTestService(&fakeStore{deleteErr: &pgconn.PgError{Code: pgForeignKeyViolation}})
+// 删除是软删除，且只对已吊销的密钥开放：未吊销时要指引用户先吊销，而不是报不存在。
+func TestDeleteRequiresRevokedKey(t *testing.T) {
+	store := &fakeStore{
+		deleteRows:   0,
+		lifecycleRow: sqlc.GetConsoleAPIKeyLifecycleRow{},
+	}
+	svc := newTestService(store)
 	err := svc.Delete(context.Background(), testUserID, 7)
-	if err == nil || err.Status != 409 || err.Code != "api_key_in_use" {
+	if err == nil || err.Status != 409 || err.Code != "api_key_not_revoked" {
 		t.Fatalf("err = %+v", err)
+	}
+	if store.lifecycleArg.UserID != testUserID || store.lifecycleArg.ID != 7 {
+		t.Fatalf("lifecycle scoping: %+v", store.lifecycleArg)
 	}
 }
 
 func TestDeleteMissingKeyIsNotFound(t *testing.T) {
-	svc := newTestService(&fakeStore{deleteRows: 0})
+	svc := newTestService(&fakeStore{deleteRows: 0, lifecycleErr: pgx.ErrNoRows})
+	err := svc.Delete(context.Background(), testUserID, 7)
+	if err == nil || err.Status != 404 {
+		t.Fatalf("err = %+v", err)
+	}
+}
+
+// 已经软删除的密钥再删一次按不存在处理，不能泄露它曾经存在。
+func TestDeleteAlreadyDeletedIsNotFound(t *testing.T) {
+	svc := newTestService(&fakeStore{
+		deleteRows: 0,
+		lifecycleRow: sqlc.GetConsoleAPIKeyLifecycleRow{
+			RevokedAt: pgtype.Timestamptz{Time: testNow, Valid: true},
+			DeletedAt: pgtype.Timestamptz{Time: testNow, Valid: true},
+		},
+	})
 	err := svc.Delete(context.Background(), testUserID, 7)
 	if err == nil || err.Status != 404 {
 		t.Fatalf("err = %+v", err)

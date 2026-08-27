@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/ThankCat/unio-gateway/internal/core/apikey"
@@ -44,9 +43,6 @@ const (
 	topModelLimit   = 3
 )
 
-// pgForeignKeyViolation 是 Postgres 外键冲突的 SQLSTATE。
-const pgForeignKeyViolation = "23503"
-
 // Store 是密钥自助管理所需的存储能力。
 type Store interface {
 	ListConsoleAPIKeys(context.Context, sqlc.ListConsoleAPIKeysParams) ([]sqlc.ListConsoleAPIKeysRow, error)
@@ -60,6 +56,7 @@ type Store interface {
 	UpdateConsoleAPIKey(context.Context, sqlc.UpdateConsoleAPIKeyParams) (sqlc.UpdateConsoleAPIKeyRow, error)
 	RevokeConsoleAPIKey(context.Context, sqlc.RevokeConsoleAPIKeyParams) (sqlc.RevokeConsoleAPIKeyRow, error)
 	DeleteConsoleAPIKey(context.Context, sqlc.DeleteConsoleAPIKeyParams) (int64, error)
+	GetConsoleAPIKeyLifecycle(context.Context, sqlc.GetConsoleAPIKeyLifecycleParams) (sqlc.GetConsoleAPIKeyLifecycleRow, error)
 }
 
 var _ Store = (*sqlc.Queries)(nil)
@@ -469,8 +466,8 @@ func (s *Service) Revoke(ctx context.Context, userID, keyID int64) (Key, *consol
 	), nil
 }
 
-// Delete 物理删除密钥。已产生调用历史的密钥删不掉——外键挡着，
-// 那些请求记录是计费与审计的依据，不能因为删一把密钥就断链。
+// Delete 软删除密钥，只对已吊销的密钥开放：吊销负责让密钥失效，删除只负责
+// 把它从列表与详情中移走。请求记录与账单等历史展示按 api_key_id 关联，不受影响。
 func (s *Service) Delete(ctx context.Context, userID, keyID int64) *consoleservice.Error {
 	if keyID <= 0 {
 		return consoleservice.InvalidArgument("id", "The api key id must be positive.")
@@ -480,20 +477,33 @@ func (s *Service) Delete(ctx context.Context, userID, keyID int64) *consoleservi
 		UserID: userID,
 	})
 	if err != nil {
-		if isForeignKeyViolation(err) {
-			return &consoleservice.Error{
-				Code:    "api_key_in_use",
-				Message: "This api key has request history. Revoke it instead of deleting.",
-				Status:  409,
-				Cause:   err,
-			}
-		}
 		return consoleservice.RequestUnavailable("delete api key", err)
 	}
-	if affected == 0 {
-		return notFound()
+	if affected > 0 {
+		return nil
 	}
-	return nil
+
+	// 未命中时补一次轻量读，把「未吊销不可删」从 not_found 里区分出来——
+	// 前者用户可以自己处理（先吊销），后者没有任何后续动作。
+	row, lookErr := s.store.GetConsoleAPIKeyLifecycle(ctx, sqlc.GetConsoleAPIKeyLifecycleParams{
+		ID:     keyID,
+		UserID: userID,
+	})
+	if lookErr != nil {
+		if errors.Is(lookErr, pgx.ErrNoRows) {
+			return notFound()
+		}
+		return consoleservice.RequestUnavailable("inspect api key", lookErr)
+	}
+	if !row.DeletedAt.Valid && !row.RevokedAt.Valid {
+		return &consoleservice.Error{
+			Code:    "api_key_not_revoked",
+			Message: "Only revoked api keys can be deleted. Revoke it first.",
+			Status:  409,
+		}
+	}
+	// 已删除或并发竞争下刚被删掉，都按不存在处理。
+	return notFound()
 }
 
 // dailyCharges 查窗口内的按天消耗，按 api_key_id 分组返回。
@@ -692,12 +702,4 @@ func derefString(v *string) string {
 		return ""
 	}
 	return *v
-}
-
-func isForeignKeyViolation(err error) bool {
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) {
-		return pgErr.Code == pgForeignKeyViolation
-	}
-	return false
 }

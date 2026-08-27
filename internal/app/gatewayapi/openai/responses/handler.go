@@ -217,6 +217,15 @@ func mapResponsesServiceError(req ResponsesRequest, err error, fallbackCode stri
 			errorType: "invalid_request_error",
 			param:     modelParam,
 		}
+	case errors.Is(err, routing.ErrModelProtocolUnsupported):
+		// 模型存在但没有 OpenAI 协议面：客户端用错了 API，404 让其停止重试并检查协议。
+		return responsesServiceErrorResponse{
+			status:    http.StatusNotFound,
+			code:      "model_not_found",
+			message:   fmt.Sprintf("The model %q is not accessible via the OpenAI-compatible API. Check the model's supported API protocol.", req.Model),
+			errorType: "invalid_request_error",
+			param:     modelParam,
+		}
 	case errors.Is(err, routing.ErrNoAvailableChannel):
 		return responsesServiceErrorResponse{
 			status:    http.StatusServiceUnavailable,

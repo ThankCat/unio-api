@@ -43,9 +43,12 @@ func NewService(db TxBeginner, queries *sqlc.Queries) *Service {
 
 // Entry 是目录条目浏览视图。
 type Entry struct {
-	CanonicalID              string
-	Lab                      string
-	DisplayName              string
+	CanonicalID string
+	Lab         string
+	DisplayName string
+	// Description / KnowledgeCutoff 是上游展示元数据（可能为空串），采纳时快照进 models。
+	Description              string
+	KnowledgeCutoff          string
 	ContextWindowTokens      *int64
 	MaxOutputTokens          *int64
 	InputPriceUSDPerMTokens  *string
@@ -165,6 +168,8 @@ func (s *Service) List(ctx context.Context, params ListParams) (ListResult, erro
 			CanonicalID:              row.CanonicalID,
 			Lab:                      row.Lab,
 			DisplayName:              row.DisplayName,
+			Description:              row.Description,
+			KnowledgeCutoff:          row.KnowledgeCutoff,
 			ContextWindowTokens:      int64Ptr(row.ContextWindowTokens),
 			MaxOutputTokens:          int64Ptr(row.MaxOutputTokens),
 			InputPriceUSDPerMTokens:  numericString(row.InputPriceUsdPerMillionTokens),
@@ -205,6 +210,8 @@ func (s *Service) Get(ctx context.Context, canonicalID string) (EntryDetail, err
 			CanonicalID:              row.CanonicalID,
 			Lab:                      row.Lab,
 			DisplayName:              row.DisplayName,
+			Description:              row.Description,
+			KnowledgeCutoff:          row.KnowledgeCutoff,
 			ContextWindowTokens:      int64Ptr(row.ContextWindowTokens),
 			MaxOutputTokens:          int64Ptr(row.MaxOutputTokens),
 			InputPriceUSDPerMTokens:  numericString(row.InputPriceUsdPerMillionTokens),
@@ -380,8 +387,11 @@ func (s *Service) adoptWithQueries(ctx context.Context, q *sqlc.Queries, in prep
 		ModelID:     in.modelID,
 		DisplayName: in.displayName,
 		OwnedBy:     in.ownedBy,
-		// family 直接沿用目录条目：它是上游的归类结论，采纳时没有理由让管理员重填。
+		// family/description/knowledge_cutoff 直接沿用目录条目：都是上游的结论，
+		// 采纳时没有理由让管理员重填；采纳后可通过 PATCH /models/{id} 编辑。
 		Family:                         in.entry.Family,
+		Description:                    in.entry.Description,
+		KnowledgeCutoff:                in.entry.KnowledgeCutoff,
 		Status:                         in.status,
 		MaxOutputTokens:                int8Param(in.input.MaxOutputTokens),
 		ContextWindowTokens:            int8Param(in.input.ContextWindowTokens),
@@ -455,6 +465,8 @@ func (s *Service) Refresh(ctx context.Context, modelID int64) error {
 		DisplayName:                    entry.DisplayName,
 		OwnedBy:                        entry.Lab,
 		Family:                         entry.Family,
+		Description:                    entry.Description,
+		KnowledgeCutoff:                entry.KnowledgeCutoff,
 		MaxOutputTokens:                entry.MaxOutputTokens,
 		ContextWindowTokens:            entry.ContextWindowTokens,
 		InputPriceUsdPerMillionTokens:  entry.InputPriceUsdPerMillionTokens,
@@ -471,11 +483,17 @@ func (s *Service) Refresh(ctx context.Context, modelID int64) error {
 		return storeFailed(err, "clear model capabilities")
 	}
 	for _, h := range hints {
+		// 运营能力表约定 limits 只在 limited 级别存在；目录提示的 full 级别可能携带
+		// 上游档位枚举（如 reasoning effort），写入运营表前剥离，保持约定成立。
+		limits := limitsBytes(h.Limits)
+		if capability.SupportLevel(h.SupportLevel) != capability.SupportLevelLimited {
+			limits = nil
+		}
 		if _, err := q.UpsertModelCapability(ctx, sqlc.UpsertModelCapabilityParams{
 			ModelID:       modelID,
 			CapabilityKey: h.Key,
 			SupportLevel:  h.SupportLevel,
-			Limits:        limitsBytes(h.Limits),
+			Limits:        limits,
 		}); err != nil {
 			return storeFailed(err, "rewrite model capability")
 		}

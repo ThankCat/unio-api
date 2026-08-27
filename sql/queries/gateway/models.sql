@@ -1,11 +1,39 @@
--- name: ModelExistsByID :one
--- ModelExistsByID 判断指定对外模型 ID 是否存在且启用。
-SELECT EXISTS (
-    SELECT 1
-    FROM models m
-    WHERE m.model_id = sqlc.arg(requested_model_id)
-    AND m.status = 'enabled'
-) AS exists;
+-- name: ModelIngressQualification :one
+-- ModelIngressQualification 在 request_records 创建之前一次判定模型产品资格：
+--   model_exists       模型是否存在且启用；
+--   protocol_supported 请求的入口协议族是否属于该模型的产品面。
+-- protocol_supported 只看配置存在性（绑定行 + 未归档渠道，不看绑定/渠道启停、
+-- 凭据、价格等运行时供给），并且只有「模型配置过供给、但请求协议不在其协议
+-- 集合内」才判 false——那是客户端用错协议，在资格阶段拒绝、不落请求记录。
+-- 两类情况必须保持 503 口径、不得在此拒绝（ADR-0020：暂停供给不能把服务失败
+-- 移出失败率统计）：
+--   1. 协议面配置过但临时打不通（绑定/渠道停用、凭据无效、缺价格等）；
+--   2. 模型被解绑到没有任何供给配置、管理员显式选择保留 enabled。
+-- 这两类由 FindModelCandidates 按 no_available_channel 收口并落请求记录。
+SELECT
+    EXISTS (
+        SELECT 1
+        FROM models m
+        WHERE m.model_id = sqlc.arg(requested_model_id)
+        AND m.status = 'enabled'
+    ) AS model_exists,
+    (
+        EXISTS (
+            SELECT 1
+            FROM models m
+            JOIN channel_models cm ON cm.model_id = m.id
+            JOIN channels c ON c.id = cm.channel_id AND c.status <> 'archived'
+            WHERE m.model_id = sqlc.arg(requested_model_id)
+            AND sqlc.arg(ingress_protocol)::text = ANY(c.protocols)
+        )
+        OR NOT EXISTS (
+            SELECT 1
+            FROM models m
+            JOIN channel_models cm ON cm.model_id = m.id
+            JOIN channels c ON c.id = cm.channel_id AND c.status <> 'archived'
+            WHERE m.model_id = sqlc.arg(requested_model_id)
+        )
+    )::boolean AS protocol_supported;
 
 -- name: ListAvailableModels :many
 -- ListAvailableModels 列出所有启用模型，并附带该模型已声明的 cap-tags

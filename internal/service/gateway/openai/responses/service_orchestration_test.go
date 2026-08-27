@@ -426,7 +426,7 @@ func okChatResponse() *chatcompletionsadapter.ChatResponse {
 func ctxWithPrincipal() context.Context {
 	ctx := httpx.ContextWithRequestID(context.Background(), "responses-test-request-id")
 	return auth.ContextWithAPIKeyPrincipal(ctx, &auth.APIKeyPrincipal{
-		APIKeyID: 1, UserID: 7, KeyPrefix: "sk_unio_test",
+		APIKeyID: 1, UserID: 7, KeyPrefix: "sk-unio-test",
 	})
 }
 

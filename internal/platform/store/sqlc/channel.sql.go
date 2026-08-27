@@ -1377,7 +1377,13 @@ func (q *Queries) CreateChannelRechargeFactor(ctx context.Context, arg CreateCha
 }
 
 const deleteChannelCascade = `-- name: DeleteChannelCascade :execrows
-WITH deleted_channel_prices AS (
+WITH deleted_channel_price_service_tiers AS (
+    DELETE FROM channel_price_service_tiers
+    WHERE channel_price_service_tiers.channel_price_id IN (
+        SELECT channel_prices.id FROM channel_prices WHERE channel_prices.channel_id = $1
+    )
+),
+deleted_channel_prices AS (
     DELETE FROM channel_prices WHERE channel_prices.channel_id = $1
 ),
 deleted_channel_models AS (
@@ -1388,14 +1394,22 @@ deleted_channel_cost_multipliers AS (
 ),
 deleted_channel_recharge_factors AS (
     DELETE FROM channel_recharge_factors WHERE channel_recharge_factors.channel_id = $1
+),
+deleted_provider_probe_records AS (
+    DELETE FROM provider_probe_records WHERE provider_probe_records.channel_id = $1
 )
 DELETE FROM channels WHERE channels.id = $1
 `
 
 // DeleteChannelCascade 物理删除 channel，用于清理录错且从未使用的脏数据，并在同一条语句内
 // 级联清理 channel 自身的全部配置子表：channel_models（模型绑定）、channel_prices（渠道-模型价，
-// 绝对成本覆盖）、channel_cost_multipliers（价格倍率，DEC-027）、channel_recharge_factors（充值倍率，DEC-027）。
-// 这四张都是「渠道自身配置」（无请求/账务事实），随渠道硬删一并清理；channel_test_logs 走 ON DELETE CASCADE 自动清。
+// 绝对成本覆盖）及其 Fast 档子行（channel_price_service_tiers）、channel_cost_multipliers（价格倍率，DEC-027）、
+// channel_recharge_factors（充值倍率，DEC-027）。
+// 这些都是「渠道自身配置」（无请求/账务事实），随渠道硬删一并清理；channel_test_logs 与
+// channel_model_discovery/verification 的 runs/items 走 ON DELETE CASCADE 自动清。
+// provider_probe_records（探测事实）的 channel_id 非空，随渠道一并删除；若某条探测已产生
+// provider 账务（provider_ledger_entries 引用 probe_record_id/channel_id），语句报 23503 回滚，
+// 探测花过钱即属账务历史，本就该挡。
 // 外键均为默认 NO ACTION（约束在语句末校验），故 CTE 删子表 + 删主体在单条语句内原子完成：
 // 子配置先删除，语句末 channels 的删除不会留下悬挂引用。若 channel 仍被请求/账务历史
 // （request_attempts/request_records/cost_snapshots/settlement_recovery_jobs）引用，

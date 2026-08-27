@@ -42,7 +42,7 @@ func validAPIKey() sqlc.GetAPIKeyByHashRow {
 	return sqlc.GetAPIKeyByHashRow{
 		ID:        1,
 		UserID:    10,
-		KeyPrefix: "sk_unio_test",
+		KeyPrefix: "sk-unio-test",
 	}
 }
 
@@ -166,7 +166,7 @@ func TestAuthenticateAPIKeyAcceptsIssuedPrefixes(t *testing.T) {
 		name      string
 		plaintext string
 	}{
-		{name: "current", plaintext: "sk_unio_a3f9k2m1x7bq4vzn8dht"},
+		{name: "current", plaintext: "sk-unio-a3f9k2m1x7bq4vzn8dht"},
 		{name: "legacy-unio-sk", plaintext: "unio_sk_existing"},
 		{name: "anthropic-compatible", plaintext: "sk-ant-api03-unio_existing"},
 	} {

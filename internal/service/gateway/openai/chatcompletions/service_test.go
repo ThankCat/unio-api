@@ -571,7 +571,7 @@ func contextWithPrincipal(userID int64) context.Context {
 	return auth.ContextWithAPIKeyPrincipal(ctx, &auth.APIKeyPrincipal{
 		APIKeyID:  1,
 		UserID:    userID,
-		KeyPrefix: "sk_unio_test",
+		KeyPrefix: "sk-unio-test",
 	})
 }
 

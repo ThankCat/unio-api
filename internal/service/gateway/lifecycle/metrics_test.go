@@ -102,6 +102,7 @@ func TestRecordRequestRejectedUsesBoundedReasons(t *testing.T) {
 	}{
 		{name: "model not found", err: failure.New(failure.CodeRoutingModelNotFound), want: "openai/model_not_found"},
 		{name: "model not available", err: failure.New(failure.CodeRoutingModelNotAvailable), want: "openai/model_not_available"},
+		{name: "model protocol unsupported", err: failure.New(failure.CodeRoutingModelProtocolUnsupported), want: "openai/model_protocol_unsupported"},
 		{name: "protocol invalid", err: failure.New(failure.CodeRoutingProtocolInvalid), want: "openai/protocol_invalid"},
 		{name: "store failure", err: failure.New(failure.CodeRoutingStoreFailed), want: "openai/qualification_error"},
 		{name: "unknown", err: errors.New("plain error"), want: "openai/qualification_error"},

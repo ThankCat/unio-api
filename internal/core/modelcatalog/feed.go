@@ -23,14 +23,20 @@ import (
 type modelsJSONEntry struct {
 	ID               string         `json:"id"`
 	Name             string         `json:"name"`
+	Description      string         `json:"description"`
 	Family           string         `json:"family"`
 	Attachment       bool           `json:"attachment"`
 	Reasoning        bool           `json:"reasoning"`
 	ToolCall         bool           `json:"tool_call"`
 	StructuredOutput bool           `json:"structured_output"`
-	ReleaseDate      string         `json:"release_date"`
-	Modalities       modalitiesJSON `json:"modalities"`
-	Limit            limitJSON      `json:"limit"`
+	// Knowledge 是知识截止；上游格式不齐（2024-09-30 / 2024-08），原样透传不解析。
+	Knowledge   string `json:"knowledge"`
+	ReleaseDate string `json:"release_date"`
+	LastUpdated string `json:"last_updated"`
+	// OpenWeights 用指针区分「上游标注为 false」与「上游未标注」。
+	OpenWeights *bool          `json:"open_weights"`
+	Modalities  modalitiesJSON `json:"modalities"`
+	Limit       limitJSON      `json:"limit"`
 }
 
 type modalitiesJSON struct {
@@ -40,6 +46,7 @@ type modalitiesJSON struct {
 
 type limitJSON struct {
 	Context *int64 `json:"context"`
+	Input   *int64 `json:"input"`
 	Output  *int64 `json:"output"`
 }
 
@@ -49,15 +56,25 @@ type apiProviderJSON struct {
 	Models map[string]apiModelJSON `json:"models"`
 }
 
-// apiModelJSON 是 api.json 内 provider 模型条目，仅取价格基线。
+// apiModelJSON 是 api.json 内 provider 模型条目：价格基线 + 推理档位枚举。
 type apiModelJSON struct {
-	Cost costJSON `json:"cost"`
+	Cost             costJSON              `json:"cost"`
+	ReasoningOptions []reasoningOptionJSON `json:"reasoning_options"`
+}
+
+// reasoningOptionJSON 是推理配置项；只消费 type=effort 的档位枚举，
+// toggle / budget_tokens 等其他类型与我们的 reasoning.effort 能力语义对不上。
+type reasoningOptionJSON struct {
+	Type   string   `json:"type"`
+	Values []string `json:"values"`
 }
 
 // costJSON 用 json.Number 承载价格字面量，避免 float 精度损失（价格仅展示，绝不用于计费）。
 type costJSON struct {
-	Input  json.Number `json:"input"`
-	Output json.Number `json:"output"`
+	Input      json.Number `json:"input"`
+	Output     json.Number `json:"output"`
+	CacheRead  json.Number `json:"cache_read"`
+	CacheWrite json.Number `json:"cache_write"`
 }
 
 // CanonicalModel 是 models.dev 一条 canonical 模型合并后的 Layer 1 种子。
@@ -65,14 +82,29 @@ type CanonicalModel struct {
 	CanonicalID string
 	Lab         string
 	// Family 是上游给出的模型系列（如 gpt-4、claude-3），仅用于列表分组展示。
-	Family          string
-	DisplayName     string
+	Family      string
+	DisplayName string
+	// Description 是上游一句话简介，仅展示。
+	Description string
+	// KnowledgeCutoff 是知识截止字符串（格式不齐，原样保存），空串表示上游未给。
+	KnowledgeCutoff string
 	ReleaseDate     *time.Time
+	LastUpdated     *time.Time
 	ContextTokens   *int64
-	MaxOutputTokens *int64
-	// InputPrice / OutputPrice 是十进制字符串（USD / 百万 token），nil 表示该模型无价格基线。
-	InputPrice  *string
-	OutputPrice *string
+	// InputLimitTokens 是单请求输入上限（上游 limit.input），长上下文阶梯阈值的参考来源。
+	InputLimitTokens *int64
+	MaxOutputTokens  *int64
+	// OpenWeights 是否开源权重；nil 表示上游未标注。
+	OpenWeights *bool
+	// ModalitiesInput / ModalitiesOutput 是上游原始模态列表，能力声明之外保留原文供展示。
+	ModalitiesInput  []string
+	ModalitiesOutput []string
+	// InputPrice / OutputPrice / CacheReadPrice / CacheWritePrice 是十进制字符串
+	//（USD / 百万 token），nil 表示该模型无此价格基线。
+	InputPrice      *string
+	OutputPrice     *string
+	CacheReadPrice  *string
+	CacheWritePrice *string
 	// CoarseCapabilities 是 models.dev 粗能力位映射，落到目录能力提示供采纳预填。
 	CoarseCapabilities []capability.Declaration
 	// Fingerprint 是本条目内容指纹（元数据 + 排序能力提示规范化 hash），用于采纳追更对比。
@@ -86,7 +118,7 @@ type Feed struct {
 	Fingerprint string
 }
 
-// ParseFeed 解析 models.json（必需）与 api.json（价格，可空），合并为 canonical 模型种子。
+// ParseFeed 解析 models.json（必需）与 api.json（价格与推理档位，可空），合并为 canonical 模型种子。
 //
 // api.json 缺失或解析失败时仍返回元数据（价格留空），由调用方按 best-effort 处理。
 func ParseFeed(modelsJSON, apiJSON []byte) (Feed, error) {
@@ -95,26 +127,36 @@ func ParseFeed(modelsJSON, apiJSON []byte) (Feed, error) {
 		return Feed{}, failure.Wrap(failure.CodeModelCatalogStoreFailed, err, failure.WithMessage("parse models.dev models.json"))
 	}
 
-	prices := parseAPIPrices(apiJSON)
+	apiModels := parseAPIModels(apiJSON)
 
 	models := make([]CanonicalModel, 0, len(entries))
 	for canonicalID, entry := range entries {
 		lab, modelKey := splitCanonicalID(canonicalID)
 
 		model := CanonicalModel{
-			CanonicalID:        canonicalID,
-			Lab:                lab,
-			Family:             entry.Family,
-			DisplayName:        firstNonEmpty(entry.Name, canonicalID),
-			ReleaseDate:        parseDate(entry.ReleaseDate),
-			ContextTokens:      positiveOrNil(entry.Limit.Context),
-			MaxOutputTokens:    positiveOrNil(entry.Limit.Output),
-			CoarseCapabilities: coarseCapabilities(entry),
+			CanonicalID:      canonicalID,
+			Lab:              lab,
+			Family:           entry.Family,
+			DisplayName:      firstNonEmpty(entry.Name, canonicalID),
+			Description:      strings.TrimSpace(entry.Description),
+			KnowledgeCutoff:  strings.TrimSpace(entry.Knowledge),
+			ReleaseDate:      parseDate(entry.ReleaseDate),
+			LastUpdated:      parseDate(entry.LastUpdated),
+			ContextTokens:    positiveOrNil(entry.Limit.Context),
+			InputLimitTokens: positiveOrNil(entry.Limit.Input),
+			MaxOutputTokens:  positiveOrNil(entry.Limit.Output),
+			OpenWeights:      entry.OpenWeights,
+			ModalitiesInput:  normalizeModalities(entry.Modalities.Input),
+			ModalitiesOutput: normalizeModalities(entry.Modalities.Output),
 		}
-		if price, ok := prices[lab][modelKey]; ok {
-			model.InputPrice = decimalOrNil(price.Input)
-			model.OutputPrice = decimalOrNil(price.Output)
+		apiModel, hasAPIModel := apiModels[lab][modelKey]
+		if hasAPIModel {
+			model.InputPrice = decimalOrNil(apiModel.Cost.Input)
+			model.OutputPrice = decimalOrNil(apiModel.Cost.Output)
+			model.CacheReadPrice = decimalOrNil(apiModel.Cost.CacheRead)
+			model.CacheWritePrice = decimalOrNil(apiModel.Cost.CacheWrite)
 		}
+		model.CoarseCapabilities = coarseCapabilities(entry, effortValues(apiModel.ReasoningOptions))
 		model.Fingerprint = entryFingerprint(model)
 		models = append(models, model)
 	}
@@ -124,9 +166,10 @@ func ParseFeed(modelsJSON, apiJSON []byte) (Feed, error) {
 	return Feed{Models: models, Fingerprint: fingerprint(modelsJSON)}, nil
 }
 
-// parseAPIPrices 解析 api.json 为 lab → modelKey → cost；解析失败返回空表（价格 best-effort）。
-func parseAPIPrices(apiJSON []byte) map[string]map[string]costJSON {
-	out := map[string]map[string]costJSON{}
+// parseAPIModels 解析 api.json 为 lab → modelKey → 条目；解析失败返回空表（best-effort）。
+// 只取 lab 同名 provider 的条目：官方 provider 的价格与档位最接近牌价语义。
+func parseAPIModels(apiJSON []byte) map[string]map[string]apiModelJSON {
+	out := map[string]map[string]apiModelJSON{}
 	if len(apiJSON) == 0 {
 		return out
 	}
@@ -144,18 +187,51 @@ func parseAPIPrices(apiJSON []byte) map[string]map[string]costJSON {
 		if len(provider.Models) == 0 {
 			continue
 		}
-		costs := make(map[string]costJSON, len(provider.Models))
+		models := make(map[string]apiModelJSON, len(provider.Models))
 		for modelKey, model := range provider.Models {
-			costs[modelKey] = model.Cost
+			models[modelKey] = model
 		}
-		out[key] = costs
+		out[key] = models
 	}
 
 	return out
 }
 
+// effortValues 取 type=effort 的推理档位枚举；其他类型（toggle/budget_tokens）语义对不上，忽略。
+func effortValues(options []reasoningOptionJSON) []string {
+	for _, option := range options {
+		if option.Type != "effort" || len(option.Values) == 0 {
+			continue
+		}
+		values := make([]string, 0, len(option.Values))
+		for _, v := range option.Values {
+			if trimmed := strings.TrimSpace(v); trimmed != "" {
+				values = append(values, trimmed)
+			}
+		}
+		if len(values) > 0 {
+			return values
+		}
+	}
+	return nil
+}
+
+// normalizeModalities 去空白去空项，保持上游顺序。
+func normalizeModalities(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, v := range values {
+		if trimmed := strings.TrimSpace(v); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
 // coarseCapabilities 把 models.dev 模型布尔位/模态映射为粗能力声明（全 full，仅首次入库默认值）。
-func coarseCapabilities(entry modelsJSONEntry) []capability.Declaration {
+//
+// effortValues 非空时挂到 reasoning.effort 提示的 limits（{"effort":[...]}）：目录提示表
+// 不受「limited 才允许 limits」的运营约束，这里只是把上游档位枚举留给采纳预填参考。
+func coarseCapabilities(entry modelsJSONEntry, effortValues []string) []capability.Declaration {
 	decls := []capability.Declaration{
 		{Key: "text.input", SupportLevel: capability.SupportLevelFull},
 		{Key: "text.output", SupportLevel: capability.SupportLevelFull},
@@ -164,7 +240,13 @@ func coarseCapabilities(entry modelsJSONEntry) []capability.Declaration {
 		decls = append(decls, capability.Declaration{Key: "tools.function", SupportLevel: capability.SupportLevelFull})
 	}
 	if entry.Reasoning {
-		decls = append(decls, capability.Declaration{Key: "reasoning.effort", SupportLevel: capability.SupportLevelFull})
+		decl := capability.Declaration{Key: "reasoning.effort", SupportLevel: capability.SupportLevelFull}
+		if len(effortValues) > 0 {
+			if limits, err := json.Marshal(map[string][]string{"effort": effortValues}); err == nil {
+				decl.Limits = limits
+			}
+		}
+		decls = append(decls, decl)
 	}
 	if entry.StructuredOutput {
 		decls = append(decls, capability.Declaration{Key: "response_format.json_schema", SupportLevel: capability.SupportLevelFull})
@@ -275,22 +357,42 @@ func entryFingerprint(m CanonicalModel) string {
 	b.WriteByte('\n')
 	b.WriteString(m.DisplayName)
 	b.WriteByte('\n')
+	b.WriteString(m.Description)
+	b.WriteByte('\n')
+	b.WriteString(m.KnowledgeCutoff)
+	b.WriteByte('\n')
 	b.WriteString(fingerprintInt(m.ContextTokens))
 	b.WriteByte('\n')
+	b.WriteString(fingerprintInt(m.InputLimitTokens))
+	b.WriteByte('\n')
 	b.WriteString(fingerprintInt(m.MaxOutputTokens))
+	b.WriteByte('\n')
+	b.WriteString(fingerprintBool(m.OpenWeights))
+	b.WriteByte('\n')
+	b.WriteString(strings.Join(m.ModalitiesInput, ","))
+	b.WriteByte('\n')
+	b.WriteString(strings.Join(m.ModalitiesOutput, ","))
 	b.WriteByte('\n')
 	b.WriteString(fingerprintStr(m.InputPrice))
 	b.WriteByte('\n')
 	b.WriteString(fingerprintStr(m.OutputPrice))
 	b.WriteByte('\n')
+	b.WriteString(fingerprintStr(m.CacheReadPrice))
+	b.WriteByte('\n')
+	b.WriteString(fingerprintStr(m.CacheWritePrice))
+	b.WriteByte('\n')
 	if m.ReleaseDate != nil {
 		b.WriteString(m.ReleaseDate.Format("2006-01-02"))
+	}
+	b.WriteByte('\n')
+	if m.LastUpdated != nil {
+		b.WriteString(m.LastUpdated.Format("2006-01-02"))
 	}
 	b.WriteByte('\n')
 
 	caps := make([]string, 0, len(m.CoarseCapabilities))
 	for _, d := range m.CoarseCapabilities {
-		caps = append(caps, string(d.Key)+"="+string(d.SupportLevel))
+		caps = append(caps, string(d.Key)+"="+string(d.SupportLevel)+"@"+string(d.Limits))
 	}
 	sort.Strings(caps)
 	for _, c := range caps {
@@ -300,6 +402,13 @@ func entryFingerprint(m CanonicalModel) string {
 
 	sum := sha256.Sum256([]byte(b.String()))
 	return hex.EncodeToString(sum[:])
+}
+
+func fingerprintBool(value *bool) string {
+	if value == nil {
+		return ""
+	}
+	return strconv.FormatBool(*value)
 }
 
 func fingerprintInt(value *int64) string {

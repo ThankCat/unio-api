@@ -12,14 +12,18 @@ const sampleModelsJSON = `{
   "deepseek/deepseek-v4-pro": {
     "id": "deepseek/deepseek-v4-pro",
     "name": "DeepSeek V4 Pro",
+    "description": "Frontier reasoning model for agentic coding",
     "family": "deepseek-thinking",
     "attachment": false,
     "reasoning": true,
     "tool_call": true,
     "structured_output": true,
+    "knowledge": "2025-10",
     "release_date": "2026-01-15",
+    "last_updated": "2026-02-01",
+    "open_weights": true,
     "modalities": { "input": ["text", "image"], "output": ["text"] },
-    "limit": { "context": 131072, "output": 8192 }
+    "limit": { "context": 131072, "input": 98304, "output": 8192 }
   },
   "acme/acme-mini": {
     "id": "acme/acme-mini",
@@ -38,7 +42,13 @@ const sampleAPIJSON = `{
   "deepseek": {
     "id": "deepseek",
     "models": {
-      "deepseek-v4-pro": { "cost": { "input": 0.435, "output": 0.87 } }
+      "deepseek-v4-pro": {
+        "cost": { "input": 0.435, "output": 0.87, "cache_read": 0.05, "cache_write": 0.6 },
+        "reasoning_options": [
+          { "type": "toggle" },
+          { "type": "effort", "values": ["low", "medium", "high"] }
+        ]
+      }
     }
   }
 }`
@@ -92,6 +102,46 @@ func TestParseFeedMergesMetadataAndPrice(t *testing.T) {
 		t.Fatalf("deepseek coarse caps = %v, want %v", got, wantCaps)
 	}
 
+	// 展示元数据与扩展参考价：models.json 原样透传 + api.json 缓存价。
+	if deepseek.Description != "Frontier reasoning model for agentic coding" {
+		t.Fatalf("description = %q", deepseek.Description)
+	}
+	if deepseek.KnowledgeCutoff != "2025-10" {
+		t.Fatalf("knowledge cutoff = %q, want 2025-10 (kept verbatim)", deepseek.KnowledgeCutoff)
+	}
+	if deepseek.LastUpdated == nil || deepseek.LastUpdated.Format("2006-01-02") != "2026-02-01" {
+		t.Fatalf("last updated = %v", deepseek.LastUpdated)
+	}
+	if deepseek.OpenWeights == nil || !*deepseek.OpenWeights {
+		t.Fatalf("open weights = %v, want true", deepseek.OpenWeights)
+	}
+	if deepseek.InputLimitTokens == nil || *deepseek.InputLimitTokens != 98304 {
+		t.Fatalf("input limit = %v, want 98304", deepseek.InputLimitTokens)
+	}
+	if !reflect.DeepEqual(deepseek.ModalitiesInput, []string{"text", "image"}) {
+		t.Fatalf("modalities input = %v", deepseek.ModalitiesInput)
+	}
+	if !reflect.DeepEqual(deepseek.ModalitiesOutput, []string{"text"}) {
+		t.Fatalf("modalities output = %v", deepseek.ModalitiesOutput)
+	}
+	if deepseek.CacheReadPrice == nil || *deepseek.CacheReadPrice != "0.05" {
+		t.Fatalf("cache read price = %v, want 0.05", deepseek.CacheReadPrice)
+	}
+	if deepseek.CacheWritePrice == nil || *deepseek.CacheWritePrice != "0.6" {
+		t.Fatalf("cache write price = %v, want 0.6", deepseek.CacheWritePrice)
+	}
+
+	// reasoning_options 只认 type=effort，档位枚举挂进 reasoning.effort 提示的 limits。
+	var effortLimits string
+	for _, d := range deepseek.CoarseCapabilities {
+		if d.Key == capability.Key("reasoning.effort") {
+			effortLimits = string(d.Limits)
+		}
+	}
+	if effortLimits != `{"effort":["low","medium","high"]}` {
+		t.Fatalf("reasoning.effort limits = %s", effortLimits)
+	}
+
 	acme := feed.Models[0]
 	if acme.ContextTokens != nil {
 		t.Fatalf("acme context should be nil for 0 value, got %v", *acme.ContextTokens)
@@ -104,6 +154,19 @@ func TestParseFeedMergesMetadataAndPrice(t *testing.T) {
 	}
 	if acme.InputPrice != nil || acme.OutputPrice != nil {
 		t.Fatalf("acme has no provider price, want nil prices")
+	}
+	// 上游未标注的展示字段保持零值：空串 / nil，不脑补默认。
+	if acme.Description != "" || acme.KnowledgeCutoff != "" {
+		t.Fatalf("acme description/knowledge should be empty, got %q / %q", acme.Description, acme.KnowledgeCutoff)
+	}
+	if acme.OpenWeights != nil {
+		t.Fatalf("acme open weights should be nil when upstream omits it")
+	}
+	if acme.LastUpdated != nil || acme.InputLimitTokens != nil {
+		t.Fatalf("acme last_updated/input_limit should be nil")
+	}
+	if acme.CacheReadPrice != nil || acme.CacheWritePrice != nil {
+		t.Fatalf("acme cache prices should be nil without api.json entry")
 	}
 	wantAcmeCaps := sortedKeyStrings([]capability.Key{capability.Key("text.input"), capability.Key("text.output")})
 	if got := declKeySet(acme.CoarseCapabilities); !reflect.DeepEqual(got, wantAcmeCaps) {

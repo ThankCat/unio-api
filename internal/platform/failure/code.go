@@ -250,6 +250,11 @@ const (
 	// CodeRoutingModelNotAvailable 表示 project 无权使用请求模型。
 	CodeRoutingModelNotAvailable Code = "routing_model_not_available"
 
+	// CodeRoutingModelProtocolUnsupported 表示模型配置过供给，但请求的入口协议族
+	// 不在其（未归档）供给协议集合内，属于客户端用错协议（如用 OpenAI 协议调只有
+	// Anthropic 渠道的模型）；在 request_records 创建之前拒绝，只留 Warn 日志与拒绝指标。
+	CodeRoutingModelProtocolUnsupported Code = "routing_model_protocol_unsupported"
+
 	// CodeRoutingNoAvailableChannel 表示模型存在但没有可用 channel。
 	CodeRoutingNoAvailableChannel Code = "routing_no_available_channel"
 

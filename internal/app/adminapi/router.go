@@ -85,6 +85,9 @@ type RouterDeps struct {
 	// 模型目录：models.dev 目录浏览 + 从目录采纳/刷新/更新提醒
 	CatalogService model.CatalogService
 
+	// LabLogos 提供模型出品方图标（models.dev 公开资产，挂鉴权之外）；nil 时不挂图标路由。
+	LabLogos LabLogoStore
+
 	// M9 工作台看板：首屏概览雷达 + 时间序列（只读聚合）
 	DashboardService overview.DashboardService
 	// 实时流量：Redis 运行态秒级快照，与上面的历史聚合不是同一时间尺度
@@ -137,7 +140,8 @@ func NewRouter(deps RouterDeps) http.Handler {
 	})
 
 	r.Route("/v1", func(r chi.Router) {
-		// login 是 admin 表面唯一不需要 token 的端点：没有它就无法取得 token。
+		// login 与出品方图标不需要 token：前者没有它就无法取得 token；
+		// 后者是 models.dev 公开资产且 <img> 无法携带 Bearer。
 		// 单独分组挂载，确保 AdminAuth 只作用于其余全部端点。
 		r.Group(func(r chi.Router) {
 			r.Post("/login", handleLogin(
@@ -146,6 +150,9 @@ func NewRouter(deps RouterDeps) http.Handler {
 				deps.Sessions,
 				deps.SessionTTLSeconds,
 			))
+			if deps.LabLogos != nil {
+				r.Get("/labs/{slug}/logo.svg", handleLabLogo(deps.LabLogos))
+			}
 		})
 
 		r.Group(func(r chi.Router) {

@@ -99,6 +99,7 @@ func (s *Service) Register(
 	challengeID string,
 	code string,
 	ip string,
+	userAgent string,
 ) (User, TokenPair, *consoleservice.Error) {
 	email, err := NormalizeEmail(rawEmail)
 	if err != nil {
@@ -146,12 +147,12 @@ func (s *Service) Register(
 	if commitChallengeErr := s.verification.Commit(ctx, email, PurposeRegister, reservation); commitChallengeErr != nil {
 		s.logger.Warn("registration committed but challenge finalization failed", zap.Error(commitChallengeErr), zap.String("user_uid", user.UID))
 	}
-	pair, sessionErr := s.sessions.Create(ctx, user.UID)
+	pair, sessionErr := s.sessions.Create(ctx, user.UID, SessionMeta{IP: ip, UserAgent: userAgent})
 	return user, pair, sessionErr
 }
 
 // PasswordLogin 使用邮箱和密码认证用户。
-func (s *Service) PasswordLogin(ctx context.Context, rawEmail, password, ip string) (User, TokenPair, *consoleservice.Error) {
+func (s *Service) PasswordLogin(ctx context.Context, rawEmail, password, ip, userAgent string) (User, TokenPair, *consoleservice.Error) {
 	email, err := NormalizeEmail(rawEmail)
 	if err != nil {
 		return User{}, TokenPair{}, invalidCredentials()
@@ -177,7 +178,7 @@ func (s *Service) PasswordLogin(ctx context.Context, rawEmail, password, ip stri
 	if walletErr != nil {
 		return User{}, TokenPair{}, walletErr
 	}
-	pair, sessionErr := s.sessions.Create(ctx, user.UID)
+	pair, sessionErr := s.sessions.Create(ctx, user.UID, SessionMeta{IP: ip, UserAgent: userAgent})
 	return user, pair, sessionErr
 }
 
@@ -222,7 +223,7 @@ func (s *Service) lookupActiveUser(ctx context.Context, accessToken string) (sql
 // EmailCodeLogin 使用与用途绑定的邮箱挑战认证用户。
 func (s *Service) EmailCodeLogin(
 	ctx context.Context,
-	rawEmail, challengeID, code, ip string,
+	rawEmail, challengeID, code, ip, userAgent string,
 ) (User, TokenPair, *consoleservice.Error) {
 	email, err := NormalizeEmail(rawEmail)
 	if err != nil {
@@ -253,7 +254,7 @@ func (s *Service) EmailCodeLogin(
 	if commitErr := s.verification.Commit(ctx, email, PurposeLogin, reservation); commitErr != nil {
 		s.logger.Warn("email-code login challenge finalization failed", zap.Error(commitErr), zap.String("user_uid", user.UID))
 	}
-	pair, sessionErr := s.sessions.Create(ctx, user.UID)
+	pair, sessionErr := s.sessions.Create(ctx, user.UID, SessionMeta{IP: ip, UserAgent: userAgent})
 	return user, pair, sessionErr
 }
 
@@ -367,6 +368,111 @@ func (s *Service) Logout(ctx context.Context, refreshToken string) *consoleservi
 // LogoutAll 吊销访问令牌主体名下的所有活跃会话。
 func (s *Service) LogoutAll(ctx context.Context, accessToken string) *consoleservice.Error {
 	return s.sessions.LogoutAll(ctx, accessToken)
+}
+
+// 显示名与 Console 前端约定一致：去空白后 1–32 个字符。
+const maxDisplayNameLength = 32
+
+// UpdateDisplayName 更新当前用户的显示名并返回最新用户视图。
+func (s *Service) UpdateDisplayName(ctx context.Context, accessToken, rawName string) (User, *consoleservice.Error) {
+	row, err := s.lookupActiveUser(ctx, accessToken)
+	if err != nil {
+		return User{}, err
+	}
+	name := strings.TrimSpace(rawName)
+	if name == "" || len([]rune(name)) > maxDisplayNameLength {
+		return User{}, consoleservice.InvalidArgument("display_name", "display_name must contain 1-32 characters.")
+	}
+	updated, updateErr := s.queries.UpdateConsoleDisplayName(ctx, sqlc.UpdateConsoleDisplayNameParams{
+		DisplayName: name,
+		ID:          row.ID,
+	})
+	if updateErr != nil {
+		return User{}, requestUnavailable("update console display name", updateErr)
+	}
+	user := User{UID: uuidString(updated.Uid), Email: updated.Email, DisplayName: updated.DisplayName}
+	return s.loadUSDWallet(ctx, user, updated.ID)
+}
+
+// ChangePassword 在登录态下校验旧密码并更新为新密码。
+// 成功后吊销该用户除当前会话外的全部会话：改密的常见动机就是怀疑泄露。
+func (s *Service) ChangePassword(ctx context.Context, accessToken, currentPassword, newPassword string) *consoleservice.Error {
+	row, err := s.lookupActiveUser(ctx, accessToken)
+	if err != nil {
+		return err
+	}
+	if !VerifyPassword(row.PasswordHash, currentPassword) {
+		return passwordIncorrect()
+	}
+	if validateErr := ValidatePassword(newPassword); validateErr != nil {
+		validateErr.Param = "new_password"
+		return validateErr
+	}
+	hash, hashErr := HashPassword(newPassword)
+	if hashErr != nil {
+		return requestUnavailable("hash changed password", hashErr)
+	}
+	if _, updateErr := s.queries.UpdateConsolePassword(ctx, sqlc.UpdateConsolePasswordParams{PasswordHash: hash, ID: row.ID}); updateErr != nil {
+		return requestUnavailable("update console password", updateErr)
+	}
+	sid, sidErr := s.sessions.SessionIDFromAccessToken(accessToken)
+	if sidErr != nil {
+		// 令牌刚通过认证却解析不出 sid 属于异常状态，宁可全踢也不留悬空会话。
+		return s.sessions.RevokeUser(ctx, uuidString(row.Uid))
+	}
+	return s.sessions.RevokeUserExcept(ctx, uuidString(row.Uid), sid)
+}
+
+// SessionEntry 是登录会话列表的一项；Current 标记发起本次请求的会话。
+type SessionEntry struct {
+	SessionInfo
+	Current bool
+}
+
+// ListSessions 返回当前用户的活跃会话列表。
+func (s *Service) ListSessions(ctx context.Context, accessToken string) ([]SessionEntry, *consoleservice.Error) {
+	row, err := s.lookupActiveUser(ctx, accessToken)
+	if err != nil {
+		return nil, err
+	}
+	currentSID, sidErr := s.sessions.SessionIDFromAccessToken(accessToken)
+	if sidErr != nil {
+		return nil, sidErr
+	}
+	sessions, listErr := s.sessions.ListSessions(ctx, uuidString(row.Uid))
+	if listErr != nil {
+		return nil, listErr
+	}
+	entries := make([]SessionEntry, 0, len(sessions))
+	for _, session := range sessions {
+		entries = append(entries, SessionEntry{
+			SessionInfo: session,
+			Current:     session.SID == currentSID,
+		})
+	}
+	return entries, nil
+}
+
+// RevokeSession 注销当前用户名下的一个指定会话。
+func (s *Service) RevokeSession(ctx context.Context, accessToken, sid string) *consoleservice.Error {
+	row, err := s.lookupActiveUser(ctx, accessToken)
+	if err != nil {
+		return err
+	}
+	return s.sessions.RevokeSession(ctx, uuidString(row.Uid), sid)
+}
+
+// LogoutOthers 注销当前用户除本会话外的全部会话。
+func (s *Service) LogoutOthers(ctx context.Context, accessToken string) *consoleservice.Error {
+	row, err := s.lookupActiveUser(ctx, accessToken)
+	if err != nil {
+		return err
+	}
+	sid, sidErr := s.sessions.SessionIDFromAccessToken(accessToken)
+	if sidErr != nil {
+		return sidErr
+	}
+	return s.sessions.RevokeUserExcept(ctx, uuidString(row.Uid), sid)
 }
 
 // NormalizeEmail 校验并规范化用于查询的邮箱地址。

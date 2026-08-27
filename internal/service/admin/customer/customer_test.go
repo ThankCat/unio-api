@@ -148,6 +148,7 @@ func (f *fakeAPIKeyStore) CreateAPIKey(_ context.Context, arg sqlc.CreateAPIKeyP
 	f.created.UserID = arg.UserID
 	f.created.Name = arg.Name
 	f.created.KeyPrefix = arg.KeyPrefix
+	f.created.KeySuffix = arg.KeySuffix
 	return f.created, f.createErr
 }
 func (f *fakeAPIKeyStore) SetAPIKeyDisabled(context.Context, sqlc.SetAPIKeyDisabledParams) (sqlc.SetAPIKeyDisabledRow, error) {
@@ -203,6 +204,28 @@ func TestAPIKeyServiceCreateReturnsPlaintextAndSetsSpendLimit(t *testing.T) {
 	}
 	if got.Status != APIKeyStatusActive {
 		t.Fatalf("expected active status, got %q", got.Status)
+	}
+}
+
+// 后台代建的 key 也要记下明文末 4 位。少传这一个字段编译器不会吭声——
+// pgtype.Text 的零值就是 NULL——结果是后台建的 key 在列表里永远缺尾段，
+// 和用户自己在 Console 建的长得不一样。
+func TestAPIKeyServiceCreatePersistsSuffix(t *testing.T) {
+	store := &fakeAPIKeyStore{
+		user:    sqlc.GetUserByIDRow{ID: 100},
+		created: sqlc.ApiKey{ID: 5},
+	}
+	svc := NewAPIKeyService(store)
+
+	got, err := svc.Create(context.Background(), APIKeyCreateParams{UserID: 100, Name: "ci"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if got.KeySuffix == nil {
+		t.Fatal("expected the created key to carry a suffix")
+	}
+	if want := got.Plaintext[len(got.Plaintext)-4:]; *got.KeySuffix != want {
+		t.Fatalf("suffix = %q, want the last 4 chars of the plaintext (%q)", *got.KeySuffix, want)
 	}
 }
 

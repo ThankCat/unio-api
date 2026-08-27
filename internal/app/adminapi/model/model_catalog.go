@@ -28,6 +28,8 @@ type catalogEntryDTO struct {
 	CanonicalID              string  `json:"canonical_id"`
 	Lab                      string  `json:"lab"`
 	DisplayName              string  `json:"display_name"`
+	Description              string  `json:"description"`
+	KnowledgeCutoff          string  `json:"knowledge_cutoff"`
 	ContextWindowTokens      *int64  `json:"context_window_tokens"`
 	MaxOutputTokens          *int64  `json:"max_output_tokens"`
 	InputPriceUSDPerMTokens  *string `json:"input_price_usd_per_million_tokens"`
@@ -113,6 +115,20 @@ func (h *catalogHandler) get(w http.ResponseWriter, r *http.Request) {
 	adminhttp.WriteData(w, http.StatusOK, dto)
 }
 
+// refresh 用目录最新值覆盖采纳模型（元数据 + 能力 + 追更基线），并回读完整模型。
+func (h *catalogHandler) refresh(w http.ResponseWriter, r *http.Request) {
+	id, err := adminhttp.PathID(r)
+	if err != nil {
+		adminhttp.WriteServiceError(w, err)
+		return
+	}
+	if err := h.catalog.Refresh(r.Context(), id); err != nil {
+		adminhttp.WriteServiceError(w, err)
+		return
+	}
+	h.writeModel(w, r, id, http.StatusOK)
+}
+
 func (h *catalogHandler) adopt(w http.ResponseWriter, r *http.Request) {
 	var req adoptFromCatalogRequest
 	if err := httpx.DecodeJSON(w, r, &req); err != nil {
@@ -171,6 +187,8 @@ func toCatalogEntryDTO(e modelcatalogadmin.Entry) catalogEntryDTO {
 		CanonicalID:              e.CanonicalID,
 		Lab:                      e.Lab,
 		DisplayName:              e.DisplayName,
+		Description:              e.Description,
+		KnowledgeCutoff:          e.KnowledgeCutoff,
 		ContextWindowTokens:      e.ContextWindowTokens,
 		MaxOutputTokens:          e.MaxOutputTokens,
 		InputPriceUSDPerMTokens:  e.InputPriceUSDPerMTokens,

@@ -8,7 +8,12 @@ import (
 )
 
 const (
-	keyPrefix       = "sk_unio_"
+	// keyPrefix 用连字符分隔，与 OpenAI 的 sk-proj- 同形；用户在 SDK 配置里
+	// 两家 key 并排放时不会因为分隔符不同而显得是另一套体系。
+	//
+	// 换掉下划线不影响存量 key：认证只比对 key_hash，从不解析前缀。
+	// 老 key 的明文与 key_prefix 仍是 sk_unio_ 开头，展示层同时认这两种命名空间。
+	keyPrefix       = "sk-unio-"
 	prefixRandomLen = 8
 	// suffixLen 是掩码展示时露出的尾部位数。
 	// 加上 8 位前缀共暴露 12 位，明文仍余 44 位随机（约 227 bit 熵）。
@@ -19,8 +24,9 @@ const (
 	// 粘贴时，两家 key 在输入框里占的宽度一致，不会因为我们的明显偏短而显得像被截断了。
 	// 48 个 base36 字符约 248 bit 熵，远超碰撞与暴力枚举所需。
 	randomLen = 48
-	// base36Alphabet 只含小写字母和数字：明文全小写，复制粘贴时不会因大小写误读，
-	// 也避开 base64 的 - 和 _（会被 URL 或 shell 转义）。
+	// base36Alphabet 只含小写字母和数字：明文全小写，复制粘贴时不会因大小写误读。
+	// 随机段本身不含 - 与 _，因此整串 key 里唯一的连字符就是命名空间分隔符，
+	// 按 - 切分永远只得到 sk / unio / random 三段。
 	base36Alphabet = "0123456789abcdefghijklmnopqrstuvwxyz"
 	// MaxPlaintextLen 是明文 key 的总长上限，供调用方做防御性校验。
 	// = len(keyPrefix) + randomLen。
@@ -31,14 +37,14 @@ const (
 // Plaintext 只在创建响应里返回一次，既不落库也不写日志——之后任何接口都拿不回明文。
 type Key struct {
 	// Plaintext 是完整明文 key，只能在创建时展示一次。
-	// 示例格式：sk_unio_<24 位小写随机>
+	// 示例格式：sk-unio-<48 位小写随机>
 	Plaintext string
 
 	// Prefix 是可安全展示的短前缀，明文丢弃后靠它识别是哪一把 key。
-	// 示例格式：sk_unio_<前 8 位 random>
+	// 示例格式：sk-unio-<前 8 位 random>
 	Prefix string
 
-	// Suffix 是明文末 4 位，仅供掩码展示拼出尾段（sk_unio_xxxxxxxx⋯⋯abcd）。
+	// Suffix 是明文末 4 位，仅供掩码展示拼出尾段（sk-unio-xxxx···abcd）。
 	// 尾部往往比前缀更容易被记住——SDK 报错与日志截断通常留的是尾巴。
 	Suffix string
 

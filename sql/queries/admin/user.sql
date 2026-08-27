@@ -81,6 +81,7 @@ SELECT
     u.id,
     u.email,
     u.display_name,
+    u.status,
     COALESCE(ub.balance, 0)::numeric AS balance_usd,
     COALESCE(ub.reserved_balance, 0)::numeric AS reserved_usd,
     (SELECT COUNT(*) FROM api_keys k WHERE k.user_id = u.id) AS key_total,
@@ -111,7 +112,8 @@ LEFT JOIN request_records r
     AND (sqlc.narg('from_time')::timestamptz IS NULL OR r.created_at >= sqlc.narg('from_time')::timestamptz)
     AND (sqlc.narg('to_time')::timestamptz IS NULL OR r.created_at < sqlc.narg('to_time')::timestamptz)
 WHERE (sqlc.narg('search')::text IS NULL OR u.email ILIKE '%' || sqlc.narg('search')::text || '%' OR u.display_name ILIKE '%' || sqlc.narg('search')::text || '%' OR u.id::text = sqlc.narg('search')::text)
-GROUP BY u.id, u.email, u.display_name, u.created_at, ub.balance, ub.reserved_balance
+  AND (sqlc.narg('status')::text IS NULL OR u.status = sqlc.narg('status')::text)
+GROUP BY u.id, u.email, u.display_name, u.status, u.created_at, ub.balance, ub.reserved_balance
 ORDER BY
   CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'consumption') IN ('', 'consumption') AND COALESCE(sqlc.narg('sort_desc')::bool, true) THEN COALESCE((SELECT SUM(le.amount) FROM ledger_entries le WHERE le.user_id = u.id AND le.entry_type = 'debit' AND le.currency = 'USD' AND (sqlc.narg('from_time')::timestamptz IS NULL OR le.created_at >= sqlc.narg('from_time')::timestamptz) AND (sqlc.narg('to_time')::timestamptz IS NULL OR le.created_at < sqlc.narg('to_time')::timestamptz)), 0) END DESC NULLS LAST,
   CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'consumption') IN ('', 'consumption') AND NOT COALESCE(sqlc.narg('sort_desc')::bool, true) THEN COALESCE((SELECT SUM(le.amount) FROM ledger_entries le WHERE le.user_id = u.id AND le.entry_type = 'debit' AND le.currency = 'USD' AND (sqlc.narg('from_time')::timestamptz IS NULL OR le.created_at >= sqlc.narg('from_time')::timestamptz) AND (sqlc.narg('to_time')::timestamptz IS NULL OR le.created_at < sqlc.narg('to_time')::timestamptz)), 0) END ASC NULLS LAST,
@@ -139,7 +141,8 @@ LIMIT sqlc.arg('page_limit') OFFSET sqlc.arg('page_offset');
 -- name: UsersOpsTableCount :one
 SELECT COUNT(*) AS total
 FROM users u
-WHERE (sqlc.narg('search')::text IS NULL OR u.email ILIKE '%' || sqlc.narg('search')::text || '%' OR u.display_name ILIKE '%' || sqlc.narg('search')::text || '%' OR u.id::text = sqlc.narg('search')::text);
+WHERE (sqlc.narg('search')::text IS NULL OR u.email ILIKE '%' || sqlc.narg('search')::text || '%' OR u.display_name ILIKE '%' || sqlc.narg('search')::text || '%' OR u.id::text = sqlc.narg('search')::text)
+  AND (sqlc.narg('status')::text IS NULL OR u.status = sqlc.narg('status')::text);
 
 -- name: UserOpsDetail :one
 SELECT
@@ -189,6 +192,7 @@ SELECT
     k.id,
     k.name,
     k.key_prefix,
+    k.key_suffix,
     k.user_id,
     k.disabled_at,
     k.revoked_at,

@@ -45,6 +45,28 @@ type passwordResetRequest struct {
 	NewPassword string `json:"new_password"`
 }
 
+type updateMeRequest struct {
+	DisplayName string `json:"display_name"`
+}
+
+type passwordChangeRequest struct {
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
+}
+
+type sessionDTO struct {
+	ID         string `json:"id"`
+	IP         string `json:"ip"`
+	UserAgent  string `json:"user_agent"`
+	CreatedAt  string `json:"created_at,omitempty"`
+	LastSeenAt string `json:"last_seen_at,omitempty"`
+	Current    bool   `json:"current"`
+}
+
+type sessionsData struct {
+	Items []sessionDTO `json:"items"`
+}
+
 type userData struct {
 	User serviceauth.User `json:"user"`
 }

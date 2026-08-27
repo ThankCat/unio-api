@@ -39,6 +39,7 @@ SELECT
     k.id,
     k.name,
     k.key_prefix,
+    k.key_suffix,
     k.user_id,
     k.disabled_at,
     k.revoked_at,
@@ -93,6 +94,7 @@ type ApiKeysOpsTableRow struct {
 	ID               int64
 	Name             string
 	KeyPrefix        string
+	KeySuffix        pgtype.Text
 	UserID           int64
 	DisabledAt       pgtype.Timestamptz
 	RevokedAt        pgtype.Timestamptz
@@ -128,6 +130,7 @@ func (q *Queries) ApiKeysOpsTable(ctx context.Context, arg ApiKeysOpsTableParams
 			&i.ID,
 			&i.Name,
 			&i.KeyPrefix,
+			&i.KeySuffix,
 			&i.UserID,
 			&i.DisabledAt,
 			&i.RevokedAt,
@@ -207,7 +210,7 @@ VALUES (
     $5,
     $6
 )
-RETURNING id, name, key_prefix, key_hash, last_used_at, expires_at, disabled_at, revoked_at, created_at, updated_at, spend_limit, spent_total, user_id, key_suffix
+RETURNING id, name, key_prefix, key_hash, last_used_at, expires_at, disabled_at, revoked_at, created_at, updated_at, spend_limit, spent_total, user_id, key_suffix, deleted_at
 `
 
 type CreateAPIKeyParams struct {
@@ -246,6 +249,7 @@ func (q *Queries) CreateAPIKey(ctx context.Context, arg CreateAPIKeyParams) (Api
 		&i.SpentTotal,
 		&i.UserID,
 		&i.KeySuffix,
+		&i.DeletedAt,
 	)
 	return i, err
 }
@@ -949,6 +953,7 @@ SELECT
     u.id,
     u.email,
     u.display_name,
+    u.status,
     COALESCE(ub.balance, 0)::numeric AS balance_usd,
     COALESCE(ub.reserved_balance, 0)::numeric AS reserved_usd,
     (SELECT COUNT(*) FROM api_keys k WHERE k.user_id = u.id) AS key_total,
@@ -979,36 +984,38 @@ LEFT JOIN request_records r
     AND ($1::timestamptz IS NULL OR r.created_at >= $1::timestamptz)
     AND ($2::timestamptz IS NULL OR r.created_at < $2::timestamptz)
 WHERE ($3::text IS NULL OR u.email ILIKE '%' || $3::text || '%' OR u.display_name ILIKE '%' || $3::text || '%' OR u.id::text = $3::text)
-GROUP BY u.id, u.email, u.display_name, u.created_at, ub.balance, ub.reserved_balance
+  AND ($4::text IS NULL OR u.status = $4::text)
+GROUP BY u.id, u.email, u.display_name, u.status, u.created_at, ub.balance, ub.reserved_balance
 ORDER BY
-  CASE WHEN COALESCE($4::text, 'consumption') IN ('', 'consumption') AND COALESCE($5::bool, true) THEN COALESCE((SELECT SUM(le.amount) FROM ledger_entries le WHERE le.user_id = u.id AND le.entry_type = 'debit' AND le.currency = 'USD' AND ($1::timestamptz IS NULL OR le.created_at >= $1::timestamptz) AND ($2::timestamptz IS NULL OR le.created_at < $2::timestamptz)), 0) END DESC NULLS LAST,
-  CASE WHEN COALESCE($4::text, 'consumption') IN ('', 'consumption') AND NOT COALESCE($5::bool, true) THEN COALESCE((SELECT SUM(le.amount) FROM ledger_entries le WHERE le.user_id = u.id AND le.entry_type = 'debit' AND le.currency = 'USD' AND ($1::timestamptz IS NULL OR le.created_at >= $1::timestamptz) AND ($2::timestamptz IS NULL OR le.created_at < $2::timestamptz)), 0) END ASC NULLS LAST,
-  CASE WHEN $4::text = 'email' AND COALESCE($5::bool, false) THEN u.email END DESC NULLS LAST,
-  CASE WHEN $4::text = 'email' AND NOT COALESCE($5::bool, false) THEN u.email END ASC NULLS LAST,
-  CASE WHEN $4::text = 'balance' AND COALESCE($5::bool, false) THEN COALESCE(ub.balance, 0) END DESC NULLS LAST,
-  CASE WHEN $4::text = 'balance' AND NOT COALESCE($5::bool, false) THEN COALESCE(ub.balance, 0) END ASC NULLS LAST,
-  CASE WHEN $4::text = 'keys' AND COALESCE($5::bool, false) THEN (SELECT COUNT(*) FROM api_keys k WHERE k.user_id = u.id) END DESC NULLS LAST,
-  CASE WHEN $4::text = 'keys' AND NOT COALESCE($5::bool, false) THEN (SELECT COUNT(*) FROM api_keys k WHERE k.user_id = u.id) END ASC NULLS LAST,
-  CASE WHEN $4::text = 'requests' AND COALESCE($5::bool, false) THEN COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed')) END DESC NULLS LAST,
-  CASE WHEN $4::text = 'requests' AND NOT COALESCE($5::bool, false) THEN COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed')) END ASC NULLS LAST,
-  CASE WHEN $4::text = 'last_used' AND COALESCE($5::bool, false) THEN (SELECT MAX(r2.created_at) FROM request_records r2 WHERE r2.user_id = u.id) END DESC NULLS LAST,
-  CASE WHEN $4::text = 'last_used' AND NOT COALESCE($5::bool, false) THEN (SELECT MAX(r2.created_at) FROM request_records r2 WHERE r2.user_id = u.id) END ASC NULLS LAST,
-  CASE WHEN $4::text = 'created_at' AND COALESCE($5::bool, false) THEN u.created_at END DESC NULLS LAST,
-  CASE WHEN $4::text = 'created_at' AND NOT COALESCE($5::bool, false) THEN u.created_at END ASC NULLS LAST,
-  CASE WHEN $4::text = 'total_consumption' AND COALESCE($5::bool, false) THEN COALESCE((SELECT SUM(le.amount) FROM ledger_entries le WHERE le.user_id = u.id AND le.entry_type = 'debit' AND le.currency = 'USD'), 0) END DESC NULLS LAST,
-  CASE WHEN $4::text = 'total_consumption' AND NOT COALESCE($5::bool, false) THEN COALESCE((SELECT SUM(le.amount) FROM ledger_entries le WHERE le.user_id = u.id AND le.entry_type = 'debit' AND le.currency = 'USD'), 0) END ASC NULLS LAST,
-  CASE WHEN $4::text = 'total_topup' AND COALESCE($5::bool, false) THEN COALESCE((SELECT SUM(le.amount) FROM ledger_entries le WHERE le.user_id = u.id AND le.entry_type IN ('credit', 'adjustment_credit') AND le.currency = 'USD'), 0) END DESC NULLS LAST,
-  CASE WHEN $4::text = 'total_topup' AND NOT COALESCE($5::bool, false) THEN COALESCE((SELECT SUM(le.amount) FROM ledger_entries le WHERE le.user_id = u.id AND le.entry_type IN ('credit', 'adjustment_credit') AND le.currency = 'USD'), 0) END ASC NULLS LAST,
-  CASE WHEN $4::text = 'display_name' AND COALESCE($5::bool, false) THEN u.display_name END DESC NULLS LAST,
-  CASE WHEN $4::text = 'display_name' AND NOT COALESCE($5::bool, false) THEN u.display_name END ASC NULLS LAST,
+  CASE WHEN COALESCE($5::text, 'consumption') IN ('', 'consumption') AND COALESCE($6::bool, true) THEN COALESCE((SELECT SUM(le.amount) FROM ledger_entries le WHERE le.user_id = u.id AND le.entry_type = 'debit' AND le.currency = 'USD' AND ($1::timestamptz IS NULL OR le.created_at >= $1::timestamptz) AND ($2::timestamptz IS NULL OR le.created_at < $2::timestamptz)), 0) END DESC NULLS LAST,
+  CASE WHEN COALESCE($5::text, 'consumption') IN ('', 'consumption') AND NOT COALESCE($6::bool, true) THEN COALESCE((SELECT SUM(le.amount) FROM ledger_entries le WHERE le.user_id = u.id AND le.entry_type = 'debit' AND le.currency = 'USD' AND ($1::timestamptz IS NULL OR le.created_at >= $1::timestamptz) AND ($2::timestamptz IS NULL OR le.created_at < $2::timestamptz)), 0) END ASC NULLS LAST,
+  CASE WHEN $5::text = 'email' AND COALESCE($6::bool, false) THEN u.email END DESC NULLS LAST,
+  CASE WHEN $5::text = 'email' AND NOT COALESCE($6::bool, false) THEN u.email END ASC NULLS LAST,
+  CASE WHEN $5::text = 'balance' AND COALESCE($6::bool, false) THEN COALESCE(ub.balance, 0) END DESC NULLS LAST,
+  CASE WHEN $5::text = 'balance' AND NOT COALESCE($6::bool, false) THEN COALESCE(ub.balance, 0) END ASC NULLS LAST,
+  CASE WHEN $5::text = 'keys' AND COALESCE($6::bool, false) THEN (SELECT COUNT(*) FROM api_keys k WHERE k.user_id = u.id) END DESC NULLS LAST,
+  CASE WHEN $5::text = 'keys' AND NOT COALESCE($6::bool, false) THEN (SELECT COUNT(*) FROM api_keys k WHERE k.user_id = u.id) END ASC NULLS LAST,
+  CASE WHEN $5::text = 'requests' AND COALESCE($6::bool, false) THEN COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed')) END DESC NULLS LAST,
+  CASE WHEN $5::text = 'requests' AND NOT COALESCE($6::bool, false) THEN COUNT(r.id) FILTER (WHERE r.status IN ('succeeded', 'failed')) END ASC NULLS LAST,
+  CASE WHEN $5::text = 'last_used' AND COALESCE($6::bool, false) THEN (SELECT MAX(r2.created_at) FROM request_records r2 WHERE r2.user_id = u.id) END DESC NULLS LAST,
+  CASE WHEN $5::text = 'last_used' AND NOT COALESCE($6::bool, false) THEN (SELECT MAX(r2.created_at) FROM request_records r2 WHERE r2.user_id = u.id) END ASC NULLS LAST,
+  CASE WHEN $5::text = 'created_at' AND COALESCE($6::bool, false) THEN u.created_at END DESC NULLS LAST,
+  CASE WHEN $5::text = 'created_at' AND NOT COALESCE($6::bool, false) THEN u.created_at END ASC NULLS LAST,
+  CASE WHEN $5::text = 'total_consumption' AND COALESCE($6::bool, false) THEN COALESCE((SELECT SUM(le.amount) FROM ledger_entries le WHERE le.user_id = u.id AND le.entry_type = 'debit' AND le.currency = 'USD'), 0) END DESC NULLS LAST,
+  CASE WHEN $5::text = 'total_consumption' AND NOT COALESCE($6::bool, false) THEN COALESCE((SELECT SUM(le.amount) FROM ledger_entries le WHERE le.user_id = u.id AND le.entry_type = 'debit' AND le.currency = 'USD'), 0) END ASC NULLS LAST,
+  CASE WHEN $5::text = 'total_topup' AND COALESCE($6::bool, false) THEN COALESCE((SELECT SUM(le.amount) FROM ledger_entries le WHERE le.user_id = u.id AND le.entry_type IN ('credit', 'adjustment_credit') AND le.currency = 'USD'), 0) END DESC NULLS LAST,
+  CASE WHEN $5::text = 'total_topup' AND NOT COALESCE($6::bool, false) THEN COALESCE((SELECT SUM(le.amount) FROM ledger_entries le WHERE le.user_id = u.id AND le.entry_type IN ('credit', 'adjustment_credit') AND le.currency = 'USD'), 0) END ASC NULLS LAST,
+  CASE WHEN $5::text = 'display_name' AND COALESCE($6::bool, false) THEN u.display_name END DESC NULLS LAST,
+  CASE WHEN $5::text = 'display_name' AND NOT COALESCE($6::bool, false) THEN u.display_name END ASC NULLS LAST,
   u.id
-LIMIT $7 OFFSET $6
+LIMIT $8 OFFSET $7
 `
 
 type UsersOpsTableParams struct {
 	FromTime   pgtype.Timestamptz
 	ToTime     pgtype.Timestamptz
 	Search     pgtype.Text
+	Status     pgtype.Text
 	SortField  pgtype.Text
 	SortDesc   pgtype.Bool
 	PageOffset int32
@@ -1019,6 +1026,7 @@ type UsersOpsTableRow struct {
 	ID                  int64
 	Email               string
 	DisplayName         string
+	Status              string
 	BalanceUsd          pgtype.Numeric
 	ReservedUsd         pgtype.Numeric
 	KeyTotal            int64
@@ -1039,6 +1047,7 @@ func (q *Queries) UsersOpsTable(ctx context.Context, arg UsersOpsTableParams) ([
 		arg.FromTime,
 		arg.ToTime,
 		arg.Search,
+		arg.Status,
 		arg.SortField,
 		arg.SortDesc,
 		arg.PageOffset,
@@ -1055,6 +1064,7 @@ func (q *Queries) UsersOpsTable(ctx context.Context, arg UsersOpsTableParams) ([
 			&i.ID,
 			&i.Email,
 			&i.DisplayName,
+			&i.Status,
 			&i.BalanceUsd,
 			&i.ReservedUsd,
 			&i.KeyTotal,
@@ -1080,10 +1090,16 @@ const usersOpsTableCount = `-- name: UsersOpsTableCount :one
 SELECT COUNT(*) AS total
 FROM users u
 WHERE ($1::text IS NULL OR u.email ILIKE '%' || $1::text || '%' OR u.display_name ILIKE '%' || $1::text || '%' OR u.id::text = $1::text)
+  AND ($2::text IS NULL OR u.status = $2::text)
 `
 
-func (q *Queries) UsersOpsTableCount(ctx context.Context, search pgtype.Text) (int64, error) {
-	row := q.db.QueryRow(ctx, usersOpsTableCount, search)
+type UsersOpsTableCountParams struct {
+	Search pgtype.Text
+	Status pgtype.Text
+}
+
+func (q *Queries) UsersOpsTableCount(ctx context.Context, arg UsersOpsTableCountParams) (int64, error) {
+	row := q.db.QueryRow(ctx, usersOpsTableCount, arg.Search, arg.Status)
 	var total int64
 	err := row.Scan(&total)
 	return total, err

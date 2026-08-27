@@ -10,6 +10,7 @@
 #   make dev-gateway  只热加载 gateway-server（建议各服务开独立终端，日志更清晰）
 #   make dev-admin    只热加载 admin-server
 #   make dev-console  只热加载 console-server
+#   make dev-website  只热加载 website-server
 #   make dev-worker   只热加载 worker-server
 #   make infra        启动本地基础设施
 #   make help         查看全部命令
@@ -31,7 +32,7 @@ LUA_DIR := internal/platform/breakerstore/lua
 LUACHECK_VERSION := 1.2.0
 STYLUA_VERSION := 2.5.2
 
-.PHONY: help dev dev-gateway dev-admin dev-console dev-worker infra infra-down infra-logs build tidy clean check-env check-air check-lua check-lua-tools
+.PHONY: help dev dev-gateway dev-admin dev-console dev-website dev-worker infra infra-down infra-logs build tidy clean check-env check-air check-lua check-lua-tools
 
 help: ## 显示可用命令
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-13s\033[0m %s\n", $$1, $$2}'
@@ -96,10 +97,12 @@ dev: check-env check-air infra ## 一键启动全部服务（热加载，Ctrl+C 
 	echo "==> gateway  http://localhost$${GATEWAY_HTTP_ADDR}  /v1/*"; \
 	echo "==> admin    http://localhost$${ADMIN_HTTP_ADDR}  /v1/*"; \
 	echo "==> console  http://localhost$${CONSOLE_HTTP_ADDR}  /v1/auth/*"; \
+	echo "==> website  http://localhost$${WEBSITE_HTTP_ADDR:-:8524}  /v1/models"; \
 	echo "==> worker   (无 HTTP)"; \
 	air -c .air.gateway.toml & \
 	air -c .air.admin.toml & \
 	air -c .air.console.toml & \
+	air -c .air.website.toml & \
 	air -c .air.worker.toml & \
 	wait
 
@@ -115,14 +118,19 @@ dev-console: check-env check-air ## 热加载 console-server（CONSOLE_HTTP_ADDR
 	@set -a; source "$(ENV_FILE)"; set +a; \
 	air -c .air.console.toml
 
+dev-website: check-env check-air ## 热加载 website-server（WEBSITE_HTTP_ADDR，公开模型目录）
+	@set -a; source "$(ENV_FILE)"; set +a; \
+	air -c .air.website.toml
+
 dev-worker: check-env check-air ## 热加载 worker-server（后台任务）
 	@set -a; source "$(ENV_FILE)"; set +a; \
 	air -c .air.worker.toml
 
-build: ## 编译四个服务到 ./tmp（不运行）
+build: ## 编译五个服务到 ./tmp（不运行）
 	go build -o ./tmp/gateway-server ./cmd/gateway-server
 	go build -o ./tmp/admin-server ./cmd/admin-server
 	go build -o ./tmp/console-server ./cmd/console-server
+	go build -o ./tmp/website-server ./cmd/website-server
 	go build -o ./tmp/worker-server ./cmd/worker-server
 
 tidy: ## 整理 go.mod / go.sum

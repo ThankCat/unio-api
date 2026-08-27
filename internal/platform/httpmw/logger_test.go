@@ -106,11 +106,11 @@ func TestLoggerDoesNotLogRequestBodyOrAuth(t *testing.T) {
 	})
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"secret_prompt":"do not log"}`))
-	req.Header.Set("Authorization", "Bearer sk_unio_supersecret")
+	req.Header.Set("Authorization", "Bearer sk-unio-supersecret")
 	r.ServeHTTP(httptest.NewRecorder(), req)
 
 	logged := buf.String()
-	for _, forbidden := range []string{"secret_prompt", "do not log", "sk_unio_supersecret", "Bearer"} {
+	for _, forbidden := range []string{"secret_prompt", "do not log", "sk-unio-supersecret", "Bearer"} {
 		if bytes.Contains([]byte(logged), []byte(forbidden)) {
 			t.Errorf("access log must not contain %q, got: %s", forbidden, logged)
 		}

@@ -17,12 +17,20 @@ const (
 	defaultMaxResponseBytes = 16 << 20 // 16 MiB，api.json 约 2.2MB，留足余量。
 	modelsResourcePath      = "/models.json"
 	apiResourcePath         = "/api.json"
-	logoResourcePathFormat  = "/logos/%s.svg"
-	modelCatalogUserAgent   = "unio-gateway-model-catalog-sync"
+	// lab（模型出品方）图标的专属路径；/logos/{slug}.svg 是服务商（provider）路径，
+	// 大量 lab 在那只有通用占位图（例：tencent 在 provider 路径是占位星星，labs 路径才是真 logo）。
+	labLogoResourcePathFormat      = "/logos/labs/%s.svg"
+	providerLogoResourcePathFormat = "/logos/%s.svg"
+	modelCatalogUserAgent          = "unio-gateway-model-catalog-sync"
 	// maxLogoBytes 限制单个图标体积：图标是要内联进管理页面的，
 	// 上游给出异常大的文件时宁可不要，也不能把它塞进数据库再塞给浏览器。
 	maxLogoBytes = 256 << 10 // 256 KiB
 )
+
+// placeholderLogoMarker 是 models.dev 通用占位图（四角星）的路径特征。
+// 上游对没有真图标的 lab 返回同一个占位 SVG，它对区分厂商毫无帮助，
+// 前端的字母色块兜底反而更可读——识别到就按「上游没有图标」处理。
+const placeholderLogoMarker = "M9.8132 15.9038L9 18.75"
 
 // HTTPFetcher 从 models.dev 拉取 models.json（必需）与 api.json（价格，best-effort）。
 type HTTPFetcher struct {
@@ -63,10 +71,11 @@ func (f *HTTPFetcher) Fetch(ctx context.Context) (RawFeed, error) {
 	return RawFeed{ModelsJSON: modelsJSON, APIJSON: apiJSON}, nil
 }
 
-// FetchLabLogo 拉取某出品方的 SVG 图标。
+// FetchLabLogo 拉取某出品方的 SVG 图标：先取 labs 专属路径，404 再回落 provider 路径
+// （lab 与 provider 同名时后者常有图标，如 openai/anthropic）。
 //
-// 返回空串表示上游没有这个图标或内容不可用（404、非 SVG、超限），调用方按「暂无图标」处理即可：
-// 图标缺失只是展示上少了个标识，不该让整次目录同步失败。
+// 返回空串表示上游没有这个图标或内容不可用（404、非 SVG、占位图、超限），调用方按「暂无图标」
+// 处理即可：图标缺失只是展示上少了个标识，不该让整次目录同步失败。
 // 只接受 SVG：图标要能随主题改色、任意尺寸不失真，位图两条都做不到。
 func (f *HTTPFetcher) FetchLabLogo(ctx context.Context, slug string) (string, error) {
 	slug = strings.TrimSpace(slug)
@@ -74,26 +83,46 @@ func (f *HTTPFetcher) FetchLabLogo(ctx context.Context, slug string) (string, er
 		return "", nil
 	}
 
-	path := fmt.Sprintf(logoResourcePathFormat, url.PathEscape(slug))
+	escaped := url.PathEscape(slug)
+	svg, found, err := f.fetchLogo(ctx, fmt.Sprintf(labLogoResourcePathFormat, escaped))
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		svg, _, err = f.fetchLogo(ctx, fmt.Sprintf(providerLogoResourcePathFormat, escaped))
+		if err != nil {
+			return "", err
+		}
+	}
+
+	// 通用占位图不落库：它对区分厂商毫无帮助，交给前端字母兜底。
+	if strings.Contains(svg, placeholderLogoMarker) {
+		return "", nil
+	}
+	return svg, nil
+}
+
+// fetchLogo 拉取单个图标路径；found=false 表示 404（供调用方回落其他路径）。
+func (f *HTTPFetcher) fetchLogo(ctx context.Context, path string) (svg string, found bool, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, f.baseURL+path, nil)
 	if err != nil {
-		return "", failure.Wrap(failure.CodeModelCatalogStoreFailed, err, failure.WithMessage("build logo request"))
+		return "", false, failure.Wrap(failure.CodeModelCatalogStoreFailed, err, failure.WithMessage("build logo request"))
 	}
 	req.Header.Set("Accept", "image/svg+xml")
 	req.Header.Set("User-Agent", modelCatalogUserAgent)
 
 	resp, err := f.client.Do(req)
 	if err != nil {
-		return "", failure.Wrap(failure.CodeModelCatalogStoreFailed, err, failure.WithMessage("fetch "+path))
+		return "", false, failure.Wrap(failure.CodeModelCatalogStoreFailed, err, failure.WithMessage("fetch "+path))
 	}
 	defer resp.Body.Close()
 
 	// 上游没有这个出品方的图标是常态（新 lab、冷门 lab），不算错误。
 	if resp.StatusCode == http.StatusNotFound {
-		return "", nil
+		return "", false, nil
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", failure.New(
+		return "", false, failure.New(
 			failure.CodeModelCatalogStoreFailed,
 			failure.WithMessage(fmt.Sprintf("models.dev %s returned status %d", path, resp.StatusCode)),
 		)
@@ -101,13 +130,13 @@ func (f *HTTPFetcher) FetchLabLogo(ctx context.Context, slug string) (string, er
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxLogoBytes))
 	if err != nil {
-		return "", failure.Wrap(failure.CodeModelCatalogStoreFailed, err, failure.WithMessage("read "+path))
+		return "", false, failure.Wrap(failure.CodeModelCatalogStoreFailed, err, failure.WithMessage("read "+path))
 	}
-	svg := strings.TrimSpace(string(body))
-	if !strings.Contains(svg, "<svg") {
-		return "", nil
+	content := strings.TrimSpace(string(body))
+	if !strings.Contains(content, "<svg") {
+		return "", true, nil
 	}
-	return svg, nil
+	return content, true, nil
 }
 
 func (f *HTTPFetcher) get(ctx context.Context, path string) ([]byte, error) {

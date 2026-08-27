@@ -16,9 +16,9 @@ type Service interface {
 	CheckEmail(context.Context, string) *consoleservice.Error
 	CheckRegistrationEmail(context.Context, string) *consoleservice.Error
 	SendChallenge(context.Context, string, string, string) (serviceauth.Challenge, *consoleservice.Error)
-	Register(context.Context, string, string, string, string, string) (serviceauth.User, serviceauth.TokenPair, *consoleservice.Error)
-	PasswordLogin(context.Context, string, string, string) (serviceauth.User, serviceauth.TokenPair, *consoleservice.Error)
-	EmailCodeLogin(context.Context, string, string, string, string) (serviceauth.User, serviceauth.TokenPair, *consoleservice.Error)
+	Register(context.Context, string, string, string, string, string, string) (serviceauth.User, serviceauth.TokenPair, *consoleservice.Error)
+	PasswordLogin(context.Context, string, string, string, string) (serviceauth.User, serviceauth.TokenPair, *consoleservice.Error)
+	EmailCodeLogin(context.Context, string, string, string, string, string) (serviceauth.User, serviceauth.TokenPair, *consoleservice.Error)
 	CurrentUser(context.Context, string) (serviceauth.User, *consoleservice.Error)
 	AuthenticatePrincipal(context.Context, string) (serviceauth.Principal, *consoleservice.Error)
 	VerifyPasswordResetCode(context.Context, string, string, string, string) (serviceauth.PasswordResetGrant, *consoleservice.Error)
@@ -26,6 +26,11 @@ type Service interface {
 	Refresh(context.Context, string) (serviceauth.TokenPair, *consoleservice.Error)
 	Logout(context.Context, string) *consoleservice.Error
 	LogoutAll(context.Context, string) *consoleservice.Error
+	UpdateDisplayName(context.Context, string, string) (serviceauth.User, *consoleservice.Error)
+	ChangePassword(context.Context, string, string, string) *consoleservice.Error
+	ListSessions(context.Context, string) ([]serviceauth.SessionEntry, *consoleservice.Error)
+	RevokeSession(context.Context, string, string) *consoleservice.Error
+	LogoutOthers(context.Context, string) *consoleservice.Error
 }
 
 // Deps 包含认证 HTTP 适配层的依赖。
@@ -46,15 +51,20 @@ func Register(r chi.Router, deps Deps) {
 	}
 	r.Route("/auth", func(r chi.Router) {
 		r.Get("/me", h.currentUser)
+		r.Patch("/me", h.updateMe)
 		r.Post("/email-checks", h.emailCheck)
 		r.Post("/registration-email-checks", h.registrationEmailCheck)
 		r.Post("/email-challenges", h.emailChallenge)
 		r.Post("/registrations", h.registration)
+		r.Post("/password-changes", h.passwordChange)
+		r.Get("/sessions", h.listSessions)
+		r.Delete("/sessions/{sid}", h.revokeSession)
 		r.Post("/sessions/password", h.passwordSession)
 		r.Post("/sessions/email-code", h.emailCodeSession)
 		r.Post("/sessions/refresh", h.refresh)
 		r.Post("/sessions/logout", h.logout)
 		r.Post("/sessions/logout-all", h.logoutAll)
+		r.Post("/sessions/logout-others", h.logoutOthers)
 		r.Post("/password-reset-verifications", h.passwordResetVerification)
 		r.Post("/password-resets", h.passwordReset)
 	})

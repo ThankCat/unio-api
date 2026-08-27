@@ -32,6 +32,7 @@ const countConsoleAPIKeys = `-- name: CountConsoleAPIKeys :one
 SELECT COUNT(*) AS total
 FROM api_keys k
 WHERE k.user_id = $1
+  AND k.deleted_at IS NULL
   AND (
       $2::text IS NULL
       OR k.name ILIKE '%' || $2::text || '%'
@@ -133,8 +134,12 @@ func (q *Queries) CreateConsoleAPIKey(ctx context.Context, arg CreateConsoleAPIK
 }
 
 const deleteConsoleAPIKey = `-- name: DeleteConsoleAPIKey :execrows
-DELETE FROM api_keys
-WHERE id = $1 AND user_id = $2
+UPDATE api_keys
+SET deleted_at = now(), updated_at = now()
+WHERE id = $1
+  AND user_id = $2
+  AND revoked_at IS NOT NULL
+  AND deleted_at IS NULL
 `
 
 type DeleteConsoleAPIKeyParams struct {
@@ -142,8 +147,8 @@ type DeleteConsoleAPIKeyParams struct {
 	UserID int64
 }
 
-// 物理删除，只用于清理误建且没有调用历史的密钥。
-// 有调用历史时 request_records 的外键会拒绝（23503），上层降级为 conflict 并提示改用吊销。
+// 软删除：只对已吊销的密钥开放。删除后密钥从 Console 列表与详情消失；
+// request_records 与账单等历史展示按 api_key_id 关联，不受影响。
 func (q *Queries) DeleteConsoleAPIKey(ctx context.Context, arg DeleteConsoleAPIKeyParams) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteConsoleAPIKey, arg.ID, arg.UserID)
 	if err != nil {
@@ -245,7 +250,7 @@ LEFT JOIN LATERAL (
       AND r.created_at >= $1::timestamptz
       AND r.created_at < $2::timestamptz
 ) agg ON true
-WHERE k.id = $3 AND k.user_id = $4
+WHERE k.id = $3 AND k.user_id = $4 AND k.deleted_at IS NULL
 LIMIT 1
 `
 
@@ -298,6 +303,30 @@ func (q *Queries) GetConsoleAPIKey(ctx context.Context, arg GetConsoleAPIKeyPara
 		&i.RequestCount,
 		&i.PeriodChargeUsd,
 	)
+	return i, err
+}
+
+const getConsoleAPIKeyLifecycle = `-- name: GetConsoleAPIKeyLifecycle :one
+SELECT revoked_at, deleted_at
+FROM api_keys
+WHERE id = $1 AND user_id = $2
+`
+
+type GetConsoleAPIKeyLifecycleParams struct {
+	ID     int64
+	UserID int64
+}
+
+type GetConsoleAPIKeyLifecycleRow struct {
+	RevokedAt pgtype.Timestamptz
+	DeletedAt pgtype.Timestamptz
+}
+
+// Delete 未命中时区分「不存在 / 已删除」与「未吊销不可删」用的轻量读。
+func (q *Queries) GetConsoleAPIKeyLifecycle(ctx context.Context, arg GetConsoleAPIKeyLifecycleParams) (GetConsoleAPIKeyLifecycleRow, error) {
+	row := q.db.QueryRow(ctx, getConsoleAPIKeyLifecycle, arg.ID, arg.UserID)
+	var i GetConsoleAPIKeyLifecycleRow
+	err := row.Scan(&i.RevokedAt, &i.DeletedAt)
 	return i, err
 }
 
@@ -494,6 +523,7 @@ LEFT JOIN LATERAL (
       AND r.created_at < $2::timestamptz
 ) agg ON true
 WHERE k.user_id = $3
+  AND k.deleted_at IS NULL
   AND (
       $4::text IS NULL
       OR k.name ILIKE '%' || $4::text || '%'
@@ -601,6 +631,7 @@ SET revoked_at = now(), updated_at = now()
 WHERE id = $1
   AND user_id = $2
   AND revoked_at IS NULL
+  AND deleted_at IS NULL
 RETURNING
     id, name, key_prefix, key_suffix, spend_limit, spent_total,
     last_used_at, expires_at, disabled_at, revoked_at, created_at, updated_at
@@ -626,7 +657,7 @@ type RevokeConsoleAPIKeyRow struct {
 	UpdatedAt  pgtype.Timestamptz
 }
 
-// 永久吊销（不可逆）。已吊销时返回零行，上层映射为 not_found。
+// 永久吊销（不可逆）。已吊销或已删除时返回零行，上层映射为 not_found。
 func (q *Queries) RevokeConsoleAPIKey(ctx context.Context, arg RevokeConsoleAPIKeyParams) (RevokeConsoleAPIKeyRow, error) {
 	row := q.db.QueryRow(ctx, revokeConsoleAPIKey, arg.ID, arg.UserID)
 	var i RevokeConsoleAPIKeyRow
@@ -702,6 +733,7 @@ SELECT
     )::bigint AS near_limit
 FROM api_keys
 WHERE user_id = $1
+  AND deleted_at IS NULL
 `
 
 type SummarizeConsoleAPIKeysRow struct {
@@ -748,6 +780,7 @@ SET
 WHERE id = $9
   AND user_id = $10
   AND revoked_at IS NULL
+  AND deleted_at IS NULL
 RETURNING
     id, name, key_prefix, key_suffix, spend_limit, spent_total,
     last_used_at, expires_at, disabled_at, revoked_at, created_at, updated_at

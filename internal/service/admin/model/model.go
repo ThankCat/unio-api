@@ -67,11 +67,14 @@ type ListResult struct {
 // Model 是 admin 视角的 model 业务事实。
 // 元数据（上下文/价格基线/发布日期）纯展示，不参与计费；Catalog 为采纳目录追更状态（未采纳为 nil）。
 type Model struct {
-	ID                       int64
-	ModelID                  string
-	DisplayName              string
-	OwnedBy                  string
-	Status                   string
+	ID          int64
+	ModelID     string
+	DisplayName string
+	OwnedBy     string
+	Status      string
+	// Description / KnowledgeCutoff 是展示元数据（采纳时快照自目录，可编辑），空串表示未填。
+	Description              string
+	KnowledgeCutoff          string
 	MaxOutputTokens          *int64
 	ContextWindowTokens      *int64
 	InputPriceUSDPerMTokens  *string
@@ -102,6 +105,9 @@ type CatalogState struct {
 
 // Metadata 是模型可选展示元数据（手建可填、采纳带入、刷新覆盖）。
 type Metadata struct {
+	// Description / KnowledgeCutoff 空串即「未填/清空」（列 NOT NULL DEFAULT ''）。
+	Description              string
+	KnowledgeCutoff          string
 	ContextWindowTokens      *int64
 	MaxOutputTokens          *int64
 	InputPriceUSDPerMTokens  *string
@@ -241,6 +247,8 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Model, error) {
 		DisplayName:                    displayName,
 		OwnedBy:                        ownedBy,
 		Status:                         status,
+		Description:                    meta.Description,
+		KnowledgeCutoff:                meta.KnowledgeCutoff,
 		MaxOutputTokens:                meta.MaxOutputTokens,
 		ContextWindowTokens:            meta.ContextWindowTokens,
 		InputPriceUsdPerMillionTokens:  meta.InputPrice,
@@ -296,6 +304,8 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Model, error) {
 		DisplayName:                    displayName,
 		OwnedBy:                        ownedBy,
 		Status:                         status,
+		Description:                    meta.Description,
+		KnowledgeCutoff:                meta.KnowledgeCutoff,
 		MaxOutputTokens:                meta.MaxOutputTokens,
 		ContextWindowTokens:            meta.ContextWindowTokens,
 		InputPriceUsdPerMillionTokens:  meta.InputPrice,
@@ -425,7 +435,8 @@ func (s *Service) enableModel(ctx context.Context, modelID int64, params sqlc.Up
 }
 
 // Delete 物理删除 model，用于清理录错的脏数据，并级联清理它自身的配置子表
-// （售价、模型绑定、成本价、能力声明、项目可见性策略）。model_id 随之释放，可重新录入同名。
+// （售价及 Fast 档、模型绑定、成本价及 Fast 档、倍率覆盖、能力声明）与运维观测数据
+// （渠道模型验证结果随之删除，探测记录仅解除模型归因）。model_id 随之释放，可重新录入同名。
 //
 // 一旦 model 或其子配置已被请求/账务历史（NO ACTION 外键）引用，DB 拒绝删除（23503），
 // 降级为 conflict，提示改用停用——保住计费/审计链路。
@@ -455,6 +466,8 @@ func toModel(m sqlc.Model) Model {
 		DisplayName:              m.DisplayName,
 		OwnedBy:                  m.OwnedBy,
 		Status:                   m.Status,
+		Description:              m.Description,
+		KnowledgeCutoff:          m.KnowledgeCutoff,
 		MaxOutputTokens:          int64Ptr(m.MaxOutputTokens),
 		ContextWindowTokens:      int64Ptr(m.ContextWindowTokens),
 		InputPriceUSDPerMTokens:  numericString(m.InputPriceUsdPerMillionTokens),
@@ -477,6 +490,8 @@ func modelFromListRow(m sqlc.ListModelsPageRow) Model {
 		DisplayName:              m.DisplayName,
 		OwnedBy:                  m.OwnedBy,
 		Status:                   m.Status,
+		Description:              m.Description,
+		KnowledgeCutoff:          m.KnowledgeCutoff,
 		MaxOutputTokens:          int64Ptr(m.MaxOutputTokens),
 		ContextWindowTokens:      int64Ptr(m.ContextWindowTokens),
 		InputPriceUSDPerMTokens:  numericString(m.InputPriceUsdPerMillionTokens),
@@ -505,6 +520,8 @@ func modelFromListRow(m sqlc.ListModelsPageRow) Model {
 
 // metadataParams 是元数据列的 sqlc 入参集合。
 type metadataParams struct {
+	Description         string
+	KnowledgeCutoff     string
 	ContextWindowTokens pgtype.Int8
 	MaxOutputTokens     pgtype.Int8
 	InputPrice          pgtype.Numeric
@@ -512,8 +529,23 @@ type metadataParams struct {
 	ReleaseDate         pgtype.Date
 }
 
+// 展示字段长度上限：description 是一句话简介，knowledge_cutoff 是日期样式短串；
+// 超限基本都是误粘贴，宽松挡一下即可。
+const (
+	maxDescriptionLen     = 2000
+	maxKnowledgeCutoffLen = 64
+)
+
 // buildMetadataParams 校验并转换可选元数据为 sqlc 入参。
 func buildMetadataParams(in Metadata) (metadataParams, error) {
+	description := strings.TrimSpace(in.Description)
+	if len(description) > maxDescriptionLen {
+		return metadataParams{}, invalidArgument("description", "description must be at most 2000 characters")
+	}
+	knowledgeCutoff := strings.TrimSpace(in.KnowledgeCutoff)
+	if len(knowledgeCutoff) > maxKnowledgeCutoffLen {
+		return metadataParams{}, invalidArgument("knowledge_cutoff", "knowledge_cutoff must be at most 64 characters")
+	}
 	if in.MaxOutputTokens != nil && *in.MaxOutputTokens <= 0 {
 		return metadataParams{}, invalidArgument("max_output_tokens", "max_output_tokens must be > 0 when set")
 	}
@@ -529,6 +561,8 @@ func buildMetadataParams(in Metadata) (metadataParams, error) {
 		return metadataParams{}, invalidArgument("output_price_usd_per_million_tokens", "output price must be a non-negative decimal")
 	}
 	return metadataParams{
+		Description:         description,
+		KnowledgeCutoff:     knowledgeCutoff,
 		ContextWindowTokens: int8Param(in.ContextWindowTokens),
 		MaxOutputTokens:     int8Param(in.MaxOutputTokens),
 		InputPrice:          inputPrice,

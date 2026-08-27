@@ -31,6 +31,8 @@ type modelDTO struct {
 	DisplayName              string                `json:"display_name"`
 	OwnedBy                  string                `json:"owned_by"`
 	Status                   string                `json:"status"`
+	Description              string                `json:"description"`
+	KnowledgeCutoff          string                `json:"knowledge_cutoff"`
 	MaxOutputTokens          *int64                `json:"max_output_tokens"`
 	ContextWindowTokens      *int64                `json:"context_window_tokens"`
 	InputPriceUSDPerMTokens  *string               `json:"input_price_usd_per_million_tokens"`
@@ -62,6 +64,8 @@ type modelReminderDTO struct {
 }
 
 type modelMetadataRequest struct {
+	Description              string  `json:"description"`
+	KnowledgeCutoff          string  `json:"knowledge_cutoff"`
 	MaxOutputTokens          *int64  `json:"max_output_tokens"`
 	ContextWindowTokens      *int64  `json:"context_window_tokens"`
 	InputPriceUSDPerMTokens  *string `json:"input_price_usd_per_million_tokens"`
@@ -215,6 +219,8 @@ func (h *modelsHandler) delete(w http.ResponseWriter, r *http.Request) {
 // toMetadata 把请求里的可选元数据转成 service 入参；release_date 解析为日期，非法返回 400。
 func (m modelMetadataRequest) toMetadata() (model.Metadata, error) {
 	meta := model.Metadata{
+		Description:              strings.TrimSpace(m.Description),
+		KnowledgeCutoff:          strings.TrimSpace(m.KnowledgeCutoff),
 		MaxOutputTokens:          m.MaxOutputTokens,
 		ContextWindowTokens:      m.ContextWindowTokens,
 		InputPriceUSDPerMTokens:  trimOptional(m.InputPriceUSDPerMTokens),
@@ -237,6 +243,8 @@ func toModelDTO(m model.Model) modelDTO {
 		DisplayName:              m.DisplayName,
 		OwnedBy:                  m.OwnedBy,
 		Status:                   m.Status,
+		Description:              m.Description,
+		KnowledgeCutoff:          m.KnowledgeCutoff,
 		MaxOutputTokens:          m.MaxOutputTokens,
 		ContextWindowTokens:      m.ContextWindowTokens,
 		InputPriceUSDPerMTokens:  m.InputPriceUSDPerMTokens,

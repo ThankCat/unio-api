@@ -71,6 +71,16 @@ func timePtr(v pgtype.Timestamptz) *time.Time {
 	return &out
 }
 
+// textPtr 把可空 pgtype.Text 转成 *string：NULL → nil。
+// 与直接取 .String 的区别是保留「没有值」和「值是空串」的差异。
+func textPtr(v pgtype.Text) *string {
+	if !v.Valid {
+		return nil
+	}
+	out := v.String
+	return &out
+}
+
 // numericString 把 NUMERIC 精确格式化为十进制字符串（不用 float）；NULL/NaN/Inf → "0"。
 func numericString(n pgtype.Numeric) string {
 	if s := numericPtr(n); s != nil {

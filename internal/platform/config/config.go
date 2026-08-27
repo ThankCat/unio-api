@@ -30,6 +30,7 @@ type Config struct {
 	Gateway          GatewayConfig
 	Admin            AdminConfig
 	Console          ConsoleConfig
+	Website          WebsiteConfig
 	TokenEstimate    TokenEstimateConfig
 }
 
@@ -126,6 +127,12 @@ type ConsoleConfig struct {
 	GatewayPublicBaseURL string
 	// DocsBaseURL 是接入文档站点根地址，用于拼各协议的文档链接。留空则不展示文档入口。
 	DocsBaseURL string
+}
+
+// WebsiteConfig 保存 website-server（营销站公开只读 API）的配置。
+// 该 surface 无鉴权、只读、强缓存，供 unio-website 的服务端渲染（ISR）拉取模型目录。
+type WebsiteConfig struct {
+	HTTPAddr string
 }
 
 // ModelCatalogSyncConfig 保存 models.dev 模型目录同步参数；默认关闭（opt-in），
@@ -840,6 +847,9 @@ func Load() (Config, error) {
 			RefreshTokenTTL:       consoleRefreshTokenTTL,
 			GatewayPublicBaseURL:  strings.TrimRight(strings.TrimSpace(os.Getenv("GATEWAY_PUBLIC_BASE_URL")), "/"),
 			DocsBaseURL:           strings.TrimRight(strings.TrimSpace(os.Getenv("CONSOLE_DOCS_BASE_URL")), "/"),
+		},
+		Website: WebsiteConfig{
+			HTTPAddr: getEnv("WEBSITE_HTTP_ADDR", ":8524"),
 		},
 		TokenEstimate: TokenEstimateConfig{
 			CountMedia:        tokenEstimateCountMedia,

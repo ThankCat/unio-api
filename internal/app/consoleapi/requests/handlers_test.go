@@ -33,13 +33,13 @@ func (s *fakeAuthService) CheckRegistrationEmail(context.Context, string) *conso
 func (s *fakeAuthService) SendChallenge(context.Context, string, string, string) (serviceauth.Challenge, *consoleservice.Error) {
 	return serviceauth.Challenge{}, nil
 }
-func (s *fakeAuthService) Register(context.Context, string, string, string, string, string) (serviceauth.User, serviceauth.TokenPair, *consoleservice.Error) {
+func (s *fakeAuthService) Register(context.Context, string, string, string, string, string, string) (serviceauth.User, serviceauth.TokenPair, *consoleservice.Error) {
 	return serviceauth.User{}, serviceauth.TokenPair{}, nil
 }
-func (s *fakeAuthService) PasswordLogin(context.Context, string, string, string) (serviceauth.User, serviceauth.TokenPair, *consoleservice.Error) {
+func (s *fakeAuthService) PasswordLogin(context.Context, string, string, string, string) (serviceauth.User, serviceauth.TokenPair, *consoleservice.Error) {
 	return serviceauth.User{}, serviceauth.TokenPair{}, nil
 }
-func (s *fakeAuthService) EmailCodeLogin(context.Context, string, string, string, string) (serviceauth.User, serviceauth.TokenPair, *consoleservice.Error) {
+func (s *fakeAuthService) EmailCodeLogin(context.Context, string, string, string, string, string) (serviceauth.User, serviceauth.TokenPair, *consoleservice.Error) {
 	return serviceauth.User{}, serviceauth.TokenPair{}, nil
 }
 func (s *fakeAuthService) CurrentUser(context.Context, string) (serviceauth.User, *consoleservice.Error) {
@@ -60,6 +60,19 @@ func (s *fakeAuthService) Refresh(context.Context, string) (serviceauth.TokenPai
 }
 func (s *fakeAuthService) Logout(context.Context, string) *consoleservice.Error    { return nil }
 func (s *fakeAuthService) LogoutAll(context.Context, string) *consoleservice.Error { return nil }
+func (s *fakeAuthService) UpdateDisplayName(context.Context, string, string) (serviceauth.User, *consoleservice.Error) {
+	return serviceauth.User{}, nil
+}
+func (s *fakeAuthService) ChangePassword(context.Context, string, string, string) *consoleservice.Error {
+	return nil
+}
+func (s *fakeAuthService) ListSessions(context.Context, string) ([]serviceauth.SessionEntry, *consoleservice.Error) {
+	return nil, nil
+}
+func (s *fakeAuthService) RevokeSession(context.Context, string, string) *consoleservice.Error {
+	return nil
+}
+func (s *fakeAuthService) LogoutOthers(context.Context, string) *consoleservice.Error { return nil }
 
 type fakeRequestService struct {
 	listParams    consolerequests.ListParams
@@ -80,7 +93,7 @@ func (s *fakeRequestService) List(_ context.Context, params consolerequests.List
 		ClientIP:                "203.0.113.10",
 		APIKeyID:                9,
 		APIKeyName:              "prod",
-		APIKeyPrefix:            "sk_unio_xhe8wl5d",
+		APIKeyPrefix:            "sk-unio-xhe8wl5d",
 		Endpoint:                "/chat/completions",
 		Stream:                  true,
 		RequestedModelID:        "claude-sonnet-4-5",
@@ -299,7 +312,7 @@ func TestRequestListOmitsInternalFieldsAndScopesToUser(t *testing.T) {
 	if item["endpoint"] != "/chat/completions" || item["api_key_name"] != "prod" {
 		t.Fatalf("item = %#v", item)
 	}
-	if item["api_key_prefix"] != "sk_unio_xhe8wl5d" {
+	if item["api_key_prefix"] != "sk-unio-xhe8wl5d" {
 		t.Fatalf("api_key_prefix = %#v", item["api_key_prefix"])
 	}
 	// 明文不落库，请求列表的契约里就不该再有这个字段。

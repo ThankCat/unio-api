@@ -31,7 +31,7 @@ func chatAuthenticator() *fakeAPIKeyAuthenticator {
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
 			UserID:    1,
-			KeyPrefix: "sk_unio_test",
+			KeyPrefix: "sk-unio-test",
 		},
 	}
 }
@@ -72,7 +72,7 @@ func TestRouterV1ChatCompletionMapsUpstreamErrors(t *testing.T) {
 			}
 
 			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", buf)
-			req.Header.Set("Authorization", "Bearer sk_unio_test")
+			req.Header.Set("Authorization", "Bearer sk-unio-test")
 			rec := httptest.NewRecorder()
 
 			handler.ServeHTTP(rec, req)
@@ -136,7 +136,7 @@ func TestRouterV1ChatCompletionStreamMapsUpstreamErrorAfterChunkStarted(t *testi
 		t.Fatalf("encode request body: %v", err)
 	}
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", buf)
-	req.Header.Set("Authorization", "Bearer sk_unio_test")
+	req.Header.Set("Authorization", "Bearer sk-unio-test")
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)

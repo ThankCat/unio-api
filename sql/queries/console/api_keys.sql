@@ -50,6 +50,7 @@ LEFT JOIN LATERAL (
       AND r.created_at < sqlc.arg(to_time)::timestamptz
 ) agg ON true
 WHERE k.user_id = sqlc.arg(user_id)
+  AND k.deleted_at IS NULL
   AND (
       sqlc.narg(search)::text IS NULL
       OR k.name ILIKE '%' || sqlc.narg(search)::text || '%'
@@ -72,6 +73,7 @@ LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset);
 SELECT COUNT(*) AS total
 FROM api_keys k
 WHERE k.user_id = sqlc.arg(user_id)
+  AND k.deleted_at IS NULL
   AND (
       sqlc.narg(search)::text IS NULL
       OR k.name ILIKE '%' || sqlc.narg(search)::text || '%'
@@ -104,7 +106,8 @@ SELECT
           AND spent_total >= spend_limit * 0.8
     )::bigint AS near_limit
 FROM api_keys
-WHERE user_id = sqlc.arg(user_id);
+WHERE user_id = sqlc.arg(user_id)
+  AND deleted_at IS NULL;
 
 -- name: SummarizeConsoleAPIKeyWindow :one
 -- 页面顶栏的时间窗合计：全部密钥在窗口内的计费请求数与消耗。
@@ -165,7 +168,7 @@ LEFT JOIN LATERAL (
       AND r.created_at >= sqlc.arg(from_time)::timestamptz
       AND r.created_at < sqlc.arg(to_time)::timestamptz
 ) agg ON true
-WHERE k.id = sqlc.arg(id) AND k.user_id = sqlc.arg(user_id)
+WHERE k.id = sqlc.arg(id) AND k.user_id = sqlc.arg(user_id) AND k.deleted_at IS NULL
 LIMIT 1;
 
 -- name: ListConsoleAPIKeyDailyCharge :many
@@ -258,23 +261,35 @@ SET
 WHERE id = sqlc.arg(id)
   AND user_id = sqlc.arg(user_id)
   AND revoked_at IS NULL
+  AND deleted_at IS NULL
 RETURNING
     id, name, key_prefix, key_suffix, spend_limit, spent_total,
     last_used_at, expires_at, disabled_at, revoked_at, created_at, updated_at;
 
 -- name: RevokeConsoleAPIKey :one
--- 永久吊销（不可逆）。已吊销时返回零行，上层映射为 not_found。
+-- 永久吊销（不可逆）。已吊销或已删除时返回零行，上层映射为 not_found。
 UPDATE api_keys
 SET revoked_at = now(), updated_at = now()
 WHERE id = sqlc.arg(id)
   AND user_id = sqlc.arg(user_id)
   AND revoked_at IS NULL
+  AND deleted_at IS NULL
 RETURNING
     id, name, key_prefix, key_suffix, spend_limit, spent_total,
     last_used_at, expires_at, disabled_at, revoked_at, created_at, updated_at;
 
 -- name: DeleteConsoleAPIKey :execrows
--- 物理删除，只用于清理误建且没有调用历史的密钥。
--- 有调用历史时 request_records 的外键会拒绝（23503），上层降级为 conflict 并提示改用吊销。
-DELETE FROM api_keys
+-- 软删除：只对已吊销的密钥开放。删除后密钥从 Console 列表与详情消失；
+-- request_records 与账单等历史展示按 api_key_id 关联，不受影响。
+UPDATE api_keys
+SET deleted_at = now(), updated_at = now()
+WHERE id = sqlc.arg(id)
+  AND user_id = sqlc.arg(user_id)
+  AND revoked_at IS NOT NULL
+  AND deleted_at IS NULL;
+
+-- name: GetConsoleAPIKeyLifecycle :one
+-- Delete 未命中时区分「不存在 / 已删除」与「未吊销不可删」用的轻量读。
+SELECT revoked_at, deleted_at
+FROM api_keys
 WHERE id = sqlc.arg(id) AND user_id = sqlc.arg(user_id);

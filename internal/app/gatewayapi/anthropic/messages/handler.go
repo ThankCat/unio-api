@@ -232,6 +232,10 @@ func mapMessageServiceError(req MessageRequest, err error) (status int, errorTyp
 		return http.StatusBadRequest, "invalid_request_error", "This model does not support one of the request parameters."
 	case errors.Is(err, routing.ErrModelNotFound), errors.Is(err, routing.ErrModelNotAvailable):
 		return http.StatusNotFound, "not_found_error", fmt.Sprintf("model: %s", req.Model)
+	case errors.Is(err, routing.ErrModelProtocolUnsupported):
+		// 模型存在但没有 Anthropic 协议面：客户端用错了 API，404 让其停止重试并检查协议。
+		return http.StatusNotFound, "not_found_error",
+			fmt.Sprintf("model %q is not accessible via the Anthropic Messages API; check the model's supported API protocol", req.Model)
 	case errors.Is(err, routing.ErrNoAvailableChannel):
 		return http.StatusServiceUnavailable, "api_error", fmt.Sprintf("model %q is temporarily unavailable", req.Model)
 	}

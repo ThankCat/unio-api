@@ -134,7 +134,7 @@ func TestRouterHealthz(t *testing.T) {
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
 			UserID:    1,
-			KeyPrefix: "sk_unio_test",
+			KeyPrefix: "sk-unio-test",
 		},
 	}
 	handle := newTestRouter(authenticator, nil, nil)
@@ -195,7 +195,7 @@ func TestRouterNotFound(t *testing.T) {
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
 			UserID:    1,
-			KeyPrefix: "sk_unio_test",
+			KeyPrefix: "sk-unio-test",
 		},
 	}
 	handle := newTestRouter(authenticator, nil, nil)
@@ -231,7 +231,7 @@ func TestRouterNotFound(t *testing.T) {
 
 func TestRouterLegacyCircuitBreakerOriginIsGone(t *testing.T) {
 	authenticator := &routerTestAPIKeyAuthenticator{
-		principal: &auth.APIKeyPrincipal{APIKeyID: 1, UserID: 1, KeyPrefix: "sk_unio_test"},
+		principal: &auth.APIKeyPrincipal{APIKeyID: 1, UserID: 1, KeyPrefix: "sk-unio-test"},
 	}
 	handle := newTestRouter(authenticator, nil, nil)
 
@@ -287,7 +287,7 @@ func TestRouterMethodNotAllowed(t *testing.T) {
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
 			UserID:    1,
-			KeyPrefix: "sk_unio_test",
+			KeyPrefix: "sk-unio-test",
 		},
 	}
 	handle := newTestRouter(authenticator, nil, nil)
@@ -324,7 +324,7 @@ func TestRouterMethodNotAllowed(t *testing.T) {
 // routerWithPrincipal 创建一个认证通过的测试 router，用于验证 /responses* 路由注册。
 func routerWithPrincipal() http.Handler {
 	authenticator := &routerTestAPIKeyAuthenticator{
-		principal: &auth.APIKeyPrincipal{APIKeyID: 1, UserID: 1, KeyPrefix: "sk_unio_test"},
+		principal: &auth.APIKeyPrincipal{APIKeyID: 1, UserID: 1, KeyPrefix: "sk-unio-test"},
 	}
 	return newTestRouter(authenticator, nil, nil)
 }
@@ -358,7 +358,7 @@ func TestRouterResponsesStatelessUnsupported(t *testing.T) {
 	}
 	for _, tc := range cases {
 		req := httptest.NewRequest(tc.method, tc.path, nil)
-		req.Header.Set("Authorization", "Bearer sk_unio_test")
+		req.Header.Set("Authorization", "Bearer sk-unio-test")
 		rec := httptest.NewRecorder()
 		handle.ServeHTTP(rec, req)
 
@@ -375,7 +375,7 @@ func TestRouterResponsesBackgroundRejected(t *testing.T) {
 	handle := routerWithPrincipal()
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"m","input":"hi","background":true}`))
-	req.Header.Set("Authorization", "Bearer sk_unio_test")
+	req.Header.Set("Authorization", "Bearer sk-unio-test")
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	handle.ServeHTTP(rec, req)
@@ -394,7 +394,7 @@ func TestRouterResponsesCompactAndInputTokensRegistered(t *testing.T) {
 	// 路由已注册：非法 body 在 handler 内校验失败返回 400（不触达 nil service）。
 	for _, path := range []string{"/v1/responses/compact", "/v1/responses/input_tokens"} {
 		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"model":""}`))
-		req.Header.Set("Authorization", "Bearer sk_unio_test")
+		req.Header.Set("Authorization", "Bearer sk-unio-test")
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
 		handle.ServeHTTP(rec, req)
@@ -410,7 +410,7 @@ func TestRouterResponsesCompactAndInputTokensRegistered(t *testing.T) {
 
 func TestRouterPositiveBalanceGateCoversOnlyBillableGenerationRoutes(t *testing.T) {
 	authenticator := &routerTestAPIKeyAuthenticator{
-		principal: &auth.APIKeyPrincipal{APIKeyID: 1, UserID: 42, KeyPrefix: "sk_unio_test"},
+		principal: &auth.APIKeyPrincipal{APIKeyID: 1, UserID: 42, KeyPrefix: "sk-unio-test"},
 	}
 	checker := &routerTestPositiveBalanceChecker{eligibility: ledger.BalanceEligibilityInsufficient}
 	handler := NewRouter(RouterDeps{
@@ -432,7 +432,7 @@ func TestRouterPositiveBalanceGateCoversOnlyBillableGenerationRoutes(t *testing.
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(`{`))
-			req.Header.Set("Authorization", "Bearer sk_unio_test")
+			req.Header.Set("Authorization", "Bearer sk-unio-test")
 			rec := httptest.NewRecorder()
 			handler.ServeHTTP(rec, req)
 
@@ -462,7 +462,7 @@ func TestRouterPositiveBalanceGateCoversOnlyBillableGenerationRoutes(t *testing.
 	}
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses/input_tokens", strings.NewReader(`{`))
-	req.Header.Set("Authorization", "Bearer sk_unio_test")
+	req.Header.Set("Authorization", "Bearer sk-unio-test")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -478,7 +478,7 @@ func TestRouterRequestID(t *testing.T) {
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
 			UserID:    1,
-			KeyPrefix: "sk_unio_test",
+			KeyPrefix: "sk-unio-test",
 		},
 	}
 	handle := newTestRouter(authenticator, nil, nil)

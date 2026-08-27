@@ -2,7 +2,9 @@
 
 ## models.dev
 
-Model metadata sourced from [models.dev](https://models.dev) ([source repository](https://github.com/anomalyco/models.dev)).
+Model metadata and lab logos sourced from [models.dev](https://models.dev) ([source repository](https://github.com/anomalyco/models.dev)).
+
+Lab logos are trademarks of their respective owners and are displayed solely to identify the model vendor.
 
 Copyright (c) 2025 models.dev
 

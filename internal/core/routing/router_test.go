@@ -20,12 +20,13 @@ func testPriceRatio() pgtype.Numeric {
 
 // fakeStore 是 routing 测试使用的候选 channel 存储替身。
 type fakeStore struct {
-	params         sqlc.FindModelCandidatesParams
-	rows           []sqlc.FindModelCandidatesRow
-	err            error
-	modelExistsID  string
-	modelExists    bool
-	modelExistsErr error
+	params            sqlc.FindModelCandidatesParams
+	rows              []sqlc.FindModelCandidatesRow
+	err               error
+	qualParams        sqlc.ModelIngressQualificationParams
+	modelExists       bool
+	protocolSupported bool
+	modelExistsErr    error
 }
 
 // FindModelCandidates 记录查询参数，并返回测试预设候选结果。
@@ -56,10 +57,13 @@ func (s *fakeStore) FindModelCandidates(ctx context.Context, arg sqlc.FindModelC
 	return rows, s.err
 }
 
-// ModelExistsByID 记录模型存在性诊断参数，并返回测试预设结果。
-func (s *fakeStore) ModelExistsByID(ctx context.Context, requestedModelID string) (bool, error) {
-	s.modelExistsID = requestedModelID
-	return s.modelExists, s.modelExistsErr
+// ModelIngressQualification 记录资格判定参数，并返回测试预设结果。
+func (s *fakeStore) ModelIngressQualification(ctx context.Context, arg sqlc.ModelIngressQualificationParams) (sqlc.ModelIngressQualificationRow, error) {
+	s.qualParams = arg
+	return sqlc.ModelIngressQualificationRow{
+		ModelExists:       s.modelExists,
+		ProtocolSupported: s.protocolSupported,
+	}, s.modelExistsErr
 }
 
 func TestRouterPlanChatReturnsOrderedCandidates(t *testing.T) {
@@ -286,8 +290,8 @@ func TestRouterPlanChatReturnsNoAvailableChannel(t *testing.T) {
 	if !errors.Is(err, ErrNoAvailableChannel) {
 		t.Fatalf("expected ErrNoAvailableChannel, got %v", err)
 	}
-	if store.modelExistsID != "" {
-		t.Fatalf("PlanChat must not repeat qualification checks: model=%q", store.modelExistsID)
+	if store.qualParams != (sqlc.ModelIngressQualificationParams{}) {
+		t.Fatalf("PlanChat must not repeat qualification checks: params=%#v", store.qualParams)
 	}
 }
 
@@ -302,6 +306,44 @@ func TestRouterValidateChatReturnsModelNotFound(t *testing.T) {
 	})
 	if !errors.Is(err, ErrModelNotFound) {
 		t.Fatalf("expected ErrModelNotFound, got %v", err)
+	}
+}
+
+// 模型存在但没有配置能服务请求协议族的渠道（如用 OpenAI 协议调 Anthropic-only 模型）：
+// 必须在 request_records 创建之前以 protocol unsupported 拒绝，而不是放行到
+// PlanChat 后再以 no_available_channel 落进请求记录。
+func TestRouterValidateChatRejectsModelProtocolUnsupported(t *testing.T) {
+	store := &fakeStore{modelExists: true, protocolSupported: false}
+	router := NewRouter(store, 30*time.Second)
+
+	err := router.ValidateChat(context.Background(), ChatRouteRequest{
+		UserID:          42,
+		ModelID:         "claude-opus-4-8",
+		IngressProtocol: ProtocolOpenAI,
+		Endpoint:        EndpointChatCompletions,
+	})
+	if !errors.Is(err, ErrModelProtocolUnsupported) {
+		t.Fatalf("expected ErrModelProtocolUnsupported, got %v", err)
+	}
+	if got := failure.CodeOf(err); got != failure.CodeRoutingModelProtocolUnsupported {
+		t.Fatalf("expected code %q, got %q", failure.CodeRoutingModelProtocolUnsupported, got)
+	}
+	if store.qualParams.RequestedModelID != "claude-opus-4-8" || store.qualParams.IngressProtocol != ProtocolOpenAI {
+		t.Fatalf("qualification params not forwarded: %#v", store.qualParams)
+	}
+}
+
+func TestRouterValidateChatPassesWhenProtocolSupported(t *testing.T) {
+	store := &fakeStore{modelExists: true, protocolSupported: true}
+	router := NewRouter(store, 30*time.Second)
+
+	if err := router.ValidateChat(context.Background(), ChatRouteRequest{
+		UserID:          42,
+		ModelID:         "claude-opus-4-8",
+		IngressProtocol: ProtocolAnthropic,
+		Endpoint:        EndpointMessages,
+	}); err != nil {
+		t.Fatalf("expected qualification to pass, got %v", err)
 	}
 }
 

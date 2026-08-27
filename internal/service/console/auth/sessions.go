@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -17,6 +18,22 @@ const (
 	accessTokenType  = "access"
 	refreshTokenType = "refresh"
 )
+
+// SessionMeta 是创建会话时记录的客户端上下文，供「登录会话」页展示。
+type SessionMeta struct {
+	IP        string
+	UserAgent string
+}
+
+// SessionInfo 是一条活跃会话的展示视图。
+// 老会话（扩展元数据前创建）没有 IP / UA / 时间，字段为零值，前端显示「未知设备」。
+type SessionInfo struct {
+	SID        string
+	IP         string
+	UserAgent  string
+	CreatedAt  time.Time
+	LastSeenAt time.Time
+}
 
 type tokenClaims struct {
 	SessionID string `json:"sid"`
@@ -63,15 +80,21 @@ func NewSessionManager(redisClient redis.Cmdable, keyNS, secret string, accessTT
 }
 
 // Create 存储刷新会话并返回首个令牌对。
-func (m *SessionManager) Create(ctx context.Context, userUID string) (TokenPair, *consoleservice.Error) {
+// 客户端上下文（IP / UA / 时间）一并写入，供「登录会话」列表展示。
+func (m *SessionManager) Create(ctx context.Context, userUID string, meta SessionMeta) (TokenPair, *consoleservice.Error) {
 	if _, err := uuid.Parse(userUID); err != nil {
 		return TokenPair{}, &consoleservice.Error{Code: CodeSessionInvalid, Message: "The user identifier is invalid.", Status: 401, Cause: err}
 	}
 	sid := uuid.NewString()
 	refreshJTI := uuid.NewString()
+	nowMs := m.now().UTC().UnixMilli()
 	if err := m.redis.HSet(ctx, m.sessionKey(sid), map[string]any{
-		"user_uid":    userUID,
-		"refresh_jti": refreshJTI,
+		"user_uid":     userUID,
+		"refresh_jti":  refreshJTI,
+		"ip":           meta.IP,
+		"user_agent":   meta.UserAgent,
+		"created_at":   nowMs,
+		"last_seen_at": nowMs,
 	}).Err(); err != nil {
 		return TokenPair{}, requestUnavailable("create refresh session", err)
 	}
@@ -89,13 +112,14 @@ func (m *SessionManager) Create(ctx context.Context, userUID string) (TokenPair,
 }
 
 // rotateRefreshScript 保证每个刷新 JTI 仅使用一次，并在同一原子操作中延长对应 Redis 会话。
+// last_seen_at 顺带在这里刷新：refresh 是会话「还活着」的唯一常规信号。
 var rotateRefreshScript = redis.NewScript(`
 local current = redis.call('HGET', KEYS[1], 'refresh_jti')
 local user_uid = redis.call('HGET', KEYS[1], 'user_uid')
 if not current or not user_uid or current ~= ARGV[1] or user_uid ~= ARGV[3] then
   return 0
 end
-redis.call('HSET', KEYS[1], 'refresh_jti', ARGV[2])
+redis.call('HSET', KEYS[1], 'refresh_jti', ARGV[2], 'last_seen_at', ARGV[5])
 redis.call('PEXPIRE', KEYS[1], ARGV[4])
 return 1
 `)
@@ -118,6 +142,7 @@ func (m *SessionManager) Refresh(ctx context.Context, rawToken string) (TokenPai
 		newJTI,
 		claims.Subject,
 		m.refreshTTL.Milliseconds(),
+		m.now().UTC().UnixMilli(),
 	).Int64()
 	if err != nil {
 		return TokenPair{}, requestUnavailable("rotate refresh session", err)
@@ -193,6 +218,113 @@ func (m *SessionManager) RevokeUser(ctx context.Context, userUID string) *consol
 		return requestUnavailable("logout all sessions", err)
 	}
 	return nil
+}
+
+// RevokeUserExcept 吊销该用户除 keepSID 外的全部会话。改密码后踢掉其他设备用。
+func (m *SessionManager) RevokeUserExcept(ctx context.Context, userUID, keepSID string) *consoleservice.Error {
+	sessions, err := m.redis.SMembers(ctx, m.userSessionsKey(userUID)).Result()
+	if err != nil {
+		return requestUnavailable("list user sessions", err)
+	}
+	pipe := m.redis.Pipeline()
+	for _, sid := range sessions {
+		if sid == keepSID {
+			continue
+		}
+		pipe.Del(ctx, m.sessionKey(sid))
+		pipe.SRem(ctx, m.userSessionsKey(userUID), sid)
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return requestUnavailable("logout other sessions", err)
+	}
+	return nil
+}
+
+// RevokeSession 吊销该用户名下的一个指定会话；sid 不属于该用户时按无操作处理，
+// 不向调用方泄露其他用户会话是否存在。
+func (m *SessionManager) RevokeSession(ctx context.Context, userUID, sid string) *consoleservice.Error {
+	owner, err := m.redis.HGet(ctx, m.sessionKey(sid), "user_uid").Result()
+	if errors.Is(err, redis.Nil) {
+		// 会话已经不存在：把可能残留的索引一并清掉。
+		_ = m.redis.SRem(ctx, m.userSessionsKey(userUID), sid).Err()
+		return nil
+	}
+	if err != nil {
+		return requestUnavailable("read session owner", err)
+	}
+	if owner != userUID {
+		return nil
+	}
+	pipe := m.redis.Pipeline()
+	pipe.Del(ctx, m.sessionKey(sid))
+	pipe.SRem(ctx, m.userSessionsKey(userUID), sid)
+	if _, err := pipe.Exec(ctx); err != nil {
+		return requestUnavailable("revoke session", err)
+	}
+	return nil
+}
+
+// ListSessions 返回该用户当前活跃的全部会话，按创建时间倒序。
+// 顺带清理索引集合里已过期的 sid，避免集合越积越大。
+func (m *SessionManager) ListSessions(ctx context.Context, userUID string) ([]SessionInfo, *consoleservice.Error) {
+	sids, err := m.redis.SMembers(ctx, m.userSessionsKey(userUID)).Result()
+	if err != nil {
+		return nil, requestUnavailable("list user sessions", err)
+	}
+	sessions := make([]SessionInfo, 0, len(sids))
+	var stale []string
+	for _, sid := range sids {
+		fields, hErr := m.redis.HGetAll(ctx, m.sessionKey(sid)).Result()
+		if hErr != nil {
+			return nil, requestUnavailable("read session", hErr)
+		}
+		if len(fields) == 0 || fields["user_uid"] != userUID {
+			stale = append(stale, sid)
+			continue
+		}
+		sessions = append(sessions, SessionInfo{
+			SID:        sid,
+			IP:         fields["ip"],
+			UserAgent:  fields["user_agent"],
+			CreatedAt:  msTime(fields["created_at"]),
+			LastSeenAt: msTime(fields["last_seen_at"]),
+		})
+	}
+	if len(stale) > 0 {
+		members := make([]any, len(stale))
+		for i, sid := range stale {
+			members[i] = sid
+		}
+		_ = m.redis.SRem(ctx, m.userSessionsKey(userUID), members...).Err()
+	}
+	// 新会话排前面；没有时间的老会话沉底。
+	for i := 1; i < len(sessions); i++ {
+		for j := i; j > 0 && sessions[j].CreatedAt.After(sessions[j-1].CreatedAt); j-- {
+			sessions[j], sessions[j-1] = sessions[j-1], sessions[j]
+		}
+	}
+	return sessions, nil
+}
+
+// SessionIDFromAccessToken 解析访问令牌里的会话 ID。
+// 只做解析不查 Redis：调用方必须已经用 Authenticate 校验过令牌有效性。
+func (m *SessionManager) SessionIDFromAccessToken(rawToken string) (string, *consoleservice.Error) {
+	claims, err := m.parse(rawToken, accessTokenType)
+	if err != nil {
+		return "", sessionInvalid(err)
+	}
+	return claims.SessionID, nil
+}
+
+func msTime(raw string) time.Time {
+	if raw == "" {
+		return time.Time{}
+	}
+	ms, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || ms <= 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(ms).UTC()
 }
 
 func (m *SessionManager) issuePair(userUID, sid, refreshJTI string) (TokenPair, *consoleservice.Error) {

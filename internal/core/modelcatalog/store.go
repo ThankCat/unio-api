@@ -82,18 +82,35 @@ func (s *syncQueriesStore) UpsertCatalogEntry(ctx context.Context, model Canonic
 	if err != nil {
 		return catalogFailure(err, "parse output price")
 	}
+	cacheReadPrice, err := numericFromDecimal(model.CacheReadPrice)
+	if err != nil {
+		return catalogFailure(err, "parse cache read price")
+	}
+	cacheWritePrice, err := numericFromDecimal(model.CacheWritePrice)
+	if err != nil {
+		return catalogFailure(err, "parse cache write price")
+	}
 
 	if _, err := s.queries.UpsertModelCatalogEntry(ctx, sqlc.UpsertModelCatalogEntryParams{
-		CanonicalID:                    model.CanonicalID,
-		Lab:                            model.Lab,
-		Family:                         model.Family,
-		DisplayName:                    model.DisplayName,
-		ContextWindowTokens:            int8Value(model.ContextTokens),
-		MaxOutputTokens:                int8Value(model.MaxOutputTokens),
-		InputPriceUsdPerMillionTokens:  inputPrice,
-		OutputPriceUsdPerMillionTokens: outputPrice,
-		ReleaseDate:                    dateValue(model.ReleaseDate),
-		Fingerprint:                    model.Fingerprint,
+		CanonicalID:                        model.CanonicalID,
+		Lab:                                model.Lab,
+		Family:                             model.Family,
+		DisplayName:                        model.DisplayName,
+		Description:                        model.Description,
+		KnowledgeCutoff:                    model.KnowledgeCutoff,
+		ContextWindowTokens:                int8Value(model.ContextTokens),
+		InputLimitTokens:                   int8Value(model.InputLimitTokens),
+		MaxOutputTokens:                    int8Value(model.MaxOutputTokens),
+		InputPriceUsdPerMillionTokens:      inputPrice,
+		OutputPriceUsdPerMillionTokens:     outputPrice,
+		CacheReadPriceUsdPerMillionTokens:  cacheReadPrice,
+		CacheWritePriceUsdPerMillionTokens: cacheWritePrice,
+		OpenWeights:                        boolValue(model.OpenWeights),
+		ModalitiesInput:                    emptyIfNil(model.ModalitiesInput),
+		ModalitiesOutput:                   emptyIfNil(model.ModalitiesOutput),
+		ReleaseDate:                        dateValue(model.ReleaseDate),
+		LastUpdated:                        dateValue(model.LastUpdated),
+		Fingerprint:                        model.Fingerprint,
 	}); err != nil {
 		return catalogFailure(err, "upsert catalog entry")
 	}
@@ -210,6 +227,21 @@ func dateValue(value *time.Time) pgtype.Date {
 		return pgtype.Date{Valid: false}
 	}
 	return pgtype.Date{Time: *value, Valid: true}
+}
+
+func boolValue(value *bool) pgtype.Bool {
+	if value == nil {
+		return pgtype.Bool{Valid: false}
+	}
+	return pgtype.Bool{Bool: *value, Valid: true}
+}
+
+// emptyIfNil 把 nil 切片归一为空切片：text[] NOT NULL 列不接受 NULL 参数。
+func emptyIfNil(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	return values
 }
 
 func (s *syncQueriesStore) UpsertLab(ctx context.Context, slug string) error {

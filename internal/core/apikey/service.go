@@ -89,6 +89,7 @@ func (s *Service) Create(ctx context.Context, params CreateParams) (*CreatedKey,
 		UserID:    params.UserID,
 		Name:      name,
 		KeyPrefix: generatedKey.Prefix,
+		KeySuffix: pgtype.Text{String: generatedKey.Suffix, Valid: true},
 		KeyHash:   generatedKey.Hash,
 		ExpiresAt: expiresAt,
 	}

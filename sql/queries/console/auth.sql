@@ -35,3 +35,9 @@ UPDATE users
 SET password_hash = sqlc.arg(password_hash), updated_at = now()
 WHERE id = sqlc.arg(id)
 RETURNING id, uid, email, password_hash, display_name, status, created_at, updated_at;
+
+-- name: UpdateConsoleDisplayName :one
+UPDATE users
+SET display_name = sqlc.arg(display_name), updated_at = now()
+WHERE id = sqlc.arg(id)
+RETURNING id, uid, email, password_hash, display_name, status, created_at, updated_at;

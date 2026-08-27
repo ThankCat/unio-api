@@ -18,6 +18,8 @@ import (
 	consoleauth "github.com/ThankCat/unio-gateway/internal/service/console/auth"
 	consolerequests "github.com/ThankCat/unio-gateway/internal/service/console/requests"
 	consoleusage "github.com/ThankCat/unio-gateway/internal/service/console/usage"
+	consolewallet "github.com/ThankCat/unio-gateway/internal/service/console/wallet"
+	"github.com/ThankCat/unio-gateway/internal/service/publicmodels"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -127,6 +129,9 @@ func NewConsoleServerApp(ctx context.Context, deps ConsoleServerAppDeps) (*Conso
 		RequestService: consolerequests.NewService(queries),
 		UsageService:   consoleusage.NewService(queries),
 		APIKeyService:  consoleapikeys.NewService(queries),
+		WalletService:  consolewallet.NewService(queries),
+		ModelsService:  publicmodels.NewService(queries),
+		LabLogos:       queries,
 	})
 	if err != nil {
 		_ = tracerProvider.Shutdown(ctx)

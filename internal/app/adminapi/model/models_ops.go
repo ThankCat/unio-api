@@ -31,6 +31,8 @@ type modelOpsRowDTO struct {
 	OwnedBy                   string  `json:"owned_by"`
 	Status                    string  `json:"status"`
 	Family                    string  `json:"family"`
+	Description               string  `json:"description"`
+	KnowledgeCutoff           string  `json:"knowledge_cutoff"`
 	DisabledReason            *string `json:"disabled_reason"`
 	CreatedAt                 string  `json:"created_at"`
 	MaxOutputTokens           *int64  `json:"max_output_tokens"`
@@ -194,6 +196,8 @@ func (h *modelOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 			DisplayName:                         row.DisplayName,
 			OwnedBy:                             row.OwnedBy,
 			Family:                              row.Family,
+			Description:                         row.Description,
+			KnowledgeCutoff:                     row.KnowledgeCutoff,
 			DisabledReason:                      row.DisabledReason,
 			Status:                              row.Status,
 			CreatedAt:                           adminhttp.RFC3339(row.CreatedAt),

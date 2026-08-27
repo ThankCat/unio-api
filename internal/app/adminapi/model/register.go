@@ -57,5 +57,7 @@ func Register(r chi.Router, d Deps) {
 		// canonical_id 含 '/'，用通配段承载（如 /model-catalog/openai/gpt-4o）。
 		r.Get("/model-catalog/*", ch.get)
 		r.Post("/models/from-catalog", ch.adopt)
+		// 从目录刷新：目录最新值覆盖元数据+能力并更新追更基线（service 早已具备，此前一直没挂路由）。
+		r.Post("/models/{id}/catalog/refresh", ch.refresh)
 	}
 }

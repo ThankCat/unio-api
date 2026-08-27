@@ -56,6 +56,7 @@ type apiKeyDTO struct {
 	UserID     int64   `json:"user_id"`
 	Name       string  `json:"name"`
 	KeyPrefix  string  `json:"key_prefix"`
+	KeySuffix  *string `json:"key_suffix"`
 	Status     string  `json:"status"`
 	SpendLimit *string `json:"spend_limit"`
 	SpentTotal string  `json:"spent_total"`
@@ -221,6 +222,7 @@ func toAPIKeyDTO(k customer.APIKey) apiKeyDTO {
 		UserID:     k.UserID,
 		Name:       k.Name,
 		KeyPrefix:  k.KeyPrefix,
+		KeySuffix:  k.KeySuffix,
 		Status:     k.Status,
 		SpendLimit: k.SpendLimit,
 		SpentTotal: k.SpentTotal,

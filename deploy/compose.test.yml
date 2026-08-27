@@ -189,6 +189,29 @@ services:
       retries: 12
       start_period: 20s
 
+  website:
+    <<: *app-common
+    image: ${WEBSITE_IMAGE_REPOSITORY:-unio-website-server}:${WEBSITE_IMAGE_TAG:-unconfigured}
+    build:
+      <<: *app-build
+      target: website
+    expose:
+      - "8524"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "-q",
+          "-O",
+          "/dev/null",
+          "http://127.0.0.1:8524/healthz",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+
   worker:
     <<: *app-common
     image: ${WORKER_IMAGE_REPOSITORY}:${WORKER_IMAGE_TAG}

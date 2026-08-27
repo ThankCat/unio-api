@@ -53,6 +53,11 @@ var (
 	// ErrModelNotAvailable 表示模型存在但当前用户不允许使用。
 	ErrModelNotAvailable = errors.New("model not available for user")
 
+	// ErrModelProtocolUnsupported 表示模型配置过供给，但请求的入口协议族不在其
+	// （未归档）供给协议集合内，属于客户端用错协议（如用 OpenAI 协议调只有
+	// Anthropic 渠道的模型）。
+	ErrModelProtocolUnsupported = errors.New("model does not support requested ingress protocol")
+
 	// ErrChannelCredentialMissing 表示 channel 未配置上游凭据。
 	ErrChannelCredentialMissing = errors.New("channel credential missing")
 
@@ -152,14 +157,16 @@ type ChatRoutePlan struct {
 
 // Store 定义 routing 查询候选渠道所需的最小数据库能力。
 type Store interface {
-	ModelExistsByID(ctx context.Context, requestedModelID string) (bool, error)
+	ModelIngressQualification(ctx context.Context, arg sqlc.ModelIngressQualificationParams) (sqlc.ModelIngressQualificationRow, error)
 	FindModelCandidates(ctx context.Context, arg sqlc.FindModelCandidatesParams) ([]sqlc.FindModelCandidatesRow, error)
 }
 
-// ValidateChat 在持久 request 生命周期开始前校验模型产品资格。
-// 供给的根是 Model：模型 enabled 即对外可售（该状态由供给不变量保证至少有一条可用渠道），
-// 因此这里只校验协议与模型存在，不再有线路售卖资格与用户级模型策略两道关卡。
-// 运行时能否打通由 PlanChat 的候选筛选负责。
+// ValidateChat 在持久 request 生命周期开始前校验模型产品资格：协议合法、模型存在，
+// 且请求协议属于该模型的产品面。「模型配置过供给、但请求协议不在其（未归档）供给协议
+// 集合内」属于客户端用错协议（如用 OpenAI 协议调只有 Anthropic 渠道的模型）：在这里
+// 拒绝就不会产生请求记录，只留 Warn 日志与拒绝指标。判定只看配置存在性，不看绑定/渠道
+// 启停等运行时供给——暂停供给或解绑到零供给仍保持 503 落库口径（ADR-0020），
+// 运行时能否打通仍由 PlanChat 的候选筛选负责。
 func (r *Router) ValidateChat(ctx context.Context, req ChatRouteRequest) error {
 	if !IsSupportedProtocol(req.IngressProtocol) {
 		return failure.Wrap(
@@ -170,19 +177,40 @@ func (r *Router) ValidateChat(ctx context.Context, req ChatRouteRequest) error {
 		)
 	}
 
-	exists, err := r.store.ModelExistsByID(ctx, req.ModelID)
+	qual, err := r.store.ModelIngressQualification(ctx, sqlc.ModelIngressQualificationParams{
+		RequestedModelID: req.ModelID,
+		IngressProtocol:  req.IngressProtocol,
+	})
 	if err != nil {
 		return failure.Wrap(
 			failure.CodeRoutingStoreFailed,
 			err,
-			failure.WithMessage("check model exists"),
+			failure.WithMessage("check model ingress qualification"),
 		)
 	}
-	if !exists {
+	if !qual.ModelExists {
 		return failure.Wrap(
 			failure.CodeRoutingModelNotFound,
 			ErrModelNotFound,
 			failure.WithMessage(ErrModelNotFound.Error()),
+		)
+	}
+	if !qual.ProtocolSupported {
+		fields := []zap.Field{
+			zap.String("requested_model", req.ModelID),
+			zap.String("ingress_protocol", req.IngressProtocol),
+			zap.String("endpoint", req.Endpoint),
+		}
+		if requestFields, ok := logfields.FromContext(ctx); ok {
+			fields = append(requestFields.ZapFields(), fields...)
+		}
+		logging.Warn(r.logger, "routing", "qualification",
+			"model requested via unsupported ingress protocol; client is likely calling the wrong API", fields...)
+		return failure.Wrap(
+			failure.CodeRoutingModelProtocolUnsupported,
+			ErrModelProtocolUnsupported,
+			failure.WithMessage(ErrModelProtocolUnsupported.Error()),
+			failure.WithField("ingress_protocol", req.IngressProtocol),
 		)
 	}
 

@@ -17,8 +17,8 @@ func TestGenerate(t *testing.T) {
 		t.Fatal("expected plaintext, prefix, and hash to be non-empty")
 	}
 
-	if !strings.HasPrefix(key.Plaintext, "sk_unio_") {
-		t.Fatal("expected plaintext to start with sk_unio_")
+	if !strings.HasPrefix(key.Plaintext, "sk-unio-") {
+		t.Fatal("expected plaintext to start with sk-unio-")
 	}
 
 	if len(key.Prefix) >= len(key.Plaintext) {
@@ -56,9 +56,9 @@ func TestGeneratePlaintextIsLowercaseBase36(t *testing.T) {
 		t.Fatalf("generate api key: %v", err)
 	}
 
-	random := strings.TrimPrefix(key.Plaintext, "sk_unio_")
+	random := strings.TrimPrefix(key.Plaintext, "sk-unio-")
 	if random == key.Plaintext {
-		t.Fatal("expected plaintext to start with sk_unio_")
+		t.Fatal("expected plaintext to start with sk-unio-")
 	}
 
 	for _, c := range random {
@@ -80,7 +80,7 @@ func TestGenerateCoversWholeAlphabet(t *testing.T) {
 		if err != nil {
 			t.Fatalf("generate api key: %v", err)
 		}
-		for _, c := range strings.TrimPrefix(key.Plaintext, "sk_unio_") {
+		for _, c := range strings.TrimPrefix(key.Plaintext, "sk-unio-") {
 			seen[c] = true
 		}
 	}

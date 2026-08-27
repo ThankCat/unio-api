@@ -387,6 +387,8 @@ WITH enriched AS (
         m.display_name,
         m.owned_by,
         m.status,
+        m.description,
+        m.knowledge_cutoff,
         m.max_output_tokens,
         m.context_window_tokens,
         m.input_price_usd_per_million_tokens,
@@ -459,12 +461,14 @@ WHERE (sqlc.narg('status')::text IS NULL OR m.status = sqlc.narg('status')::text
 
 -- name: CreateModel :one
 -- CreateModel 创建 admin 空白手建模型；source 固定 manual。
--- model_id 全局唯一由 DB 唯一约束保证；元数据（上下文/价格基线/发布日期）可选填，纯展示不参与计费（阶段 14 Q5）。
+-- model_id 全局唯一由 DB 唯一约束保证；元数据（上下文/价格基线/发布日期/简介/知识截止）可选填，纯展示不参与计费（阶段 14 Q5）。
 INSERT INTO models (
     model_id,
     display_name,
     owned_by,
     status,
+    description,
+    knowledge_cutoff,
     max_output_tokens,
     context_window_tokens,
     input_price_usd_per_million_tokens,
@@ -477,6 +481,8 @@ VALUES (
     sqlc.arg(display_name),
     sqlc.arg(owned_by),
     sqlc.arg(status),
+    sqlc.arg(description),
+    sqlc.arg(knowledge_cutoff),
     sqlc.narg(max_output_tokens),
     sqlc.narg(context_window_tokens),
     sqlc.narg(input_price_usd_per_million_tokens),
@@ -496,6 +502,8 @@ INSERT INTO models (
     owned_by,
     family,
     status,
+    description,
+    knowledge_cutoff,
     max_output_tokens,
     context_window_tokens,
     input_price_usd_per_million_tokens,
@@ -509,6 +517,8 @@ VALUES (
     sqlc.arg(owned_by),
     sqlc.arg(family),
     sqlc.arg(status),
+    sqlc.arg(description),
+    sqlc.arg(knowledge_cutoff),
     sqlc.narg(max_output_tokens),
     sqlc.narg(context_window_tokens),
     sqlc.narg(input_price_usd_per_million_tokens),
@@ -520,11 +530,13 @@ RETURNING *;
 
 -- name: UpdateModel :one
 -- UpdateModel 更新 model 的展示元数据与启停状态；model_id 作为对外稳定标识不可变，source 不在此修改。
--- 元数据（上下文/价格基线/发布日期）可编辑，也可被「从目录刷新」覆盖；纯展示不参与计费。
+-- 元数据（上下文/价格基线/发布日期/简介/知识截止）可编辑，也可被「从目录刷新」覆盖；纯展示不参与计费。
 UPDATE models
 SET display_name = sqlc.arg(display_name),
     owned_by = sqlc.arg(owned_by),
     status = sqlc.arg(status),
+    description = sqlc.arg(description),
+    knowledge_cutoff = sqlc.arg(knowledge_cutoff),
     max_output_tokens = sqlc.narg(max_output_tokens),
     context_window_tokens = sqlc.narg(context_window_tokens),
     input_price_usd_per_million_tokens = sqlc.narg(input_price_usd_per_million_tokens),
@@ -541,6 +553,8 @@ UPDATE models
 SET display_name = sqlc.arg(display_name),
     owned_by = sqlc.arg(owned_by),
     family = sqlc.arg(family),
+    description = sqlc.arg(description),
+    knowledge_cutoff = sqlc.arg(knowledge_cutoff),
     max_output_tokens = sqlc.narg(max_output_tokens),
     context_window_tokens = sqlc.narg(context_window_tokens),
     input_price_usd_per_million_tokens = sqlc.narg(input_price_usd_per_million_tokens),
@@ -558,19 +572,35 @@ WHERE model_id = sqlc.arg(model_id);
 
 -- name: DeleteModelCascade :execrows
 -- DeleteModelCascade 物理删除 model，用于清理录错且从未使用的脏数据，并在同一条语句内
--- 级联清理 model 自身的配置子表：model_prices（基准售价）、channel_prices（渠道-模型成本价）、
+-- 级联清理 model 自身的配置子表：model_prices（基准售价）及其 Fast 档子行（model_price_service_tiers）、
+-- channel_prices（渠道-模型成本价）及其 Fast 档子行（channel_price_service_tiers）、
 -- channel_models（模型绑定）、channel_cost_multipliers 的逐模型覆盖行（model_id=本 model，DEC-027）；
--- model_capabilities、user_model_policies、model_catalog_links 由 ON DELETE CASCADE 自动清理，无需在此显式删除。
+-- model_capabilities、model_catalog_links 由 ON DELETE CASCADE 自动清理，无需在此显式删除。
 -- 这些价格/绑定/倍率覆盖表都是追加式配置（无删除接口，只能停用），若不在此一并清理，任何配过价/倍率覆盖的
 -- model 都会被自身配置行永久挡住删除（均无请求/账务语义，属纯配置）。
+-- 运维观测数据同样不该挡住删除：channel_model_verification_items（渠道模型验证结果）随模型一并删除；
+-- provider_probe_records 是不可变探测事实、可能被 provider_ledger_entries（探测成本）引用，不删行，
+-- 仅把可空的 model_id 置 NULL 解除归因，渠道级事实（upstream_model 文本、成本）原样保留。
 -- 注意 channel_cost_multipliers.model_id 可空：NULL=渠道默认倍率（对全部模型生效，不随单个 model 删除），
 -- 非空=对本 model 的覆盖；WHERE model_id = id 只删覆盖行，渠道默认行保留不动。
 -- 外键均为默认 NO ACTION（约束在语句末校验），故 CTE 删子表 + 删主体在单条语句内原子完成：
 -- 子配置先删除，语句末 models 的删除不会留下悬挂引用。若 model 或其子配置仍被请求/账务快照
 -- （cost_snapshots/price_snapshots/settlement_recovery_jobs 等）引用，整条语句报 23503 全部回滚，
 -- 上层降级为 conflict，提示改用停用——保住计费/审计链路。返回值为 models 行的受影响数（0 表示 model 不存在）。
-WITH deleted_model_prices AS (
+WITH deleted_model_price_service_tiers AS (
+    DELETE FROM model_price_service_tiers
+    WHERE model_price_service_tiers.model_price_id IN (
+        SELECT model_prices.id FROM model_prices WHERE model_prices.model_id = sqlc.arg(id)
+    )
+),
+deleted_model_prices AS (
     DELETE FROM model_prices WHERE model_prices.model_id = sqlc.arg(id)
+),
+deleted_channel_price_service_tiers AS (
+    DELETE FROM channel_price_service_tiers
+    WHERE channel_price_service_tiers.channel_price_id IN (
+        SELECT channel_prices.id FROM channel_prices WHERE channel_prices.model_id = sqlc.arg(id)
+    )
 ),
 deleted_channel_prices AS (
     DELETE FROM channel_prices WHERE channel_prices.model_id = sqlc.arg(id)
@@ -580,6 +610,12 @@ deleted_channel_models AS (
 ),
 deleted_channel_cost_multiplier_overrides AS (
     DELETE FROM channel_cost_multipliers WHERE channel_cost_multipliers.model_id = sqlc.arg(id)
+),
+deleted_verification_items AS (
+    DELETE FROM channel_model_verification_items WHERE channel_model_verification_items.model_id = sqlc.arg(id)
+),
+detached_probe_records AS (
+    UPDATE provider_probe_records SET model_id = NULL WHERE provider_probe_records.model_id = sqlc.arg(id)
 )
 DELETE FROM models WHERE models.id = sqlc.arg(id);
 
@@ -621,6 +657,8 @@ SELECT
     m.owned_by,
     m.status,
     m.family,
+    m.description,
+    m.knowledge_cutoff,
     m.disabled_reason,
     m.created_at,
     m.max_output_tokens,

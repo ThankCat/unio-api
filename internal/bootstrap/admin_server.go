@@ -323,6 +323,7 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		CapabilitySeedService: capabilitySeedService,
 
 		CatalogService: modelCatalogAdminService,
+		LabLogos:       queries,
 
 		DashboardService:   dashboardService,
 		LiveTrafficService: modelRoutingService,

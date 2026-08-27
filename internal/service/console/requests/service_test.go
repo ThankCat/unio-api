@@ -81,7 +81,7 @@ func TestListMapsCustomerSafeFieldsAndScopesToUser(t *testing.T) {
 			ClientIp:                pgtype.Text{String: "203.0.113.10", Valid: true},
 			ApiKeyID:                9,
 			ApiKeyName:              pgtype.Text{String: "prod", Valid: true},
-			ApiKeyPrefix:            pgtype.Text{String: "sk_unio_xhe8wl5d", Valid: true},
+			ApiKeyPrefix:            pgtype.Text{String: "sk-unio-xhe8wl5d", Valid: true},
 			Endpoint:                "chat_completions",
 			Stream:                  true,
 			RequestedModelID:        "claude-sonnet-4-5",
@@ -132,7 +132,7 @@ func TestListMapsCustomerSafeFieldsAndScopesToUser(t *testing.T) {
 		t.Fatalf("item = %+v", item)
 	}
 	// 请求列表只给前缀：明文不落库，这条链路上再也没有可回显的明文。
-	if item.APIKeyPrefix != "sk_unio_xhe8wl5d" {
+	if item.APIKeyPrefix != "sk-unio-xhe8wl5d" {
 		t.Fatalf("api key prefix = %q", item.APIKeyPrefix)
 	}
 	if item.LatencyMs == nil || *item.LatencyMs != 1500 {

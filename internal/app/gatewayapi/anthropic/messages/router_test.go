@@ -41,7 +41,7 @@ func newMessagesAuthenticator() *fakeMessagesAuthenticator {
 		principal: &auth.APIKeyPrincipal{
 			APIKeyID:  1,
 			UserID:    1,
-			KeyPrefix: "sk_unio_test",
+			KeyPrefix: "sk-unio-test",
 		},
 	}
 }
@@ -182,7 +182,7 @@ func encodeMessageBody(t *testing.T, stream bool) *bytes.Buffer {
 // newMessagesRequest 构造一个带合法 x-api-key 与 anthropic-version 的 /v1/messages 请求。
 func newMessagesRequest(body io.Reader) *http.Request {
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages", body)
-	req.Header.Set("x-api-key", "sk_unio_test")
+	req.Header.Set("x-api-key", "sk-unio-test")
 	req.Header.Set("anthropic-version", "2023-06-01")
 	return req
 }
@@ -247,7 +247,7 @@ func TestRouterV1MessagesWithBearerAPIKey(t *testing.T) {
 	handler := newMessagesTestRouter(newMessagesAuthenticator(), &fakeMessagesService{}, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages", encodeMessageBody(t, false))
-	req.Header.Set("Authorization", "Bearer sk_unio_test")
+	req.Header.Set("Authorization", "Bearer sk-unio-test")
 	req.Header.Set("anthropic-version", "2023-06-01")
 	rec := httptest.NewRecorder()
 
@@ -263,7 +263,7 @@ func TestRouterV1MessagesMissingAnthropicVersion(t *testing.T) {
 	handler := newMessagesTestRouter(newMessagesAuthenticator(), service, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages", encodeMessageBody(t, false))
-	req.Header.Set("x-api-key", "sk_unio_test")
+	req.Header.Set("x-api-key", "sk-unio-test")
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -289,7 +289,7 @@ func TestRouterV1MessagesUnsupportedAnthropicVersion(t *testing.T) {
 	handler := newMessagesTestRouter(newMessagesAuthenticator(), service, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages", encodeMessageBody(t, false))
-	req.Header.Set("x-api-key", "sk_unio_test")
+	req.Header.Set("x-api-key", "sk-unio-test")
 	req.Header.Set("anthropic-version", "1999-01-01")
 	rec := httptest.NewRecorder()
 
@@ -312,7 +312,7 @@ func TestRouterV1MessagesInvalidBody(t *testing.T) {
 	handler := newMessagesTestRouter(newMessagesAuthenticator(), &fakeMessagesService{}, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader("{"))
-	req.Header.Set("x-api-key", "sk_unio_test")
+	req.Header.Set("x-api-key", "sk-unio-test")
 	req.Header.Set("anthropic-version", "2023-06-01")
 	rec := httptest.NewRecorder()
 
@@ -372,6 +372,28 @@ func TestRouterV1MessagesMapsModelNotFound(t *testing.T) {
 	}
 	if !strings.Contains(body.Error.Message, "claude-sonnet-4") {
 		t.Fatalf("expected message to mention model, got %q", body.Error.Message)
+	}
+}
+
+// 模型存在但没有 Anthropic 协议面（如用 Anthropic 协议调 OpenAI-only 模型）：
+// 404 + 协议不匹配文案，而不是 503「临时不可用」。
+func TestRouterV1MessagesMapsModelProtocolUnsupported(t *testing.T) {
+	service := &fakeMessagesService{err: routing.ErrModelProtocolUnsupported}
+	handler := newMessagesTestRouter(newMessagesAuthenticator(), service, nil)
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, newMessagesRequest(encodeMessageBody(t, false)))
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected status %d, got %d", http.StatusNotFound, rec.Code)
+	}
+
+	body := decodeAnthropicError(t, rec.Body)
+	if body.Error.Type != "not_found_error" {
+		t.Fatalf("expected error type %q, got %q", "not_found_error", body.Error.Type)
+	}
+	if !strings.Contains(body.Error.Message, "not accessible via the Anthropic Messages API") {
+		t.Fatalf("expected protocol mismatch message, got %q", body.Error.Message)
 	}
 }
 

@@ -27,6 +27,7 @@ type userOpsRowDTO struct {
 	ID                  int64   `json:"id"`
 	Email               string  `json:"email"`
 	DisplayName         string  `json:"display_name"`
+	Status              string  `json:"status"`
 	BalanceUSD          string  `json:"balance_usd"`
 	ReservedUSD         string  `json:"reserved_usd"`
 	AvailableUSD        string  `json:"available_usd"`
@@ -59,9 +60,10 @@ type apiKeysOpsSummaryDTO struct {
 }
 
 type apiKeyOpsRowDTO struct {
-	ID        int64  `json:"id"`
-	Name      string `json:"name"`
-	KeyPrefix string `json:"key_prefix"`
+	ID        int64   `json:"id"`
+	Name      string  `json:"name"`
+	KeyPrefix string  `json:"key_prefix"`
+	KeySuffix *string `json:"key_suffix"`
 	// 没有 key_plaintext：明文只在创建响应里出现一次，运维排查靠 key_prefix 比对。
 	UserID         int64   `json:"user_id"`
 	Status         string  `json:"status"`
@@ -103,6 +105,7 @@ func (h *customerOpsHandler) usersTable(w http.ResponseWriter, r *http.Request) 
 		From:      from,
 		To:        to,
 		Search:    adminhttp.QueryString(r, "search"),
+		Status:    adminhttp.QueryString(r, "status"),
 		SortField: field,
 		SortDesc:  desc,
 		Limit:     page.Limit(),
@@ -115,7 +118,7 @@ func (h *customerOpsHandler) usersTable(w http.ResponseWriter, r *http.Request) 
 	out := make([]userOpsRowDTO, 0, len(rows))
 	for _, u := range rows {
 		out = append(out, userOpsRowDTO{
-			ID: u.ID, Email: u.Email, DisplayName: u.DisplayName, BalanceUSD: u.BalanceUSD, ReservedUSD: u.ReservedUSD,
+			ID: u.ID, Email: u.Email, DisplayName: u.DisplayName, Status: u.Status, BalanceUSD: u.BalanceUSD, ReservedUSD: u.ReservedUSD,
 			AvailableUSD: u.AvailableUSD, KeyTotal: u.KeyTotal, RequestTotal: u.RequestTotal,
 			Succeeded: u.Succeeded, SuccessRate: u.SuccessRate, ConsumptionUSD: u.ConsumptionUSD,
 			TotalConsumptionUSD: u.TotalConsumptionUSD, TotalTopupUSD: u.TotalTopupUSD,
@@ -202,7 +205,7 @@ func (h *customerOpsHandler) apiKeysTable(w http.ResponseWriter, r *http.Request
 	out := make([]apiKeyOpsRowDTO, 0, len(rows))
 	for _, k := range rows {
 		out = append(out, apiKeyOpsRowDTO{
-			ID: k.ID, Name: k.Name, KeyPrefix: k.KeyPrefix, UserID: k.UserID, Status: k.Status,
+			ID: k.ID, Name: k.Name, KeyPrefix: k.KeyPrefix, KeySuffix: k.KeySuffix, UserID: k.UserID, Status: k.Status,
 			SpendLimit: k.SpendLimit, SpentTotal: k.SpentTotal,
 			RequestTotal: k.RequestTotal, Succeeded: k.Succeeded, SuccessRate: k.SuccessRate,
 			ConsumptionUSD: k.ConsumptionUSD, LastUsedAt: adminhttp.RFC3339Ptr(k.LastUsedAt), ExpiresAt: adminhttp.RFC3339Ptr(k.ExpiresAt),

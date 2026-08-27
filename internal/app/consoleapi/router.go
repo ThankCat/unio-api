@@ -11,9 +11,11 @@ import (
 	consoleauth "github.com/ThankCat/unio-gateway/internal/app/consoleapi/auth"
 	consolemeta "github.com/ThankCat/unio-gateway/internal/app/consoleapi/meta"
 	consolemiddleware "github.com/ThankCat/unio-gateway/internal/app/consoleapi/middleware"
+	consolemodels "github.com/ThankCat/unio-gateway/internal/app/consoleapi/models"
 	consolerequests "github.com/ThankCat/unio-gateway/internal/app/consoleapi/requests"
 	"github.com/ThankCat/unio-gateway/internal/app/consoleapi/transport"
 	consoleusage "github.com/ThankCat/unio-gateway/internal/app/consoleapi/usage"
+	consolewallet "github.com/ThankCat/unio-gateway/internal/app/consoleapi/wallet"
 	"github.com/ThankCat/unio-gateway/internal/platform/config"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpmw"
 	consoleservice "github.com/ThankCat/unio-gateway/internal/service/console"
@@ -27,6 +29,11 @@ type Deps struct {
 	RequestService consolerequests.Service
 	UsageService   consoleusage.Service
 	APIKeyService  consoleapikeys.Service
+	WalletService  consolewallet.Service
+	// ModelsService 提供公开模型目录（与 website 共享的查询服务）。
+	ModelsService consolemodels.Service
+	// LabLogos 提供模型出品方图标（公开展示资产）；nil 时不挂图标路由。
+	LabLogos consolemeta.LabLogoStore
 }
 
 // NewRouter 构建公开的 Console API 路由及其公共中间件。
@@ -69,12 +76,13 @@ func NewRouter(deps Deps) (http.Handler, error) {
 			Service:      deps.AuthService,
 			ErrorWriter:  errorWriter,
 		})
-		// 接入元信息只读进程配置，不查库也不需要身份：用户在登录页就该能看到往哪儿发请求。
+		// 接入元信息不需要身份：用户在登录页就该能看到往哪儿发请求；出品方图标是公开展示资产。
 		consolemeta.Register(r, consolemeta.Deps{
 			GatewayPublicBaseURL: deps.Config.GatewayPublicBaseURL,
 			DocsBaseURL:          deps.Config.DocsBaseURL,
+			LabLogos:             deps.LabLogos,
 		})
-		if deps.RequestService != nil || deps.UsageService != nil || deps.APIKeyService != nil {
+		if deps.RequestService != nil || deps.UsageService != nil || deps.APIKeyService != nil || deps.WalletService != nil || deps.ModelsService != nil {
 			r.Group(func(r chi.Router) {
 				r.Use(consoleauth.RequireAuth(deps.AuthService, errorWriter))
 				if deps.RequestService != nil {
@@ -92,6 +100,18 @@ func NewRouter(deps Deps) (http.Handler, error) {
 				if deps.APIKeyService != nil {
 					consoleapikeys.Register(r, consoleapikeys.Deps{
 						Service:     deps.APIKeyService,
+						ErrorWriter: errorWriter,
+					})
+				}
+				if deps.WalletService != nil {
+					consolewallet.Register(r, consolewallet.Deps{
+						Service:     deps.WalletService,
+						ErrorWriter: errorWriter,
+					})
+				}
+				if deps.ModelsService != nil {
+					consolemodels.Register(r, consolemodels.Deps{
+						Service:     deps.ModelsService,
 						ErrorWriter: errorWriter,
 					})
 				}

@@ -33,6 +33,8 @@ const (
 	CodePasswordTooLong = "auth_password_too_long"
 	// CodePasswordResetTokenUnavailable 表示密码重置凭证已过期或已使用。
 	CodePasswordResetTokenUnavailable = "auth_password_reset_token_unavailable"
+	// CodePasswordIncorrect 表示登录态改密码时提交的当前密码不正确。
+	CodePasswordIncorrect = "auth_password_incorrect"
 )
 
 func requestUnavailable(operation string, cause error) *consoleservice.Error {
@@ -53,6 +55,15 @@ func registrationUnavailable() *consoleservice.Error {
 		Message: "This email address is unavailable for registration.",
 		Param:   "email",
 		Status:  409,
+	}
+}
+
+func passwordIncorrect() *consoleservice.Error {
+	return &consoleservice.Error{
+		Code:    CodePasswordIncorrect,
+		Message: "The current password is incorrect.",
+		Param:   "current_password",
+		Status:  422,
 	}
 }
 

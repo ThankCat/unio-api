@@ -67,6 +67,9 @@ type adminHTTPDeps struct {
 
 	CatalogService model.CatalogService
 
+	// LabLogos 提供模型出品方图标（models.dev 公开资产）。
+	LabLogos adminapi.LabLogoStore
+
 	DashboardService   overview.DashboardService
 	LiveTrafficService overview.LiveTrafficService
 
@@ -127,6 +130,7 @@ func NewAdminHTTPHandler(deps adminHTTPDeps) http.Handler {
 		CapabilitySeedService: deps.CapabilitySeedService,
 
 		CatalogService: deps.CatalogService,
+		LabLogos:       deps.LabLogos,
 
 		DashboardService:   deps.DashboardService,
 		LiveTrafficService: deps.LiveTrafficService,

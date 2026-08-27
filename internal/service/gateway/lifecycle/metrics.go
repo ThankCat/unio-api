@@ -74,6 +74,8 @@ func requestRejectionReason(err error) string {
 		return "model_not_found"
 	case failure.CodeRoutingModelNotAvailable:
 		return "model_not_available"
+	case failure.CodeRoutingModelProtocolUnsupported:
+		return "model_protocol_unsupported"
 	case failure.CodeRoutingProtocolInvalid:
 		return "protocol_invalid"
 	default:

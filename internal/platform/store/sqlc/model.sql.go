@@ -79,6 +79,8 @@ INSERT INTO models (
     display_name,
     owned_by,
     status,
+    description,
+    knowledge_cutoff,
     max_output_tokens,
     context_window_tokens,
     input_price_usd_per_million_tokens,
@@ -96,9 +98,11 @@ VALUES (
     $7,
     $8,
     $9,
+    $10,
+    $11,
     'manual'
 )
-RETURNING id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at, disabled_reason, disabled_at, family
+RETURNING id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at, disabled_reason, disabled_at, family, description, knowledge_cutoff
 `
 
 type CreateModelParams struct {
@@ -106,6 +110,8 @@ type CreateModelParams struct {
 	DisplayName                    string
 	OwnedBy                        string
 	Status                         string
+	Description                    string
+	KnowledgeCutoff                string
 	MaxOutputTokens                pgtype.Int8
 	ContextWindowTokens            pgtype.Int8
 	InputPriceUsdPerMillionTokens  pgtype.Numeric
@@ -114,13 +120,15 @@ type CreateModelParams struct {
 }
 
 // CreateModel 创建 admin 空白手建模型；source 固定 manual。
-// model_id 全局唯一由 DB 唯一约束保证；元数据（上下文/价格基线/发布日期）可选填，纯展示不参与计费（阶段 14 Q5）。
+// model_id 全局唯一由 DB 唯一约束保证；元数据（上下文/价格基线/发布日期/简介/知识截止）可选填，纯展示不参与计费（阶段 14 Q5）。
 func (q *Queries) CreateModel(ctx context.Context, arg CreateModelParams) (Model, error) {
 	row := q.db.QueryRow(ctx, createModel,
 		arg.ModelID,
 		arg.DisplayName,
 		arg.OwnedBy,
 		arg.Status,
+		arg.Description,
+		arg.KnowledgeCutoff,
 		arg.MaxOutputTokens,
 		arg.ContextWindowTokens,
 		arg.InputPriceUsdPerMillionTokens,
@@ -145,6 +153,8 @@ func (q *Queries) CreateModel(ctx context.Context, arg CreateModelParams) (Model
 		&i.DisabledReason,
 		&i.DisabledAt,
 		&i.Family,
+		&i.Description,
+		&i.KnowledgeCutoff,
 	)
 	return i, err
 }
@@ -193,6 +203,8 @@ INSERT INTO models (
     owned_by,
     family,
     status,
+    description,
+    knowledge_cutoff,
     max_output_tokens,
     context_window_tokens,
     input_price_usd_per_million_tokens,
@@ -211,9 +223,11 @@ VALUES (
     $8,
     $9,
     $10,
+    $11,
+    $12,
     'catalog'
 )
-RETURNING id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at, disabled_reason, disabled_at, family
+RETURNING id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at, disabled_reason, disabled_at, family, description, knowledge_cutoff
 `
 
 type CreateModelFromCatalogParams struct {
@@ -222,6 +236,8 @@ type CreateModelFromCatalogParams struct {
 	OwnedBy                        string
 	Family                         string
 	Status                         string
+	Description                    string
+	KnowledgeCutoff                string
 	MaxOutputTokens                pgtype.Int8
 	ContextWindowTokens            pgtype.Int8
 	InputPriceUsdPerMillionTokens  pgtype.Numeric
@@ -239,6 +255,8 @@ func (q *Queries) CreateModelFromCatalog(ctx context.Context, arg CreateModelFro
 		arg.OwnedBy,
 		arg.Family,
 		arg.Status,
+		arg.Description,
+		arg.KnowledgeCutoff,
 		arg.MaxOutputTokens,
 		arg.ContextWindowTokens,
 		arg.InputPriceUsdPerMillionTokens,
@@ -263,6 +281,8 @@ func (q *Queries) CreateModelFromCatalog(ctx context.Context, arg CreateModelFro
 		&i.DisabledReason,
 		&i.DisabledAt,
 		&i.Family,
+		&i.Description,
+		&i.KnowledgeCutoff,
 	)
 	return i, err
 }
@@ -641,8 +661,20 @@ func (q *Queries) DeleteModelCapability(ctx context.Context, arg DeleteModelCapa
 }
 
 const deleteModelCascade = `-- name: DeleteModelCascade :execrows
-WITH deleted_model_prices AS (
+WITH deleted_model_price_service_tiers AS (
+    DELETE FROM model_price_service_tiers
+    WHERE model_price_service_tiers.model_price_id IN (
+        SELECT model_prices.id FROM model_prices WHERE model_prices.model_id = $1
+    )
+),
+deleted_model_prices AS (
     DELETE FROM model_prices WHERE model_prices.model_id = $1
+),
+deleted_channel_price_service_tiers AS (
+    DELETE FROM channel_price_service_tiers
+    WHERE channel_price_service_tiers.channel_price_id IN (
+        SELECT channel_prices.id FROM channel_prices WHERE channel_prices.model_id = $1
+    )
 ),
 deleted_channel_prices AS (
     DELETE FROM channel_prices WHERE channel_prices.model_id = $1
@@ -652,16 +684,26 @@ deleted_channel_models AS (
 ),
 deleted_channel_cost_multiplier_overrides AS (
     DELETE FROM channel_cost_multipliers WHERE channel_cost_multipliers.model_id = $1
+),
+deleted_verification_items AS (
+    DELETE FROM channel_model_verification_items WHERE channel_model_verification_items.model_id = $1
+),
+detached_probe_records AS (
+    UPDATE provider_probe_records SET model_id = NULL WHERE provider_probe_records.model_id = $1
 )
 DELETE FROM models WHERE models.id = $1
 `
 
 // DeleteModelCascade 物理删除 model，用于清理录错且从未使用的脏数据，并在同一条语句内
-// 级联清理 model 自身的配置子表：model_prices（基准售价）、channel_prices（渠道-模型成本价）、
+// 级联清理 model 自身的配置子表：model_prices（基准售价）及其 Fast 档子行（model_price_service_tiers）、
+// channel_prices（渠道-模型成本价）及其 Fast 档子行（channel_price_service_tiers）、
 // channel_models（模型绑定）、channel_cost_multipliers 的逐模型覆盖行（model_id=本 model，DEC-027）；
-// model_capabilities、user_model_policies、model_catalog_links 由 ON DELETE CASCADE 自动清理，无需在此显式删除。
+// model_capabilities、model_catalog_links 由 ON DELETE CASCADE 自动清理，无需在此显式删除。
 // 这些价格/绑定/倍率覆盖表都是追加式配置（无删除接口，只能停用），若不在此一并清理，任何配过价/倍率覆盖的
 // model 都会被自身配置行永久挡住删除（均无请求/账务语义，属纯配置）。
+// 运维观测数据同样不该挡住删除：channel_model_verification_items（渠道模型验证结果）随模型一并删除；
+// provider_probe_records 是不可变探测事实、可能被 provider_ledger_entries（探测成本）引用，不删行，
+// 仅把可空的 model_id 置 NULL 解除归因，渠道级事实（upstream_model 文本、成本）原样保留。
 // 注意 channel_cost_multipliers.model_id 可空：NULL=渠道默认倍率（对全部模型生效，不随单个 model 删除），
 // 非空=对本 model 的覆盖；WHERE model_id = id 只删覆盖行，渠道默认行保留不动。
 // 外键均为默认 NO ACTION（约束在语句末校验），故 CTE 删子表 + 删主体在单条语句内原子完成：
@@ -678,28 +720,37 @@ func (q *Queries) DeleteModelCascade(ctx context.Context, id int64) (int64, erro
 
 const getModelCatalogEntry = `-- name: GetModelCatalogEntry :one
 SELECT
-    mc.canonical_id, mc.lab, mc.display_name, mc.context_window_tokens, mc.max_output_tokens, mc.input_price_usd_per_million_tokens, mc.output_price_usd_per_million_tokens, mc.release_date, mc.removed_upstream_at, mc.fingerprint, mc.synced_at, mc.created_at, mc.updated_at, mc.family,
+    mc.canonical_id, mc.lab, mc.display_name, mc.context_window_tokens, mc.max_output_tokens, mc.input_price_usd_per_million_tokens, mc.output_price_usd_per_million_tokens, mc.release_date, mc.removed_upstream_at, mc.fingerprint, mc.synced_at, mc.created_at, mc.updated_at, mc.family, mc.description, mc.knowledge_cutoff, mc.cache_read_price_usd_per_million_tokens, mc.cache_write_price_usd_per_million_tokens, mc.input_limit_tokens, mc.open_weights, mc.modalities_input, mc.modalities_output, mc.last_updated,
     (SELECT COUNT(*) FROM model_catalog_links l WHERE l.canonical_id = mc.canonical_id) AS adopted_count
 FROM model_catalog mc
 WHERE mc.canonical_id = $1
 `
 
 type GetModelCatalogEntryRow struct {
-	CanonicalID                    string
-	Lab                            string
-	DisplayName                    string
-	ContextWindowTokens            pgtype.Int8
-	MaxOutputTokens                pgtype.Int8
-	InputPriceUsdPerMillionTokens  pgtype.Numeric
-	OutputPriceUsdPerMillionTokens pgtype.Numeric
-	ReleaseDate                    pgtype.Date
-	RemovedUpstreamAt              pgtype.Timestamptz
-	Fingerprint                    string
-	SyncedAt                       pgtype.Timestamptz
-	CreatedAt                      pgtype.Timestamptz
-	UpdatedAt                      pgtype.Timestamptz
-	Family                         string
-	AdoptedCount                   int64
+	CanonicalID                        string
+	Lab                                string
+	DisplayName                        string
+	ContextWindowTokens                pgtype.Int8
+	MaxOutputTokens                    pgtype.Int8
+	InputPriceUsdPerMillionTokens      pgtype.Numeric
+	OutputPriceUsdPerMillionTokens     pgtype.Numeric
+	ReleaseDate                        pgtype.Date
+	RemovedUpstreamAt                  pgtype.Timestamptz
+	Fingerprint                        string
+	SyncedAt                           pgtype.Timestamptz
+	CreatedAt                          pgtype.Timestamptz
+	UpdatedAt                          pgtype.Timestamptz
+	Family                             string
+	Description                        string
+	KnowledgeCutoff                    string
+	CacheReadPriceUsdPerMillionTokens  pgtype.Numeric
+	CacheWritePriceUsdPerMillionTokens pgtype.Numeric
+	InputLimitTokens                   pgtype.Int8
+	OpenWeights                        pgtype.Bool
+	ModalitiesInput                    []string
+	ModalitiesOutput                   []string
+	LastUpdated                        pgtype.Date
+	AdoptedCount                       int64
 }
 
 // GetModelCatalogEntry 按 canonical_id 读取单条目录详情（连带已采纳次数）。
@@ -721,6 +772,15 @@ func (q *Queries) GetModelCatalogEntry(ctx context.Context, canonicalID string) 
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.Family,
+		&i.Description,
+		&i.KnowledgeCutoff,
+		&i.CacheReadPriceUsdPerMillionTokens,
+		&i.CacheWritePriceUsdPerMillionTokens,
+		&i.InputLimitTokens,
+		&i.OpenWeights,
+		&i.ModalitiesInput,
+		&i.ModalitiesOutput,
+		&i.LastUpdated,
 		&i.AdoptedCount,
 	)
 	return i, err
@@ -955,7 +1015,7 @@ func (q *Queries) ListModelCatalogCapabilities(ctx context.Context, canonicalID 
 
 const listModelCatalogPage = `-- name: ListModelCatalogPage :many
 SELECT
-    mc.canonical_id, mc.lab, mc.display_name, mc.context_window_tokens, mc.max_output_tokens, mc.input_price_usd_per_million_tokens, mc.output_price_usd_per_million_tokens, mc.release_date, mc.removed_upstream_at, mc.fingerprint, mc.synced_at, mc.created_at, mc.updated_at, mc.family,
+    mc.canonical_id, mc.lab, mc.display_name, mc.context_window_tokens, mc.max_output_tokens, mc.input_price_usd_per_million_tokens, mc.output_price_usd_per_million_tokens, mc.release_date, mc.removed_upstream_at, mc.fingerprint, mc.synced_at, mc.created_at, mc.updated_at, mc.family, mc.description, mc.knowledge_cutoff, mc.cache_read_price_usd_per_million_tokens, mc.cache_write_price_usd_per_million_tokens, mc.input_limit_tokens, mc.open_weights, mc.modalities_input, mc.modalities_output, mc.last_updated,
     (SELECT COUNT(*) FROM model_catalog_capabilities cc WHERE cc.canonical_id = mc.canonical_id) AS capability_count,
     (SELECT COUNT(*) FROM model_catalog_links l WHERE l.canonical_id = mc.canonical_id) AS adopted_count
 FROM model_catalog mc
@@ -977,22 +1037,31 @@ type ListModelCatalogPageParams struct {
 }
 
 type ListModelCatalogPageRow struct {
-	CanonicalID                    string
-	Lab                            string
-	DisplayName                    string
-	ContextWindowTokens            pgtype.Int8
-	MaxOutputTokens                pgtype.Int8
-	InputPriceUsdPerMillionTokens  pgtype.Numeric
-	OutputPriceUsdPerMillionTokens pgtype.Numeric
-	ReleaseDate                    pgtype.Date
-	RemovedUpstreamAt              pgtype.Timestamptz
-	Fingerprint                    string
-	SyncedAt                       pgtype.Timestamptz
-	CreatedAt                      pgtype.Timestamptz
-	UpdatedAt                      pgtype.Timestamptz
-	Family                         string
-	CapabilityCount                int64
-	AdoptedCount                   int64
+	CanonicalID                        string
+	Lab                                string
+	DisplayName                        string
+	ContextWindowTokens                pgtype.Int8
+	MaxOutputTokens                    pgtype.Int8
+	InputPriceUsdPerMillionTokens      pgtype.Numeric
+	OutputPriceUsdPerMillionTokens     pgtype.Numeric
+	ReleaseDate                        pgtype.Date
+	RemovedUpstreamAt                  pgtype.Timestamptz
+	Fingerprint                        string
+	SyncedAt                           pgtype.Timestamptz
+	CreatedAt                          pgtype.Timestamptz
+	UpdatedAt                          pgtype.Timestamptz
+	Family                             string
+	Description                        string
+	KnowledgeCutoff                    string
+	CacheReadPriceUsdPerMillionTokens  pgtype.Numeric
+	CacheWritePriceUsdPerMillionTokens pgtype.Numeric
+	InputLimitTokens                   pgtype.Int8
+	OpenWeights                        pgtype.Bool
+	ModalitiesInput                    []string
+	ModalitiesOutput                   []string
+	LastUpdated                        pgtype.Date
+	CapabilityCount                    int64
+	AdoptedCount                       int64
 }
 
 // ListModelCatalogPage 分页/搜索目录条目，连带能力提示数与已采纳次数；q/lab 为 NULL 时不过滤。
@@ -1025,6 +1094,15 @@ func (q *Queries) ListModelCatalogPage(ctx context.Context, arg ListModelCatalog
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.Family,
+			&i.Description,
+			&i.KnowledgeCutoff,
+			&i.CacheReadPriceUsdPerMillionTokens,
+			&i.CacheWritePriceUsdPerMillionTokens,
+			&i.InputLimitTokens,
+			&i.OpenWeights,
+			&i.ModalitiesInput,
+			&i.ModalitiesOutput,
+			&i.LastUpdated,
 			&i.CapabilityCount,
 			&i.AdoptedCount,
 		); err != nil {
@@ -1259,6 +1337,8 @@ WITH enriched AS (
         m.display_name,
         m.owned_by,
         m.status,
+        m.description,
+        m.knowledge_cutoff,
         m.max_output_tokens,
         m.context_window_tokens,
         m.input_price_usd_per_million_tokens,
@@ -1292,7 +1372,7 @@ WITH enriched AS (
     LEFT JOIN model_catalog_links l ON l.model_id = m.id
     LEFT JOIN model_catalog mc ON mc.canonical_id = l.canonical_id
 )
-SELECT id, model_id, display_name, owned_by, status, max_output_tokens, context_window_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, family, disabled_reason, disabled_at, source, created_at, updated_at, catalog_canonical_id, adopted_fingerprint, reminder_muted, reminder_snooze_until, dismissed_fingerprint, catalog_fingerprint, catalog_removed_upstream, update_available, should_remind
+SELECT id, model_id, display_name, owned_by, status, description, knowledge_cutoff, max_output_tokens, context_window_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, family, disabled_reason, disabled_at, source, created_at, updated_at, catalog_canonical_id, adopted_fingerprint, reminder_muted, reminder_snooze_until, dismissed_fingerprint, catalog_fingerprint, catalog_removed_upstream, update_available, should_remind
 FROM enriched
 WHERE ($1::text IS NULL OR status = $1::text)
   AND (
@@ -1320,6 +1400,8 @@ type ListModelsPageRow struct {
 	DisplayName                    string
 	OwnedBy                        string
 	Status                         string
+	Description                    string
+	KnowledgeCutoff                string
 	MaxOutputTokens                pgtype.Int8
 	ContextWindowTokens            pgtype.Int8
 	InputPriceUsdPerMillionTokens  pgtype.Numeric
@@ -1366,6 +1448,8 @@ func (q *Queries) ListModelsPage(ctx context.Context, arg ListModelsPageParams) 
 			&i.DisplayName,
 			&i.OwnedBy,
 			&i.Status,
+			&i.Description,
+			&i.KnowledgeCutoff,
 			&i.MaxOutputTokens,
 			&i.ContextWindowTokens,
 			&i.InputPriceUsdPerMillionTokens,
@@ -1398,7 +1482,7 @@ func (q *Queries) ListModelsPage(ctx context.Context, arg ListModelsPageParams) 
 }
 
 const lookupModelByID = `-- name: LookupModelByID :one
-SELECT id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at, disabled_reason, disabled_at, family
+SELECT id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at, disabled_reason, disabled_at, family, description, knowledge_cutoff
 FROM models
 WHERE id = $1
 `
@@ -1424,12 +1508,14 @@ func (q *Queries) LookupModelByID(ctx context.Context, id int64) (Model, error) 
 		&i.DisabledReason,
 		&i.DisabledAt,
 		&i.Family,
+		&i.Description,
+		&i.KnowledgeCutoff,
 	)
 	return i, err
 }
 
 const lookupModelByModelID = `-- name: LookupModelByModelID :one
-SELECT id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at, disabled_reason, disabled_at, family
+SELECT id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at, disabled_reason, disabled_at, family, description, knowledge_cutoff
 FROM models
 WHERE model_id = $1
 `
@@ -1455,6 +1541,8 @@ func (q *Queries) LookupModelByModelID(ctx context.Context, modelID string) (Mod
 		&i.DisabledReason,
 		&i.DisabledAt,
 		&i.Family,
+		&i.Description,
+		&i.KnowledgeCutoff,
 	)
 	return i, err
 }
@@ -2069,6 +2157,8 @@ SELECT
     m.owned_by,
     m.status,
     m.family,
+    m.description,
+    m.knowledge_cutoff,
     m.disabled_reason,
     m.created_at,
     m.max_output_tokens,
@@ -2304,6 +2394,8 @@ type ModelsOpsTableRow struct {
 	OwnedBy                             string
 	Status                              string
 	Family                              string
+	Description                         string
+	KnowledgeCutoff                     string
 	DisabledReason                      pgtype.Text
 	CreatedAt                           pgtype.Timestamptz
 	MaxOutputTokens                     pgtype.Int8
@@ -2377,6 +2469,8 @@ func (q *Queries) ModelsOpsTable(ctx context.Context, arg ModelsOpsTableParams) 
 			&i.OwnedBy,
 			&i.Status,
 			&i.Family,
+			&i.Description,
+			&i.KnowledgeCutoff,
 			&i.DisabledReason,
 			&i.CreatedAt,
 			&i.MaxOutputTokens,
@@ -2455,20 +2549,24 @@ UPDATE models
 SET display_name = $1,
     owned_by = $2,
     family = $3,
-    max_output_tokens = $4,
-    context_window_tokens = $5,
-    input_price_usd_per_million_tokens = $6,
-    output_price_usd_per_million_tokens = $7,
-    release_date = $8,
+    description = $4,
+    knowledge_cutoff = $5,
+    max_output_tokens = $6,
+    context_window_tokens = $7,
+    input_price_usd_per_million_tokens = $8,
+    output_price_usd_per_million_tokens = $9,
+    release_date = $10,
     updated_at = now()
-WHERE id = $9
-RETURNING id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at, disabled_reason, disabled_at, family
+WHERE id = $11
+RETURNING id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at, disabled_reason, disabled_at, family, description, knowledge_cutoff
 `
 
 type RefreshAdoptedModelFromCatalogParams struct {
 	DisplayName                    string
 	OwnedBy                        string
 	Family                         string
+	Description                    string
+	KnowledgeCutoff                string
 	MaxOutputTokens                pgtype.Int8
 	ContextWindowTokens            pgtype.Int8
 	InputPriceUsdPerMillionTokens  pgtype.Numeric
@@ -2484,6 +2582,8 @@ func (q *Queries) RefreshAdoptedModelFromCatalog(ctx context.Context, arg Refres
 		arg.DisplayName,
 		arg.OwnedBy,
 		arg.Family,
+		arg.Description,
+		arg.KnowledgeCutoff,
 		arg.MaxOutputTokens,
 		arg.ContextWindowTokens,
 		arg.InputPriceUsdPerMillionTokens,
@@ -2509,6 +2609,8 @@ func (q *Queries) RefreshAdoptedModelFromCatalog(ctx context.Context, arg Refres
 		&i.DisabledReason,
 		&i.DisabledAt,
 		&i.Family,
+		&i.Description,
+		&i.KnowledgeCutoff,
 	)
 	return i, err
 }
@@ -2572,20 +2674,24 @@ UPDATE models
 SET display_name = $1,
     owned_by = $2,
     status = $3,
-    max_output_tokens = $4,
-    context_window_tokens = $5,
-    input_price_usd_per_million_tokens = $6,
-    output_price_usd_per_million_tokens = $7,
-    release_date = $8,
+    description = $4,
+    knowledge_cutoff = $5,
+    max_output_tokens = $6,
+    context_window_tokens = $7,
+    input_price_usd_per_million_tokens = $8,
+    output_price_usd_per_million_tokens = $9,
+    release_date = $10,
     updated_at = now()
-WHERE id = $9
-RETURNING id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at, disabled_reason, disabled_at, family
+WHERE id = $11
+RETURNING id, model_id, display_name, owned_by, status, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, source, created_at, updated_at, disabled_reason, disabled_at, family, description, knowledge_cutoff
 `
 
 type UpdateModelParams struct {
 	DisplayName                    string
 	OwnedBy                        string
 	Status                         string
+	Description                    string
+	KnowledgeCutoff                string
 	MaxOutputTokens                pgtype.Int8
 	ContextWindowTokens            pgtype.Int8
 	InputPriceUsdPerMillionTokens  pgtype.Numeric
@@ -2595,12 +2701,14 @@ type UpdateModelParams struct {
 }
 
 // UpdateModel 更新 model 的展示元数据与启停状态；model_id 作为对外稳定标识不可变，source 不在此修改。
-// 元数据（上下文/价格基线/发布日期）可编辑，也可被「从目录刷新」覆盖；纯展示不参与计费。
+// 元数据（上下文/价格基线/发布日期/简介/知识截止）可编辑，也可被「从目录刷新」覆盖；纯展示不参与计费。
 func (q *Queries) UpdateModel(ctx context.Context, arg UpdateModelParams) (Model, error) {
 	row := q.db.QueryRow(ctx, updateModel,
 		arg.DisplayName,
 		arg.OwnedBy,
 		arg.Status,
+		arg.Description,
+		arg.KnowledgeCutoff,
 		arg.MaxOutputTokens,
 		arg.ContextWindowTokens,
 		arg.InputPriceUsdPerMillionTokens,
@@ -2626,6 +2734,8 @@ func (q *Queries) UpdateModel(ctx context.Context, arg UpdateModelParams) (Model
 		&i.DisabledReason,
 		&i.DisabledAt,
 		&i.Family,
+		&i.Description,
+		&i.KnowledgeCutoff,
 	)
 	return i, err
 }

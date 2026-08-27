@@ -42,6 +42,9 @@ type Row struct {
 	Status      string
 	// Family 是模型系列（来自 models.dev），空串表示未归类。
 	Family string
+	// Description / KnowledgeCutoff 是展示元数据（采纳快照，可编辑），空串表示未填。
+	Description     string
+	KnowledgeCutoff string
 	// DisabledReason 解释模型为何被停用；启用中为 nil。
 	DisabledReason            *string
 	CreatedAt                 time.Time
@@ -219,6 +222,8 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 			DisplayName:                         r.DisplayName,
 			OwnedBy:                             r.OwnedBy,
 			Family:                              r.Family,
+			Description:                         r.Description,
+			KnowledgeCutoff:                     r.KnowledgeCutoff,
 			DisabledReason:                      textPtr(r.DisabledReason),
 			Status:                              r.Status,
 			CreatedAt:                           r.CreatedAt.Time,

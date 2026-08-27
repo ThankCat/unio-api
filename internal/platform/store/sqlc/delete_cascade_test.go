@@ -22,8 +22,9 @@ func countRows(t *testing.T, ctx context.Context, tx pgx.Tx, query string, args 
 }
 
 // TestDeleteChannelCascadeRemovesOwnConfig 验证录错的 channel 可一键真删：
-// 数据修改 CTE 在单条语句内先删 channel_models（NO ACTION 外键，语句末校验），再删 channel，
-// 不因「子表仍引用」而失败；删除后 channel 与其绑定都不复存在。
+// 数据修改 CTE 在单条语句内先删 channel_models（NO ACTION 外键，语句末校验）、渠道成本价
+// 及其 Fast 档子行、无账务引用的探测记录，再删 channel，不因「子表仍引用」而失败；
+// 删除后 channel 与其绑定、价格、探测都不复存在。
 func TestDeleteChannelCascadeRemovesOwnConfig(t *testing.T) {
 	ctx, tx, queries, cleanup := newModelChannelTestTx(t)
 	defer cleanup()
@@ -37,6 +38,12 @@ func TestDeleteChannelCascadeRemovesOwnConfig(t *testing.T) {
 	modelB := insertModel(t, ctx, tx, fmt.Sprintf("openai/del-chan-model-b-%d", suffix), "openai", "enabled")
 	insertChannelModel(t, ctx, tx, channelID, modelA, "del-chan-a", "enabled")
 	insertChannelModel(t, ctx, tx, channelID, modelB, "del-chan-b", "disabled")
+	// 渠道成本价带 Fast 档子行（channel_price_service_tiers，NO ACTION 外键指向 channel_prices），
+	// 未在级联中清理时会挡住整条删除。
+	now := time.Now().UTC()
+	createChannelPriceWithFastForTest(t, ctx, queries, channelID, modelA, now)
+	// 渠道曾被探测/验证（无账务引用），不应挡住硬删。
+	insertProbeRecord(t, ctx, tx, providerID, channelID, modelA, fmt.Sprintf("del-chan-probe-%d", suffix))
 
 	if got := countRows(t, ctx, tx, `SELECT count(*) FROM channel_models WHERE channel_id = $1`, channelID); got != 2 {
 		t.Fatalf("expected 2 bindings before delete, got %d", got)
@@ -53,6 +60,12 @@ func TestDeleteChannelCascadeRemovesOwnConfig(t *testing.T) {
 	if got := countRows(t, ctx, tx, `SELECT count(*) FROM channel_models WHERE channel_id = $1`, channelID); got != 0 {
 		t.Fatalf("expected bindings cascaded away, got %d", got)
 	}
+	if got := countRows(t, ctx, tx, `SELECT count(*) FROM channel_price_service_tiers t JOIN channel_prices p ON p.id = t.channel_price_id WHERE p.channel_id = $1`, channelID); got != 0 {
+		t.Fatalf("expected channel price fast tiers cascaded away, got %d", got)
+	}
+	if got := countRows(t, ctx, tx, `SELECT count(*) FROM provider_probe_records WHERE channel_id = $1`, channelID); got != 0 {
+		t.Fatalf("expected probe records cascaded away, got %d", got)
+	}
 	if _, err := queries.GetChannel(ctx, channelID); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("expected channel gone (ErrNoRows), got %v", err)
 	}
@@ -63,9 +76,12 @@ func TestDeleteChannelCascadeRemovesOwnConfig(t *testing.T) {
 }
 
 // TestDeleteModelCascadeRemovesOwnConfig 验证录错的 model 可一键真删：
-// CTE 清掉它自身的配置子表——绑定、基准售价（model_prices）、渠道成本价（channel_prices，NO ACTION）；
+// CTE 清掉它自身的配置子表——绑定、基准售价（model_prices）及其 Fast 档子行、渠道成本价
+// （channel_prices，NO ACTION）及其 Fast 档子行、渠道模型验证结果（运维数据）；
+// 探测记录是不可变事实、只解除模型归因（model_id 置 NULL）不删行；
 // model_capabilities 由 ON DELETE CASCADE 自动清理；channel 本身不受影响。
-// 价格表是追加式配置（无删除接口，只能停用），必须由级联清掉，否则任何配过价的 model 永远删不掉。
+// 价格表是追加式配置（无删除接口，只能停用），必须由级联清掉，否则任何配过价的 model 永远删不掉；
+// 验证/探测由渠道清单功能自动产生，若不处理，被验证过的 model 即使从未服务请求也永远删不掉。
 func TestDeleteModelCascadeRemovesOwnConfig(t *testing.T) {
 	ctx, tx, queries, cleanup := newModelChannelTestTx(t)
 	defer cleanup()
@@ -78,10 +94,13 @@ func TestDeleteModelCascadeRemovesOwnConfig(t *testing.T) {
 	modelID := insertModel(t, ctx, tx, fmt.Sprintf("openai/del-model-%d", suffix), "openai", "enabled")
 	insertChannelModel(t, ctx, tx, channelID, modelID, "del-model-upstream", "enabled")
 	insertModelCapability(t, ctx, tx, modelID, "text.output", "full")
-	// 追加式价格配置：模型基准售价 + 渠道成本价，验证级联把两者一并清掉。
+	// 追加式价格配置：模型基准售价 + 渠道成本价（均带 Fast 档子行），验证级联把整组一并清掉。
 	now := time.Now().UTC()
-	createModelPriceForTest(t, ctx, queries, modelID, now)
-	createChannelPriceForTest(t, ctx, queries, channelID, modelID, now)
+	createModelPriceWithFastForTest(t, ctx, queries, modelID, now)
+	createChannelPriceWithFastForTest(t, ctx, queries, channelID, modelID, now)
+	// 渠道模型清单的验证结果与探测记录：验证项随模型删除，探测事实保留但解除归因。
+	insertVerificationItem(t, ctx, tx, channelID, modelID, "del-model-upstream")
+	probeID := insertProbeRecord(t, ctx, tx, providerID, channelID, modelID, fmt.Sprintf("del-model-probe-%d", suffix))
 
 	affected, err := queries.DeleteModelCascade(ctx, modelID)
 	if err != nil {
@@ -97,11 +116,24 @@ func TestDeleteModelCascadeRemovesOwnConfig(t *testing.T) {
 	if got := countRows(t, ctx, tx, `SELECT count(*) FROM model_prices WHERE model_id = $1`, modelID); got != 0 {
 		t.Fatalf("expected model_prices cascaded away, got %d", got)
 	}
+	if got := countRows(t, ctx, tx, `SELECT count(*) FROM model_price_service_tiers t JOIN model_prices p ON p.id = t.model_price_id WHERE p.model_id = $1`, modelID); got != 0 {
+		t.Fatalf("expected model price fast tiers cascaded away, got %d", got)
+	}
 	if got := countRows(t, ctx, tx, `SELECT count(*) FROM channel_prices WHERE model_id = $1`, modelID); got != 0 {
 		t.Fatalf("expected channel_prices cascaded away, got %d", got)
 	}
+	if got := countRows(t, ctx, tx, `SELECT count(*) FROM channel_price_service_tiers t JOIN channel_prices p ON p.id = t.channel_price_id WHERE p.model_id = $1`, modelID); got != 0 {
+		t.Fatalf("expected channel price fast tiers cascaded away, got %d", got)
+	}
 	if got := countRows(t, ctx, tx, `SELECT count(*) FROM model_capabilities WHERE model_id = $1`, modelID); got != 0 {
 		t.Fatalf("expected model_capabilities ON DELETE CASCADE removed, got %d", got)
+	}
+	if got := countRows(t, ctx, tx, `SELECT count(*) FROM channel_model_verification_items WHERE model_id = $1`, modelID); got != 0 {
+		t.Fatalf("expected verification items cascaded away, got %d", got)
+	}
+	// 探测事实保留，但模型归因已解除。
+	if got := countRows(t, ctx, tx, `SELECT count(*) FROM provider_probe_records WHERE id = $1 AND model_id IS NULL`, probeID); got != 1 {
+		t.Fatalf("expected probe record kept with model_id detached, got %d", got)
 	}
 	// channel 本身不应被模型删除连带删掉。
 	if _, err := queries.GetChannel(ctx, channelID); err != nil {
@@ -254,4 +286,92 @@ func TestDeleteProviderBlockedByInFlightOriginOp(t *testing.T) {
 	if _, err := queries.DeleteProvider(ctx, providerID); !isForeignKeyViolation(err) {
 		t.Fatalf("expected 23503 blocking delete with in-flight provider op, got %v", err)
 	}
+}
+
+// createModelPriceWithFastForTest 创建一条带 Fast 档子行（model_price_service_tiers）的
+// enabled 模型基准售价，供级联删除测试验证 Fast 档不会挡住模型硬删。
+func createModelPriceWithFastForTest(t *testing.T, ctx context.Context, queries *sqlc.Queries, modelID int64, at time.Time) {
+	t.Helper()
+
+	if _, err := queries.CreateModelPrice(ctx, sqlc.CreateModelPriceParams{
+		ModelID:            modelID,
+		Currency:           "USD",
+		PricingUnit:        "per_1m_tokens",
+		UncachedInputPrice: numeric(100),
+		OutputPrice:        numeric(400),
+		SalePriceRatio:     numeric(1),
+		Status:             "enabled",
+		EffectiveFrom:      timestamptz(at.Add(-time.Hour)),
+		EffectiveTo:        nullTimestamptz(),
+		FastConfigured:     true,
+		// Fast 档只需 uncached/output 两项必填。
+		FastUncachedInputPrice: numeric(200),
+		FastOutputPrice:        numeric(800),
+	}); err != nil {
+		t.Fatalf("create model price with fast tier: %v", err)
+	}
+}
+
+// createChannelPriceWithFastForTest 创建一条带 Fast 档子行（channel_price_service_tiers）的
+// enabled 渠道-模型成本价，供级联删除测试验证 Fast 档不会挡住模型/渠道硬删。
+func createChannelPriceWithFastForTest(t *testing.T, ctx context.Context, queries *sqlc.Queries, channelID, modelID int64, at time.Time) {
+	t.Helper()
+
+	if _, err := queries.CreateChannelPrice(ctx, sqlc.CreateChannelPriceParams{
+		ChannelID:         channelID,
+		ModelID:           modelID,
+		Currency:          "USD",
+		PricingUnit:       "per_1m_tokens",
+		UncachedInputCost: numeric(1),
+		OutputCost:        numeric(4),
+		Status:            "enabled",
+		EffectiveFrom:     timestamptz(at.Add(-time.Hour)),
+		EffectiveTo:       nullTimestamptz(),
+		FastConfigured:    true,
+		// Fast 档只需 uncached/output 两项必填。
+		FastUncachedInputCost: numeric(2),
+		FastOutputCost:        numeric(8),
+	}); err != nil {
+		t.Fatalf("create channel price with fast tier: %v", err)
+	}
+}
+
+// insertVerificationItem 插入一条渠道模型验证 run + item（运维观测数据），
+// 模拟渠道清单验证跑过该模型：item 通过 NO ACTION 外键引用 models。
+func insertVerificationItem(t *testing.T, ctx context.Context, tx pgx.Tx, channelID, modelID int64, upstreamModel string) {
+	t.Helper()
+
+	var runID int64
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO channel_model_verification_runs
+			(channel_id, source, status, channel_config_revision, provider_origin_revision, provider_status_revision, total_count, succeeded_count)
+		VALUES ($1, 'manual', 'succeeded', 1, 1, 1, 1, 1)
+		RETURNING id
+	`, channelID).Scan(&runID); err != nil {
+		t.Fatalf("insert verification run: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO channel_model_verification_items
+			(run_id, model_id, upstream_model, status, success, http_status)
+		VALUES ($1, $2, $3, 'succeeded', true, 200)
+	`, runID, modelID, upstreamModel); err != nil {
+		t.Fatalf("insert verification item: %v", err)
+	}
+}
+
+// insertProbeRecord 插入一条无账务引用的探测事实（provider_probe_records），返回主键。
+// 模拟渠道测试/验证探测过该模型：model_id 归因通过 NO ACTION 外键引用 models。
+func insertProbeRecord(t *testing.T, ctx context.Context, tx pgx.Tx, providerID, channelID, modelID int64, idempotencyKey string) int64 {
+	t.Helper()
+
+	var id int64
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO provider_probe_records
+			(provider_id, channel_id, model_id, protocol, source, upstream_model, success, http_status, idempotency_key)
+		VALUES ($1, $2, $3, 'openai', 'verification', 'probe-upstream', true, 200, $4)
+		RETURNING id
+	`, providerID, channelID, modelID, idempotencyKey).Scan(&id); err != nil {
+		t.Fatalf("insert provider probe record: %v", err)
+	}
+	return id
 }

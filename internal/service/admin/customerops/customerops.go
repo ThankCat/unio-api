@@ -14,7 +14,7 @@ import (
 // Store 是客户运维聚合所需的只读存储能力（由 *sqlc.Queries 满足）。
 type Store interface {
 	UsersOpsTable(ctx context.Context, arg sqlc.UsersOpsTableParams) ([]sqlc.UsersOpsTableRow, error)
-	UsersOpsTableCount(ctx context.Context, search pgtype.Text) (int64, error)
+	UsersOpsTableCount(ctx context.Context, arg sqlc.UsersOpsTableCountParams) (int64, error)
 	UserOpsDetail(ctx context.Context, arg sqlc.UserOpsDetailParams) (sqlc.UserOpsDetailRow, error)
 	UserOpsKeys(ctx context.Context, userID int64) ([]sqlc.UserOpsKeysRow, error)
 	ApiKeysOpsSummary(ctx context.Context, userID int64) (sqlc.ApiKeysOpsSummaryRow, error)
@@ -38,6 +38,7 @@ type UserRow struct {
 	ID                  int64
 	Email               string
 	DisplayName         string
+	Status              string
 	BalanceUSD          string
 	ReservedUSD         string
 	AvailableUSD        string
@@ -55,9 +56,11 @@ type UserRow struct {
 
 // UsersTableParams 用户运维主表入参。
 type UsersTableParams struct {
-	From      time.Time
-	To        time.Time
-	Search    string
+	From   time.Time
+	To     time.Time
+	Search string
+	// Status 为空表示不按状态过滤。
+	Status    string
 	SortField string
 	SortDesc  bool
 	Limit     int32
@@ -88,6 +91,7 @@ func (s *Service) UsersTable(ctx context.Context, p UsersTableParams) ([]UserRow
 		FromTime:   opsutil.TsNarg(p.From),
 		ToTime:     opsutil.TsNarg(p.To),
 		Search:     opsutil.TextNarg(p.Search),
+		Status:     opsutil.TextNarg(p.Status),
 		SortField:  opsutil.TextNarg(p.SortField),
 		SortDesc:   opsutil.BoolNarg(p.SortDesc),
 		PageLimit:  p.Limit,
@@ -96,7 +100,10 @@ func (s *Service) UsersTable(ctx context.Context, p UsersTableParams) ([]UserRow
 	if err != nil {
 		return nil, 0, opsutil.StoreFailed(err, "users ops table")
 	}
-	total, err := s.store.UsersOpsTableCount(ctx, opsutil.TextNarg(p.Search))
+	total, err := s.store.UsersOpsTableCount(ctx, sqlc.UsersOpsTableCountParams{
+		Search: opsutil.TextNarg(p.Search),
+		Status: opsutil.TextNarg(p.Status),
+	})
 	if err != nil {
 		return nil, 0, opsutil.StoreFailed(err, "users ops table count")
 	}
@@ -109,6 +116,7 @@ func (s *Service) UsersTable(ctx context.Context, p UsersTableParams) ([]UserRow
 			ID:                  r.ID,
 			Email:               r.Email,
 			DisplayName:         r.DisplayName,
+			Status:              r.Status,
 			BalanceUSD:          balance,
 			ReservedUSD:         reserved,
 			AvailableUSD:        available,
@@ -174,9 +182,11 @@ type ApiKeysSummary struct {
 }
 
 type ApiKeyRow struct {
-	ID             int64
-	Name           string
-	KeyPrefix      string
+	ID        int64
+	Name      string
+	KeyPrefix string
+	// KeySuffix 为 nil 表示这把 key 建于记录尾段之前。
+	KeySuffix      *string
 	UserID         int64
 	Status         string
 	SpendLimit     *string
@@ -237,6 +247,7 @@ func (s *Service) ApiKeysTable(ctx context.Context, p ApiKeysTableParams) ([]Api
 			ID:             k.ID,
 			Name:           k.Name,
 			KeyPrefix:      k.KeyPrefix,
+			KeySuffix:      opsutil.TextPtr(k.KeySuffix),
 			UserID:         k.UserID,
 			Status:         keyStatus(k.DisabledAt, k.RevokedAt, k.ExpiresAt, now),
 			SpendLimit:     numericPtr(k.SpendLimit),

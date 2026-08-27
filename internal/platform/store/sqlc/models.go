@@ -11,7 +11,7 @@ import (
 type ApiKey struct {
 	ID   int64
 	Name string
-	// API Key 明文前缀（sk_unio_ + 前 8 位随机）。明文不落库，识别与搜索都依赖这一列。
+	// API Key 明文前缀（命名空间 + 前 8 位随机）。当前命名空间为 sk-unio-，2026-08-27 之前签发的为 sk_unio_，两者都有效。明文不落库，识别与搜索都依赖这一列。
 	KeyPrefix string
 	// API Key 明文的 SHA-256，认证唯一依据。明文只在创建响应里返回一次，此后无法从任何接口取回。
 	KeyHash    string
@@ -26,6 +26,8 @@ type ApiKey struct {
 	UserID     int64
 	// API Key 明文末 4 位，仅供掩码展示时拼出尾段。NULL 表示该 key 建于本列之前。认证不使用此列。
 	KeySuffix pgtype.Text
+	// 用户软删除时间；非空即从 Console 列表与详情隐藏，历史请求展示不受影响。
+	DeletedAt pgtype.Timestamptz
 }
 
 type AppSetting struct {
@@ -333,6 +335,10 @@ type Model struct {
 	DisabledAt     pgtype.Timestamptz
 	// 模型系列（来自 models.dev feed 的 family），仅用于列表分组展示，空串表示未归类。
 	Family string
+	// 模型一句话简介（采纳时快照自目录，可编辑），console 模型页展示用。
+	Description string
+	// 知识截止（采纳时快照自目录，可编辑），空串表示未知。
+	KnowledgeCutoff string
 }
 
 type ModelCapability struct {
@@ -372,6 +378,24 @@ type ModelCatalog struct {
 	UpdatedAt                      pgtype.Timestamptz
 	// 模型系列（models.dev feed 的 family），采纳时带入 models.family，空串表示上游未归类。
 	Family string
+	// 上游一句话模型简介，仅展示。
+	Description string
+	// 知识截止（上游格式不齐：可能是 2024-09-30 也可能是 2024-08），原样保存，空串表示上游未给。
+	KnowledgeCutoff string
+	// 缓存读参考价基线（USD/百万 token），仅展示，绝不用于计费。
+	CacheReadPriceUsdPerMillionTokens pgtype.Numeric
+	// 缓存写参考价基线（USD/百万 token），仅展示，绝不用于计费。
+	CacheWritePriceUsdPerMillionTokens pgtype.Numeric
+	// 单请求输入 token 上限（上游 limit.input），是长上下文阶梯阈值的参考来源。
+	InputLimitTokens pgtype.Int8
+	// 是否开源权重；NULL 表示上游未标注。
+	OpenWeights pgtype.Bool
+	// 上游原始输入模态（text/image/audio/video/pdf…），能力声明之外保留原文供展示。
+	ModalitiesInput []string
+	// 上游原始输出模态。
+	ModalitiesOutput []string
+	// 上游条目最近更新日期。
+	LastUpdated pgtype.Date
 }
 
 type ModelCatalogCapability struct {
