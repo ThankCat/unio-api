@@ -65,8 +65,8 @@ func TestResponseFactsNonStreamBuildsNeutralFacts(t *testing.T) {
 	if got, ok := facts.Usage.CacheReadInputTokens.BillableValue(); !ok || got != 30 {
 		t.Fatalf("cache read billable = (%d, %v), want (30, true)", got, ok)
 	}
-	if facts.Usage.CacheWrite5mInputTokens.State != usage.CountNotApplicable {
-		t.Fatalf("cache write 5m state = %q, want not_applicable", facts.Usage.CacheWrite5mInputTokens.State)
+	if facts.Usage.CacheCreation5mInputTokens.State != usage.CountNotApplicable {
+		t.Fatalf("cache write 5m state = %q, want not_applicable", facts.Usage.CacheCreation5mInputTokens.State)
 	}
 	if got, ok := facts.Usage.OutputTokensTotal.BillableValue(); !ok || got != 40 {
 		t.Fatalf("output total billable = (%d, %v), want (40, true)", got, ok)

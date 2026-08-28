@@ -11,13 +11,13 @@ type windowDTO struct {
 	TokenCount              int64  `json:"token_count"`
 	UncachedInputTokenCount int64  `json:"uncached_input_token_count"`
 	CacheReadTokenCount     int64  `json:"cache_read_token_count"`
-	CacheWriteTokenCount    int64  `json:"cache_write_token_count"`
+	CacheCreationTokenCount int64  `json:"cache_creation_token_count"`
 	OutputTokenCount        int64  `json:"output_token_count"`
 	ChargeUSD               string `json:"charge_usd"`
 	UncachedInputChargeUSD  string `json:"uncached_input_charge_usd"`
 	OutputChargeUSD         string `json:"output_charge_usd"`
 	CacheReadChargeUSD      string `json:"cache_read_charge_usd"`
-	CacheWriteChargeUSD     string `json:"cache_write_charge_usd"`
+	CacheCreationChargeUSD  string `json:"cache_creation_charge_usd"`
 	ListChargeUSD           string `json:"list_charge_usd"`
 	CacheSavedUSD           string `json:"cache_saved_usd"`
 }
@@ -28,13 +28,13 @@ type pointDTO struct {
 	TokenCount              int64  `json:"token_count"`
 	UncachedInputTokenCount int64  `json:"uncached_input_token_count"`
 	CacheReadTokenCount     int64  `json:"cache_read_token_count"`
-	CacheWriteTokenCount    int64  `json:"cache_write_token_count"`
+	CacheCreationTokenCount int64  `json:"cache_creation_token_count"`
 	OutputTokenCount        int64  `json:"output_token_count"`
 	ChargeUSD               string `json:"charge_usd"`
 	UncachedInputChargeUSD  string `json:"uncached_input_charge_usd"`
 	OutputChargeUSD         string `json:"output_charge_usd"`
 	CacheReadChargeUSD      string `json:"cache_read_charge_usd"`
-	CacheWriteChargeUSD     string `json:"cache_write_charge_usd"`
+	CacheCreationChargeUSD  string `json:"cache_creation_charge_usd"`
 	CacheSavedUSD           string `json:"cache_saved_usd"`
 }
 
@@ -143,13 +143,13 @@ func toWindowDTO(window consoleusage.Window) windowDTO {
 		TokenCount:              window.TokenCount,
 		UncachedInputTokenCount: window.UncachedInputTokenCount,
 		CacheReadTokenCount:     window.CacheReadTokenCount,
-		CacheWriteTokenCount:    window.CacheWriteTokenCount,
+		CacheCreationTokenCount: window.CacheCreationTokenCount,
 		OutputTokenCount:        window.OutputTokenCount,
 		ChargeUSD:               window.ChargeUSD,
 		UncachedInputChargeUSD:  window.UncachedInputChargeUSD,
 		OutputChargeUSD:         window.OutputChargeUSD,
 		CacheReadChargeUSD:      window.CacheReadChargeUSD,
-		CacheWriteChargeUSD:     window.CacheWriteChargeUSD,
+		CacheCreationChargeUSD:  window.CacheCreationChargeUSD,
 		ListChargeUSD:           window.ListChargeUSD,
 		CacheSavedUSD:           window.CacheSavedUSD,
 	}
@@ -164,13 +164,13 @@ func toPointDTOs(points []consoleusage.Point) []pointDTO {
 			TokenCount:              point.TokenCount,
 			UncachedInputTokenCount: point.UncachedInputTokenCount,
 			CacheReadTokenCount:     point.CacheReadTokenCount,
-			CacheWriteTokenCount:    point.CacheWriteTokenCount,
+			CacheCreationTokenCount: point.CacheCreationTokenCount,
 			OutputTokenCount:        point.OutputTokenCount,
 			ChargeUSD:               point.ChargeUSD,
 			UncachedInputChargeUSD:  point.UncachedInputChargeUSD,
 			OutputChargeUSD:         point.OutputChargeUSD,
 			CacheReadChargeUSD:      point.CacheReadChargeUSD,
-			CacheWriteChargeUSD:     point.CacheWriteChargeUSD,
+			CacheCreationChargeUSD:  point.CacheCreationChargeUSD,
 			CacheSavedUSD:           point.CacheSavedUSD,
 		})
 	}

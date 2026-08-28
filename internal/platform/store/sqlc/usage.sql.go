@@ -33,9 +33,9 @@ SELECT
     SUM(
         COALESCE(ur.uncached_input_tokens, 0)
         + COALESCE(ur.cache_read_input_tokens, 0)
-        + COALESCE(ur.cache_write_5m_input_tokens, 0)
-        + COALESCE(ur.cache_write_1h_input_tokens, 0)
-        + COALESCE(ur.cache_write_30m_input_tokens, 0)
+        + COALESCE(ur.cache_creation_5m_input_tokens, 0)
+        + COALESCE(ur.cache_creation_1h_input_tokens, 0)
+        + COALESCE(ur.cache_creation_30m_input_tokens, 0)
         + COALESCE(ur.output_tokens_total, 0)
     )::bigint AS token_count,
     SUM(ch.charge_usd)::numeric AS charge_usd
@@ -168,9 +168,9 @@ billed AS MATERIALIZED (
         (
             COALESCE(ur.uncached_input_tokens, 0)
             + COALESCE(ur.cache_read_input_tokens, 0)
-            + COALESCE(ur.cache_write_5m_input_tokens, 0)
-            + COALESCE(ur.cache_write_1h_input_tokens, 0)
-            + COALESCE(ur.cache_write_30m_input_tokens, 0)
+            + COALESCE(ur.cache_creation_5m_input_tokens, 0)
+            + COALESCE(ur.cache_creation_1h_input_tokens, 0)
+            + COALESCE(ur.cache_creation_30m_input_tokens, 0)
             + COALESCE(ur.output_tokens_total, 0)
         ) AS total_tokens
     FROM windowed w
@@ -393,10 +393,10 @@ billed AS MATERIALIZED (
         COALESCE(ur.uncached_input_tokens, 0) AS uncached_input_tokens,
         COALESCE(ur.cache_read_input_tokens, 0) AS cache_read_input_tokens,
         (
-            COALESCE(ur.cache_write_5m_input_tokens, 0)
-            + COALESCE(ur.cache_write_1h_input_tokens, 0)
-            + COALESCE(ur.cache_write_30m_input_tokens, 0)
-        ) AS cache_write_input_tokens,
+            COALESCE(ur.cache_creation_5m_input_tokens, 0)
+            + COALESCE(ur.cache_creation_1h_input_tokens, 0)
+            + COALESCE(ur.cache_creation_30m_input_tokens, 0)
+        ) AS cache_creation_input_tokens,
         COALESCE(ur.output_tokens_total, 0) AS output_tokens,
         COALESCE(ur.uncached_input_tokens, 0)::numeric
             * COALESCE(ps.uncached_input_price, 0) / 1000000 AS uncached_input_charge_usd,
@@ -412,14 +412,14 @@ billed AS MATERIALIZED (
             * COALESCE(ps.cache_read_input_price, ps.uncached_input_price, 0)
             / 1000000 AS cache_read_charge_usd,
         (
-            COALESCE(ur.cache_write_5m_input_tokens, 0)::numeric
-                * COALESCE(ps.cache_write_5m_input_price, ps.uncached_input_price, 0)
-            + COALESCE(ur.cache_write_1h_input_tokens, 0)::numeric
-                * COALESCE(ps.cache_write_1h_input_price, ps.uncached_input_price, 0)
-            + COALESCE(ur.cache_write_30m_input_tokens, 0)::numeric
-                * COALESCE(ps.cache_write_30m_input_price, ps.uncached_input_price, 0)
-        ) / 1000000 AS cache_write_charge_usd,
-        -- 缓存读若按未缓存价计费要多花多少，再减去缓存写入相对未缓存价的溢价。
+            COALESCE(ur.cache_creation_5m_input_tokens, 0)::numeric
+                * COALESCE(ps.cache_creation_5m_input_price, ps.uncached_input_price, 0)
+            + COALESCE(ur.cache_creation_1h_input_tokens, 0)::numeric
+                * COALESCE(ps.cache_creation_1h_input_price, ps.uncached_input_price, 0)
+            + COALESCE(ur.cache_creation_30m_input_tokens, 0)::numeric
+                * COALESCE(ps.cache_creation_30m_input_price, ps.uncached_input_price, 0)
+        ) / 1000000 AS cache_creation_charge_usd,
+        -- 缓存读若按未缓存价计费要多花多少，再减去缓存创建相对未缓存价的溢价。
         (
             COALESCE(ur.cache_read_input_tokens, 0)::numeric
                 * (
@@ -427,19 +427,19 @@ billed AS MATERIALIZED (
                     - COALESCE(ps.cache_read_input_price, ps.uncached_input_price, 0)
                 )
             - (
-                COALESCE(ur.cache_write_5m_input_tokens, 0)::numeric
+                COALESCE(ur.cache_creation_5m_input_tokens, 0)::numeric
                     * (
-                        COALESCE(ps.cache_write_5m_input_price, ps.uncached_input_price, 0)
+                        COALESCE(ps.cache_creation_5m_input_price, ps.uncached_input_price, 0)
                         - COALESCE(ps.uncached_input_price, 0)
                     )
-                + COALESCE(ur.cache_write_1h_input_tokens, 0)::numeric
+                + COALESCE(ur.cache_creation_1h_input_tokens, 0)::numeric
                     * (
-                        COALESCE(ps.cache_write_1h_input_price, ps.uncached_input_price, 0)
+                        COALESCE(ps.cache_creation_1h_input_price, ps.uncached_input_price, 0)
                         - COALESCE(ps.uncached_input_price, 0)
                     )
-                + COALESCE(ur.cache_write_30m_input_tokens, 0)::numeric
+                + COALESCE(ur.cache_creation_30m_input_tokens, 0)::numeric
                     * (
-                        COALESCE(ps.cache_write_30m_input_price, ps.uncached_input_price, 0)
+                        COALESCE(ps.cache_creation_30m_input_price, ps.uncached_input_price, 0)
                         - COALESCE(ps.uncached_input_price, 0)
                     )
             )
@@ -492,17 +492,17 @@ grouped AS (
         COUNT(*)::bigint AS request_count,
         SUM(
             b.uncached_input_tokens + b.cache_read_input_tokens
-            + b.cache_write_input_tokens + b.output_tokens
+            + b.cache_creation_input_tokens + b.output_tokens
         )::bigint AS token_count,
         SUM(b.uncached_input_tokens)::bigint AS uncached_input_token_count,
         SUM(b.cache_read_input_tokens)::bigint AS cache_read_token_count,
-        SUM(b.cache_write_input_tokens)::bigint AS cache_write_token_count,
+        SUM(b.cache_creation_input_tokens)::bigint AS cache_creation_token_count,
         SUM(b.output_tokens)::bigint AS output_token_count,
         SUM(b.charge_usd)::numeric AS charge_usd,
         SUM(b.uncached_input_charge_usd)::numeric AS uncached_input_charge_usd,
         SUM(b.output_charge_usd)::numeric AS output_charge_usd,
         SUM(b.cache_read_charge_usd)::numeric AS cache_read_charge_usd,
-        SUM(b.cache_write_charge_usd)::numeric AS cache_write_charge_usd,
+        SUM(b.cache_creation_charge_usd)::numeric AS cache_creation_charge_usd,
         SUM(b.cache_saved_usd)::numeric AS cache_saved_usd,
         -- 请求中心的耗时卡也要按桶出热力条，顺带在这里算掉，省一次全表扫描。
         COALESCE(
@@ -533,13 +533,13 @@ SELECT
     COALESCE(g.token_count, 0)::bigint AS token_count,
     COALESCE(g.uncached_input_token_count, 0)::bigint AS uncached_input_token_count,
     COALESCE(g.cache_read_token_count, 0)::bigint AS cache_read_token_count,
-    COALESCE(g.cache_write_token_count, 0)::bigint AS cache_write_token_count,
+    COALESCE(g.cache_creation_token_count, 0)::bigint AS cache_creation_token_count,
     COALESCE(g.output_token_count, 0)::bigint AS output_token_count,
     COALESCE(g.charge_usd, 0)::numeric AS charge_usd,
     COALESCE(g.uncached_input_charge_usd, 0)::numeric AS uncached_input_charge_usd,
     COALESCE(g.output_charge_usd, 0)::numeric AS output_charge_usd,
     COALESCE(g.cache_read_charge_usd, 0)::numeric AS cache_read_charge_usd,
-    COALESCE(g.cache_write_charge_usd, 0)::numeric AS cache_write_charge_usd,
+    COALESCE(g.cache_creation_charge_usd, 0)::numeric AS cache_creation_charge_usd,
     COALESCE(g.cache_saved_usd, 0)::numeric AS cache_saved_usd,
     COALESCE(g.average_latency_ms, 0)::float8 AS average_latency_ms
 FROM buckets bk
@@ -567,13 +567,13 @@ type ListConsoleUsageTimeseriesRow struct {
 	TokenCount              int64
 	UncachedInputTokenCount int64
 	CacheReadTokenCount     int64
-	CacheWriteTokenCount    int64
+	CacheCreationTokenCount int64
 	OutputTokenCount        int64
 	ChargeUsd               pgtype.Numeric
 	UncachedInputChargeUsd  pgtype.Numeric
 	OutputChargeUsd         pgtype.Numeric
 	CacheReadChargeUsd      pgtype.Numeric
-	CacheWriteChargeUsd     pgtype.Numeric
+	CacheCreationChargeUsd  pgtype.Numeric
 	CacheSavedUsd           pgtype.Numeric
 	AverageLatencyMs        float64
 }
@@ -615,13 +615,13 @@ func (q *Queries) ListConsoleUsageTimeseries(ctx context.Context, arg ListConsol
 			&i.TokenCount,
 			&i.UncachedInputTokenCount,
 			&i.CacheReadTokenCount,
-			&i.CacheWriteTokenCount,
+			&i.CacheCreationTokenCount,
 			&i.OutputTokenCount,
 			&i.ChargeUsd,
 			&i.UncachedInputChargeUsd,
 			&i.OutputChargeUsd,
 			&i.CacheReadChargeUsd,
-			&i.CacheWriteChargeUsd,
+			&i.CacheCreationChargeUsd,
 			&i.CacheSavedUsd,
 			&i.AverageLatencyMs,
 		); err != nil {
@@ -671,9 +671,9 @@ billed AS MATERIALIZED (
         (
             COALESCE(ur.uncached_input_tokens, 0)
             + COALESCE(ur.cache_read_input_tokens, 0)
-            + COALESCE(ur.cache_write_5m_input_tokens, 0)
-            + COALESCE(ur.cache_write_1h_input_tokens, 0)
-            + COALESCE(ur.cache_write_30m_input_tokens, 0)
+            + COALESCE(ur.cache_creation_5m_input_tokens, 0)
+            + COALESCE(ur.cache_creation_1h_input_tokens, 0)
+            + COALESCE(ur.cache_creation_30m_input_tokens, 0)
             + COALESCE(ur.output_tokens_total, 0)
         ) AS total_tokens
     FROM windowed w
@@ -826,18 +826,18 @@ SELECT
     COALESCE(SUM(
         COALESCE(ur.uncached_input_tokens, 0)
         + COALESCE(ur.cache_read_input_tokens, 0)
-        + COALESCE(ur.cache_write_5m_input_tokens, 0)
-        + COALESCE(ur.cache_write_1h_input_tokens, 0)
-        + COALESCE(ur.cache_write_30m_input_tokens, 0)
+        + COALESCE(ur.cache_creation_5m_input_tokens, 0)
+        + COALESCE(ur.cache_creation_1h_input_tokens, 0)
+        + COALESCE(ur.cache_creation_30m_input_tokens, 0)
         + COALESCE(ur.output_tokens_total, 0)
     ), 0)::bigint AS token_count,
     COALESCE(SUM(COALESCE(ur.uncached_input_tokens, 0)), 0)::bigint AS uncached_input_token_count,
     COALESCE(SUM(COALESCE(ur.cache_read_input_tokens, 0)), 0)::bigint AS cache_read_token_count,
     COALESCE(SUM(
-        COALESCE(ur.cache_write_5m_input_tokens, 0)
-        + COALESCE(ur.cache_write_1h_input_tokens, 0)
-        + COALESCE(ur.cache_write_30m_input_tokens, 0)
-    ), 0)::bigint AS cache_write_token_count,
+        COALESCE(ur.cache_creation_5m_input_tokens, 0)
+        + COALESCE(ur.cache_creation_1h_input_tokens, 0)
+        + COALESCE(ur.cache_creation_30m_input_tokens, 0)
+    ), 0)::bigint AS cache_creation_token_count,
     COALESCE(SUM(COALESCE(ur.output_tokens_total, 0)), 0)::bigint AS output_token_count,
     COALESCE(SUM(ch.charge_usd), 0)::numeric AS charge_usd,
     COALESCE(SUM(
@@ -857,13 +857,13 @@ SELECT
         * COALESCE(ps.cache_read_input_price, ps.uncached_input_price, 0) / 1000000
     ), 0)::numeric AS cache_read_charge_usd,
     COALESCE(SUM(
-        COALESCE(ur.cache_write_5m_input_tokens, 0)::numeric
-            * COALESCE(ps.cache_write_5m_input_price, ps.uncached_input_price, 0) / 1000000
-        + COALESCE(ur.cache_write_1h_input_tokens, 0)::numeric
-            * COALESCE(ps.cache_write_1h_input_price, ps.uncached_input_price, 0) / 1000000
-        + COALESCE(ur.cache_write_30m_input_tokens, 0)::numeric
-            * COALESCE(ps.cache_write_30m_input_price, ps.uncached_input_price, 0) / 1000000
-    ), 0)::numeric AS cache_write_charge_usd,
+        COALESCE(ur.cache_creation_5m_input_tokens, 0)::numeric
+            * COALESCE(ps.cache_creation_5m_input_price, ps.uncached_input_price, 0) / 1000000
+        + COALESCE(ur.cache_creation_1h_input_tokens, 0)::numeric
+            * COALESCE(ps.cache_creation_1h_input_price, ps.uncached_input_price, 0) / 1000000
+        + COALESCE(ur.cache_creation_30m_input_tokens, 0)::numeric
+            * COALESCE(ps.cache_creation_30m_input_price, ps.uncached_input_price, 0) / 1000000
+    ), 0)::numeric AS cache_creation_charge_usd,
     COALESCE(SUM(
         (
             COALESCE(ur.uncached_input_tokens, 0)::numeric
@@ -876,12 +876,12 @@ SELECT
                 * COALESCE(ps.reasoning_output_price, ps.output_price, 0)
             + COALESCE(ur.cache_read_input_tokens, 0)::numeric
                 * COALESCE(ps.cache_read_input_price, ps.uncached_input_price, 0)
-            + COALESCE(ur.cache_write_5m_input_tokens, 0)::numeric
-                * COALESCE(ps.cache_write_5m_input_price, ps.uncached_input_price, 0)
-            + COALESCE(ur.cache_write_1h_input_tokens, 0)::numeric
-                * COALESCE(ps.cache_write_1h_input_price, ps.uncached_input_price, 0)
-            + COALESCE(ur.cache_write_30m_input_tokens, 0)::numeric
-                * COALESCE(ps.cache_write_30m_input_price, ps.uncached_input_price, 0)
+            + COALESCE(ur.cache_creation_5m_input_tokens, 0)::numeric
+                * COALESCE(ps.cache_creation_5m_input_price, ps.uncached_input_price, 0)
+            + COALESCE(ur.cache_creation_1h_input_tokens, 0)::numeric
+                * COALESCE(ps.cache_creation_1h_input_price, ps.uncached_input_price, 0)
+            + COALESCE(ur.cache_creation_30m_input_tokens, 0)::numeric
+                * COALESCE(ps.cache_creation_30m_input_price, ps.uncached_input_price, 0)
         ) / 1000000
         / COALESCE(NULLIF(ps.price_ratio, 0), 1)
     ), 0)::numeric AS list_charge_usd,
@@ -893,19 +893,19 @@ SELECT
                     - COALESCE(ps.cache_read_input_price, ps.uncached_input_price, 0)
                 )
             - (
-                COALESCE(ur.cache_write_5m_input_tokens, 0)::numeric
+                COALESCE(ur.cache_creation_5m_input_tokens, 0)::numeric
                     * (
-                        COALESCE(ps.cache_write_5m_input_price, ps.uncached_input_price, 0)
+                        COALESCE(ps.cache_creation_5m_input_price, ps.uncached_input_price, 0)
                         - COALESCE(ps.uncached_input_price, 0)
                     )
-                + COALESCE(ur.cache_write_1h_input_tokens, 0)::numeric
+                + COALESCE(ur.cache_creation_1h_input_tokens, 0)::numeric
                     * (
-                        COALESCE(ps.cache_write_1h_input_price, ps.uncached_input_price, 0)
+                        COALESCE(ps.cache_creation_1h_input_price, ps.uncached_input_price, 0)
                         - COALESCE(ps.uncached_input_price, 0)
                     )
-                + COALESCE(ur.cache_write_30m_input_tokens, 0)::numeric
+                + COALESCE(ur.cache_creation_30m_input_tokens, 0)::numeric
                     * (
-                        COALESCE(ps.cache_write_30m_input_price, ps.uncached_input_price, 0)
+                        COALESCE(ps.cache_creation_30m_input_price, ps.uncached_input_price, 0)
                         - COALESCE(ps.uncached_input_price, 0)
                     )
             )
@@ -970,13 +970,13 @@ type SummarizeConsoleUsageWindowRow struct {
 	TokenCount              int64
 	UncachedInputTokenCount int64
 	CacheReadTokenCount     int64
-	CacheWriteTokenCount    int64
+	CacheCreationTokenCount int64
 	OutputTokenCount        int64
 	ChargeUsd               pgtype.Numeric
 	UncachedInputChargeUsd  pgtype.Numeric
 	OutputChargeUsd         pgtype.Numeric
 	CacheReadChargeUsd      pgtype.Numeric
-	CacheWriteChargeUsd     pgtype.Numeric
+	CacheCreationChargeUsd  pgtype.Numeric
 	ListChargeUsd           pgtype.Numeric
 	CacheSavedUsd           pgtype.Numeric
 }
@@ -1000,13 +1000,13 @@ func (q *Queries) SummarizeConsoleUsageWindow(ctx context.Context, arg Summarize
 		&i.TokenCount,
 		&i.UncachedInputTokenCount,
 		&i.CacheReadTokenCount,
-		&i.CacheWriteTokenCount,
+		&i.CacheCreationTokenCount,
 		&i.OutputTokenCount,
 		&i.ChargeUsd,
 		&i.UncachedInputChargeUsd,
 		&i.OutputChargeUsd,
 		&i.CacheReadChargeUsd,
-		&i.CacheWriteChargeUsd,
+		&i.CacheCreationChargeUsd,
 		&i.ListChargeUsd,
 		&i.CacheSavedUsd,
 	)

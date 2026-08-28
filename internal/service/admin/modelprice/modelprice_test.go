@@ -394,14 +394,14 @@ func TestParseFastPriceConfig(t *testing.T) {
 
 func TestOfficialFastPriceReference(t *testing.T) {
 	expected := map[string]struct {
-		input      string
-		cacheRead  string
-		cacheWrite string
-		output     string
+		input         string
+		cacheRead     string
+		cacheCreation string
+		output        string
 	}{
-		"gpt-5.6-sol":       {input: "10.00", cacheRead: "1.00", cacheWrite: "12.50", output: "60.00"},
-		"gpt-5.6-terra":     {input: "4.00", cacheRead: "0.40", cacheWrite: "5.00", output: "24.00"},
-		"gpt-5.6-luna":      {input: "0.40", cacheRead: "0.04", cacheWrite: "0.50", output: "2.40"},
+		"gpt-5.6-sol":       {input: "10.00", cacheRead: "1.00", cacheCreation: "12.50", output: "60.00"},
+		"gpt-5.6-terra":     {input: "4.00", cacheRead: "0.40", cacheCreation: "5.00", output: "24.00"},
+		"gpt-5.6-luna":      {input: "0.40", cacheRead: "0.04", cacheCreation: "0.50", output: "2.40"},
 		"gpt-5.5":           {input: "12.50", cacheRead: "1.25", output: "75.00"},
 		"gpt-5.4":           {input: "5.00", cacheRead: "0.50", output: "30.00"},
 		"gpt-5.4-mini":      {input: "1.50", cacheRead: "0.15", output: "9.00"},
@@ -432,7 +432,7 @@ func TestOfficialFastPriceReference(t *testing.T) {
 				t.Fatalf("Fast reference = %+v, want input=%s output=%s", got, want.input, want.output)
 			}
 			assertOptionalReferencePrice(t, "cache read", got.CacheReadInputPrice, want.cacheRead)
-			assertOptionalReferencePrice(t, "cache write 30m", got.CacheWrite30mInputPrice, want.cacheWrite)
+			assertOptionalReferencePrice(t, "cache creation 30m", got.CacheCreation30mInputPrice, want.cacheCreation)
 			if got.Source != openAIFastPricingSource || !got.CheckedAt.Equal(openAIFastPriceCheckedAt) {
 				t.Fatalf("Fast reference audit facts = source %q checked %s", got.Source, got.CheckedAt)
 			}

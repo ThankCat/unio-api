@@ -84,13 +84,13 @@ type Window struct {
 	TokenCount              int64
 	UncachedInputTokenCount int64
 	CacheReadTokenCount     int64
-	CacheWriteTokenCount    int64
+	CacheCreationTokenCount int64
 	OutputTokenCount        int64
 	ChargeUSD               string
 	UncachedInputChargeUSD  string
 	OutputChargeUSD         string
 	CacheReadChargeUSD      string
-	CacheWriteChargeUSD     string
+	CacheCreationChargeUSD  string
 	ListChargeUSD           string
 	CacheSavedUSD           string
 }
@@ -102,13 +102,13 @@ type Point struct {
 	TokenCount              int64
 	UncachedInputTokenCount int64
 	CacheReadTokenCount     int64
-	CacheWriteTokenCount    int64
+	CacheCreationTokenCount int64
 	OutputTokenCount        int64
 	ChargeUSD               string
 	UncachedInputChargeUSD  string
 	OutputChargeUSD         string
 	CacheReadChargeUSD      string
-	CacheWriteChargeUSD     string
+	CacheCreationChargeUSD  string
 	CacheSavedUSD           string
 	AverageLatencyMs        float64
 }
@@ -615,13 +615,13 @@ func toWindow(row sqlc.SummarizeConsoleUsageWindowRow) Window {
 		TokenCount:              row.TokenCount,
 		UncachedInputTokenCount: row.UncachedInputTokenCount,
 		CacheReadTokenCount:     row.CacheReadTokenCount,
-		CacheWriteTokenCount:    row.CacheWriteTokenCount,
+		CacheCreationTokenCount: row.CacheCreationTokenCount,
 		OutputTokenCount:        row.OutputTokenCount,
 		ChargeUSD:               opsutil.NumericString(row.ChargeUsd),
 		UncachedInputChargeUSD:  opsutil.NumericString(row.UncachedInputChargeUsd),
 		OutputChargeUSD:         opsutil.NumericString(row.OutputChargeUsd),
 		CacheReadChargeUSD:      opsutil.NumericString(row.CacheReadChargeUsd),
-		CacheWriteChargeUSD:     opsutil.NumericString(row.CacheWriteChargeUsd),
+		CacheCreationChargeUSD:  opsutil.NumericString(row.CacheCreationChargeUsd),
 		ListChargeUSD:           opsutil.NumericString(row.ListChargeUsd),
 		CacheSavedUSD:           opsutil.NumericString(row.CacheSavedUsd),
 	}
@@ -634,13 +634,13 @@ func toPoint(row sqlc.ListConsoleUsageTimeseriesRow) Point {
 		TokenCount:              row.TokenCount,
 		UncachedInputTokenCount: row.UncachedInputTokenCount,
 		CacheReadTokenCount:     row.CacheReadTokenCount,
-		CacheWriteTokenCount:    row.CacheWriteTokenCount,
+		CacheCreationTokenCount: row.CacheCreationTokenCount,
 		OutputTokenCount:        row.OutputTokenCount,
 		ChargeUSD:               opsutil.NumericString(row.ChargeUsd),
 		UncachedInputChargeUSD:  opsutil.NumericString(row.UncachedInputChargeUsd),
 		OutputChargeUSD:         opsutil.NumericString(row.OutputChargeUsd),
 		CacheReadChargeUSD:      opsutil.NumericString(row.CacheReadChargeUsd),
-		CacheWriteChargeUSD:     opsutil.NumericString(row.CacheWriteChargeUsd),
+		CacheCreationChargeUSD:  opsutil.NumericString(row.CacheCreationChargeUsd),
 		CacheSavedUSD:           opsutil.NumericString(row.CacheSavedUsd),
 		AverageLatencyMs:        row.AverageLatencyMs,
 	}

@@ -86,31 +86,31 @@ func (s *syncQueriesStore) UpsertCatalogEntry(ctx context.Context, model Canonic
 	if err != nil {
 		return catalogFailure(err, "parse cache read price")
 	}
-	cacheWritePrice, err := numericFromDecimal(model.CacheWritePrice)
+	cacheCreationPrice, err := numericFromDecimal(model.CacheCreationPrice)
 	if err != nil {
 		return catalogFailure(err, "parse cache write price")
 	}
 
 	if _, err := s.queries.UpsertModelCatalogEntry(ctx, sqlc.UpsertModelCatalogEntryParams{
-		CanonicalID:                        model.CanonicalID,
-		Lab:                                model.Lab,
-		Family:                             model.Family,
-		DisplayName:                        model.DisplayName,
-		Description:                        model.Description,
-		KnowledgeCutoff:                    model.KnowledgeCutoff,
-		ContextWindowTokens:                int8Value(model.ContextTokens),
-		InputLimitTokens:                   int8Value(model.InputLimitTokens),
-		MaxOutputTokens:                    int8Value(model.MaxOutputTokens),
-		InputPriceUsdPerMillionTokens:      inputPrice,
-		OutputPriceUsdPerMillionTokens:     outputPrice,
-		CacheReadPriceUsdPerMillionTokens:  cacheReadPrice,
-		CacheWritePriceUsdPerMillionTokens: cacheWritePrice,
-		OpenWeights:                        boolValue(model.OpenWeights),
-		ModalitiesInput:                    emptyIfNil(model.ModalitiesInput),
-		ModalitiesOutput:                   emptyIfNil(model.ModalitiesOutput),
-		ReleaseDate:                        dateValue(model.ReleaseDate),
-		LastUpdated:                        dateValue(model.LastUpdated),
-		Fingerprint:                        model.Fingerprint,
+		CanonicalID:                           model.CanonicalID,
+		Lab:                                   model.Lab,
+		Family:                                model.Family,
+		DisplayName:                           model.DisplayName,
+		Description:                           model.Description,
+		KnowledgeCutoff:                       model.KnowledgeCutoff,
+		ContextWindowTokens:                   int8Value(model.ContextTokens),
+		InputLimitTokens:                      int8Value(model.InputLimitTokens),
+		MaxOutputTokens:                       int8Value(model.MaxOutputTokens),
+		InputPriceUsdPerMillionTokens:         inputPrice,
+		OutputPriceUsdPerMillionTokens:        outputPrice,
+		CacheReadPriceUsdPerMillionTokens:     cacheReadPrice,
+		CacheCreationPriceUsdPerMillionTokens: cacheCreationPrice,
+		OpenWeights:                           boolValue(model.OpenWeights),
+		ModalitiesInput:                       emptyIfNil(model.ModalitiesInput),
+		ModalitiesOutput:                      emptyIfNil(model.ModalitiesOutput),
+		ReleaseDate:                           dateValue(model.ReleaseDate),
+		LastUpdated:                           dateValue(model.LastUpdated),
+		Fingerprint:                           model.Fingerprint,
 	}); err != nil {
 		return catalogFailure(err, "upsert catalog entry")
 	}

@@ -13,7 +13,7 @@ import (
 var ErrResponsesUnreliableUsage = errors.New("openai responses response missing reliable usage")
 
 // usageMappingVersionResponses 标记 Responses usage→facts 映射规则版本，用于历史账务复算与回归。
-// v2：新增解析 input_tokens_details.cache_write_tokens（GPT-5.6+），拆入 30m 缓存写维度。
+// v2：新增解析 input_tokens_details.cache_write_tokens（GPT-5.6+），拆入 30m 缓存创建维度。
 const usageMappingVersionResponses = "openai.responses.v2"
 
 // wireResponse 是上游 /responses 响应体（及流式终态事件内 response 对象）中 adapter 关心的最小子集。
@@ -36,7 +36,7 @@ type wireUsage struct {
 	TotalTokens         *int64                 `json:"total_tokens"`
 	InputTokensDetails  *wireInputTokenDetail  `json:"input_tokens_details"`
 	OutputTokensDetails *wireOutputTokenDetail `json:"output_tokens_details"`
-	// CacheCreationInputTokens 是部分 OpenAI 兼容上游（如 sub2api）在顶层回传的缓存写入 token
+	// CacheCreationInputTokens 是部分 OpenAI 兼容上游（如 sub2api）在顶层回传的缓存创建 token
 	// （Anthropic 风字段名）。作为 input_tokens_details.cache_write_tokens 的别名兜底。
 	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
 }
@@ -87,7 +87,7 @@ func chatUsageFromWire(u *wireUsage) (adapter.ChatUsage, bool) {
 	if u.InputTokensDetails != nil {
 		result.CachedTokens = int(u.InputTokensDetails.CachedTokens)
 	}
-	// 缓存写入 token 按优先级取首个正值，兼容官方与 sub2api 等兼容上游的多种字段名：
+	// 缓存创建 token 按优先级取首个正值，兼容官方与 sub2api 等兼容上游的多种字段名：
 	// input_tokens_details.cache_write_tokens > input_tokens_details.cache_creation_tokens > 顶层 cache_creation_input_tokens。
 	result.CacheWriteTokens = firstPositiveInt64(
 		detailCacheWrite(u.InputTokensDetails),

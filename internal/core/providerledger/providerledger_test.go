@@ -139,8 +139,8 @@ func TestProviderProbeAccountingOnlyDebitsKnownCost(t *testing.T) {
 		UsageSource: coreusage.SourceUpstreamResponse,
 		Usage: coreusage.Facts{
 			UncachedInputTokens: coreusage.KnownTokens(1000), CacheReadInputTokens: coreusage.NotApplicableTokens(),
-			CacheWrite5mInputTokens: coreusage.NotApplicableTokens(), CacheWrite1hInputTokens: coreusage.NotApplicableTokens(),
-			CacheWrite30mInputTokens: coreusage.NotApplicableTokens(), OutputTokensTotal: coreusage.KnownTokens(500),
+			CacheCreation5mInputTokens: coreusage.NotApplicableTokens(), CacheCreation1hInputTokens: coreusage.NotApplicableTokens(),
+			CacheCreation30mInputTokens: coreusage.NotApplicableTokens(), OutputTokensTotal: coreusage.KnownTokens(500),
 			ReasoningOutputTokens: coreusage.NotApplicableTokens(),
 		},
 	}

@@ -58,14 +58,14 @@ func TestEntryFingerprintSensitiveToChanges(t *testing.T) {
 			m.CoarseCapabilities[0].SupportLevel = capability.SupportLevelLimited
 		},
 		// 展示元数据也参与追更判定：上游改了简介/知识截止/缓存价等，采纳模型该收到提示。
-		"description":       func(m *CanonicalModel) { m.Description = "updated blurb" },
-		"knowledge_cutoff":  func(m *CanonicalModel) { m.KnowledgeCutoff = "2025-06" },
-		"input_limit":       func(m *CanonicalModel) { v := int64(272000); m.InputLimitTokens = &v },
-		"open_weights":      func(m *CanonicalModel) { v := true; m.OpenWeights = &v },
-		"modalities_input":  func(m *CanonicalModel) { m.ModalitiesInput = []string{"text", "audio"} },
-		"cache_read_price":  func(m *CanonicalModel) { v := "0.25"; m.CacheReadPrice = &v },
-		"cache_write_price": func(m *CanonicalModel) { v := "3.1"; m.CacheWritePrice = &v },
-		"last_updated":      func(m *CanonicalModel) { v := time.Date(2025, 2, 2, 0, 0, 0, 0, time.UTC); m.LastUpdated = &v },
+		"description":          func(m *CanonicalModel) { m.Description = "updated blurb" },
+		"knowledge_cutoff":     func(m *CanonicalModel) { m.KnowledgeCutoff = "2025-06" },
+		"input_limit":          func(m *CanonicalModel) { v := int64(272000); m.InputLimitTokens = &v },
+		"open_weights":         func(m *CanonicalModel) { v := true; m.OpenWeights = &v },
+		"modalities_input":     func(m *CanonicalModel) { m.ModalitiesInput = []string{"text", "audio"} },
+		"cache_read_price":     func(m *CanonicalModel) { v := "0.25"; m.CacheReadPrice = &v },
+		"cache_creation_price": func(m *CanonicalModel) { v := "3.1"; m.CacheCreationPrice = &v },
+		"last_updated":         func(m *CanonicalModel) { v := time.Date(2025, 2, 2, 0, 0, 0, 0, time.UTC); m.LastUpdated = &v },
 		"capability_limits": func(m *CanonicalModel) {
 			m.CoarseCapabilities[0].Limits = []byte(`{"effort":["low"]}`)
 		},

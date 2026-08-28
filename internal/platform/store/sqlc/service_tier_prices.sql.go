@@ -101,7 +101,7 @@ func (q *Queries) CreateProviderServiceTierCostRisk(ctx context.Context, arg Cre
 }
 
 const getChannelPriceServiceTier = `-- name: GetChannelPriceServiceTier :one
-SELECT id, channel_price_id, service_tier, uncached_input_cost, cache_read_input_cost, cache_write_5m_input_cost, cache_write_1h_input_cost, cache_write_30m_input_cost, output_cost, reasoning_output_cost, created_at
+SELECT id, channel_price_id, service_tier, uncached_input_cost, cache_read_input_cost, cache_creation_5m_input_cost, cache_creation_1h_input_cost, cache_creation_30m_input_cost, output_cost, reasoning_output_cost, created_at
 FROM channel_price_service_tiers
 WHERE id = $1
 LIMIT 1
@@ -116,9 +116,9 @@ func (q *Queries) GetChannelPriceServiceTier(ctx context.Context, id int64) (Cha
 		&i.ServiceTier,
 		&i.UncachedInputCost,
 		&i.CacheReadInputCost,
-		&i.CacheWrite5mInputCost,
-		&i.CacheWrite1hInputCost,
-		&i.CacheWrite30mInputCost,
+		&i.CacheCreation5mInputCost,
+		&i.CacheCreation1hInputCost,
+		&i.CacheCreation30mInputCost,
 		&i.OutputCost,
 		&i.ReasoningOutputCost,
 		&i.CreatedAt,
@@ -127,7 +127,7 @@ func (q *Queries) GetChannelPriceServiceTier(ctx context.Context, id int64) (Cha
 }
 
 const getModelPriceServiceTier = `-- name: GetModelPriceServiceTier :one
-SELECT id, model_price_id, service_tier, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, cache_write_30m_input_price, output_price, reasoning_output_price, reference_source, reference_checked_at, created_at, sale_uncached_input_price, sale_cache_read_input_price, sale_cache_write_5m_input_price, sale_cache_write_1h_input_price, sale_cache_write_30m_input_price, sale_output_price, sale_reasoning_output_price
+SELECT id, model_price_id, service_tier, uncached_input_price, cache_read_input_price, cache_creation_5m_input_price, cache_creation_1h_input_price, cache_creation_30m_input_price, output_price, reasoning_output_price, reference_source, reference_checked_at, created_at, sale_uncached_input_price, sale_cache_read_input_price, sale_cache_creation_5m_input_price, sale_cache_creation_1h_input_price, sale_cache_creation_30m_input_price, sale_output_price, sale_reasoning_output_price
 FROM model_price_service_tiers
 WHERE id = $1
 LIMIT 1
@@ -142,9 +142,9 @@ func (q *Queries) GetModelPriceServiceTier(ctx context.Context, id int64) (Model
 		&i.ServiceTier,
 		&i.UncachedInputPrice,
 		&i.CacheReadInputPrice,
-		&i.CacheWrite5mInputPrice,
-		&i.CacheWrite1hInputPrice,
-		&i.CacheWrite30mInputPrice,
+		&i.CacheCreation5mInputPrice,
+		&i.CacheCreation1hInputPrice,
+		&i.CacheCreation30mInputPrice,
 		&i.OutputPrice,
 		&i.ReasoningOutputPrice,
 		&i.ReferenceSource,
@@ -152,9 +152,9 @@ func (q *Queries) GetModelPriceServiceTier(ctx context.Context, id int64) (Model
 		&i.CreatedAt,
 		&i.SaleUncachedInputPrice,
 		&i.SaleCacheReadInputPrice,
-		&i.SaleCacheWrite5mInputPrice,
-		&i.SaleCacheWrite1hInputPrice,
-		&i.SaleCacheWrite30mInputPrice,
+		&i.SaleCacheCreation5mInputPrice,
+		&i.SaleCacheCreation1hInputPrice,
+		&i.SaleCacheCreation30mInputPrice,
 		&i.SaleOutputPrice,
 		&i.SaleReasoningOutputPrice,
 	)

@@ -86,9 +86,9 @@ SELECT
     COALESCE(base.pricing_unit, '')::text AS base_pricing_unit,
     base.uncached_input_price,
     base.cache_read_input_price,
-    base.cache_write_5m_input_price,
-    base.cache_write_1h_input_price,
-    base.cache_write_30m_input_price,
+    base.cache_creation_5m_input_price,
+    base.cache_creation_1h_input_price,
+    base.cache_creation_30m_input_price,
     base.output_price,
     base.reasoning_output_price,
     COALESCE(cost.id, 0)::bigint AS channel_price_id,
@@ -96,9 +96,9 @@ SELECT
     COALESCE(cost.pricing_unit, '')::text AS cost_pricing_unit,
     cost.uncached_input_cost,
     cost.cache_read_input_cost,
-    cost.cache_write_5m_input_cost,
-    cost.cache_write_1h_input_cost,
-    cost.cache_write_30m_input_cost,
+    cost.cache_creation_5m_input_cost,
+    cost.cache_creation_1h_input_cost,
+    cost.cache_creation_30m_input_cost,
     cost.output_cost,
     cost.reasoning_output_cost,
     COALESCE(mult.id, 0)::bigint AS channel_cost_multiplier_id,
@@ -114,8 +114,8 @@ LEFT JOIN channel_models cm ON cm.channel_id = c.id AND cm.model_id = m.id
 LEFT JOIN LATERAL (
     SELECT mp.id, mp.currency, mp.pricing_unit,
            mp.uncached_input_price, mp.cache_read_input_price,
-           mp.cache_write_5m_input_price, mp.cache_write_1h_input_price,
-           mp.cache_write_30m_input_price, mp.output_price, mp.reasoning_output_price
+           mp.cache_creation_5m_input_price, mp.cache_creation_1h_input_price,
+           mp.cache_creation_30m_input_price, mp.output_price, mp.reasoning_output_price
     FROM model_prices mp
     WHERE mp.model_id = m.id
       AND mp.status = 'enabled'
@@ -127,8 +127,8 @@ LEFT JOIN LATERAL (
 LEFT JOIN LATERAL (
     SELECT cp.id, cp.currency, cp.pricing_unit,
            cp.uncached_input_cost, cp.cache_read_input_cost,
-           cp.cache_write_5m_input_cost, cp.cache_write_1h_input_cost,
-           cp.cache_write_30m_input_cost, cp.output_cost, cp.reasoning_output_cost
+           cp.cache_creation_5m_input_cost, cp.cache_creation_1h_input_cost,
+           cp.cache_creation_30m_input_cost, cp.output_cost, cp.reasoning_output_cost
     FROM channel_prices cp
     WHERE cp.channel_id = c.id
       AND cp.model_id = m.id

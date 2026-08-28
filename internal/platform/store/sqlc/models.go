@@ -166,37 +166,37 @@ type ChannelModelVerificationRun struct {
 }
 
 type ChannelPrice struct {
-	ID                     int64
-	ChannelID              int64
-	ModelID                int64
-	Currency               string
-	PricingUnit            string
-	UncachedInputCost      pgtype.Numeric
-	CacheReadInputCost     pgtype.Numeric
-	CacheWrite5mInputCost  pgtype.Numeric
-	CacheWrite1hInputCost  pgtype.Numeric
-	OutputCost             pgtype.Numeric
-	ReasoningOutputCost    pgtype.Numeric
-	Status                 string
-	EffectiveFrom          pgtype.Timestamptz
-	EffectiveTo            pgtype.Timestamptz
-	CreatedAt              pgtype.Timestamptz
-	UpdatedAt              pgtype.Timestamptz
-	CacheWrite30mInputCost pgtype.Numeric
+	ID                        int64
+	ChannelID                 int64
+	ModelID                   int64
+	Currency                  string
+	PricingUnit               string
+	UncachedInputCost         pgtype.Numeric
+	CacheReadInputCost        pgtype.Numeric
+	CacheCreation5mInputCost  pgtype.Numeric
+	CacheCreation1hInputCost  pgtype.Numeric
+	OutputCost                pgtype.Numeric
+	ReasoningOutputCost       pgtype.Numeric
+	Status                    string
+	EffectiveFrom             pgtype.Timestamptz
+	EffectiveTo               pgtype.Timestamptz
+	CreatedAt                 pgtype.Timestamptz
+	UpdatedAt                 pgtype.Timestamptz
+	CacheCreation30mInputCost pgtype.Numeric
 }
 
 type ChannelPriceServiceTier struct {
-	ID                     int64
-	ChannelPriceID         int64
-	ServiceTier            string
-	UncachedInputCost      pgtype.Numeric
-	CacheReadInputCost     pgtype.Numeric
-	CacheWrite5mInputCost  pgtype.Numeric
-	CacheWrite1hInputCost  pgtype.Numeric
-	CacheWrite30mInputCost pgtype.Numeric
-	OutputCost             pgtype.Numeric
-	ReasoningOutputCost    pgtype.Numeric
-	CreatedAt              pgtype.Timestamptz
+	ID                        int64
+	ChannelPriceID            int64
+	ServiceTier               string
+	UncachedInputCost         pgtype.Numeric
+	CacheReadInputCost        pgtype.Numeric
+	CacheCreation5mInputCost  pgtype.Numeric
+	CacheCreation1hInputCost  pgtype.Numeric
+	CacheCreation30mInputCost pgtype.Numeric
+	OutputCost                pgtype.Numeric
+	ReasoningOutputCost       pgtype.Numeric
+	CreatedAt                 pgtype.Timestamptz
 }
 
 type ChannelRechargeFactor struct {
@@ -230,42 +230,42 @@ type ChannelTestLog struct {
 }
 
 type CostSnapshot struct {
-	ID                           int64
-	RequestRecordID              int64
-	CostPriceID                  pgtype.Int8
-	ProviderID                   int64
-	ChannelID                    int64
-	ModelID                      int64
-	UpstreamModel                string
-	Currency                     string
-	PricingUnit                  string
-	UncachedInputCost            pgtype.Numeric
-	CacheReadInputCost           pgtype.Numeric
-	CacheWrite5mInputCost        pgtype.Numeric
-	CacheWrite1hInputCost        pgtype.Numeric
-	OutputCost                   pgtype.Numeric
-	ReasoningOutputCost          pgtype.Numeric
-	UncachedInputCostAmount      pgtype.Numeric
-	CacheReadInputCostAmount     pgtype.Numeric
-	CacheWrite5mInputCostAmount  pgtype.Numeric
-	CacheWrite1hInputCostAmount  pgtype.Numeric
-	OutputCostAmount             pgtype.Numeric
-	ReasoningOutputCostAmount    pgtype.Numeric
-	TotalCostAmount              pgtype.Numeric
-	FormulaVersion               string
-	CreatedAt                    pgtype.Timestamptz
-	CacheWrite30mInputCost       pgtype.Numeric
-	CacheWrite30mInputCostAmount pgtype.Numeric
-	CostBaseModelPriceID         pgtype.Int8
-	ChannelCostMultiplierID      pgtype.Int8
-	CostMultiplier               pgtype.Numeric
-	ChannelRechargeFactorID      pgtype.Int8
-	RechargeFactor               pgtype.Numeric
-	LongContextApplied           bool
-	ServiceTier                  pgtype.Text
-	ModelPriceServiceTierID      pgtype.Int8
-	ChannelPriceServiceTierID    pgtype.Int8
-	TierCostSource               pgtype.Text
+	ID                              int64
+	RequestRecordID                 int64
+	CostPriceID                     pgtype.Int8
+	ProviderID                      int64
+	ChannelID                       int64
+	ModelID                         int64
+	UpstreamModel                   string
+	Currency                        string
+	PricingUnit                     string
+	UncachedInputCost               pgtype.Numeric
+	CacheReadInputCost              pgtype.Numeric
+	CacheCreation5mInputCost        pgtype.Numeric
+	CacheCreation1hInputCost        pgtype.Numeric
+	OutputCost                      pgtype.Numeric
+	ReasoningOutputCost             pgtype.Numeric
+	UncachedInputCostAmount         pgtype.Numeric
+	CacheReadInputCostAmount        pgtype.Numeric
+	CacheCreation5mInputCostAmount  pgtype.Numeric
+	CacheCreation1hInputCostAmount  pgtype.Numeric
+	OutputCostAmount                pgtype.Numeric
+	ReasoningOutputCostAmount       pgtype.Numeric
+	TotalCostAmount                 pgtype.Numeric
+	FormulaVersion                  string
+	CreatedAt                       pgtype.Timestamptz
+	CacheCreation30mInputCost       pgtype.Numeric
+	CacheCreation30mInputCostAmount pgtype.Numeric
+	CostBaseModelPriceID            pgtype.Int8
+	ChannelCostMultiplierID         pgtype.Int8
+	CostMultiplier                  pgtype.Numeric
+	ChannelRechargeFactorID         pgtype.Int8
+	RechargeFactor                  pgtype.Numeric
+	LongContextApplied              bool
+	ServiceTier                     pgtype.Text
+	ModelPriceServiceTierID         pgtype.Int8
+	ChannelPriceServiceTierID       pgtype.Int8
+	TierCostSource                  pgtype.Text
 }
 
 type LedgerBillingException struct {
@@ -384,8 +384,8 @@ type ModelCatalog struct {
 	KnowledgeCutoff string
 	// 缓存读参考价基线（USD/百万 token），仅展示，绝不用于计费。
 	CacheReadPriceUsdPerMillionTokens pgtype.Numeric
-	// 缓存写参考价基线（USD/百万 token），仅展示，绝不用于计费。
-	CacheWritePriceUsdPerMillionTokens pgtype.Numeric
+	// 缓存创建参考价基线（USD/百万 token），仅展示，绝不用于计费。
+	CacheCreationPriceUsdPerMillionTokens pgtype.Numeric
 	// 单请求输入 token 上限（上游 limit.input），是长上下文阶梯阈值的参考来源。
 	InputLimitTokens pgtype.Int8
 	// 是否开源权重；NULL 表示上游未标注。
@@ -434,8 +434,8 @@ type ModelPrice struct {
 	PricingUnit                 string
 	UncachedInputPrice          pgtype.Numeric
 	CacheReadInputPrice         pgtype.Numeric
-	CacheWrite5mInputPrice      pgtype.Numeric
-	CacheWrite1hInputPrice      pgtype.Numeric
+	CacheCreation5mInputPrice   pgtype.Numeric
+	CacheCreation1hInputPrice   pgtype.Numeric
 	OutputPrice                 pgtype.Numeric
 	ReasoningOutputPrice        pgtype.Numeric
 	Status                      string
@@ -443,66 +443,66 @@ type ModelPrice struct {
 	EffectiveTo                 pgtype.Timestamptz
 	CreatedAt                   pgtype.Timestamptz
 	UpdatedAt                   pgtype.Timestamptz
-	CacheWrite30mInputPrice     pgtype.Numeric
+	CacheCreation30mInputPrice  pgtype.Numeric
 	LongContextEnabled          bool
 	LongContextThreshold        pgtype.Int8
 	LongContextInputMultiplier  pgtype.Numeric
 	LongContextOutputMultiplier pgtype.Numeric
 	// 模型对外绝对售价；整组非空时覆盖倍率，Standard 与 Fast 必须同在。整组为空时回退「基准价 × 同行 sale_price_ratio」。两者都空则此行不可售。
-	SaleUncachedInputPrice      pgtype.Numeric
-	SaleCacheReadInputPrice     pgtype.Numeric
-	SaleCacheWrite5mInputPrice  pgtype.Numeric
-	SaleCacheWrite1hInputPrice  pgtype.Numeric
-	SaleCacheWrite30mInputPrice pgtype.Numeric
-	SaleOutputPrice             pgtype.Numeric
-	SaleReasoningOutputPrice    pgtype.Numeric
+	SaleUncachedInputPrice         pgtype.Numeric
+	SaleCacheReadInputPrice        pgtype.Numeric
+	SaleCacheCreation5mInputPrice  pgtype.Numeric
+	SaleCacheCreation1hInputPrice  pgtype.Numeric
+	SaleCacheCreation30mInputPrice pgtype.Numeric
+	SaleOutputPrice                pgtype.Numeric
+	SaleReasoningOutputPrice       pgtype.Numeric
 	// 模型售价倍率：绝对售价整组留空时，客户售价 = 基准价 × 本倍率。可与绝对售价同行共存，但绝对售价生效时倍率不参与计算。
 	SalePriceRatio pgtype.Numeric
 }
 
 type ModelPriceServiceTier struct {
-	ID                      int64
-	ModelPriceID            int64
-	ServiceTier             string
-	UncachedInputPrice      pgtype.Numeric
-	CacheReadInputPrice     pgtype.Numeric
-	CacheWrite5mInputPrice  pgtype.Numeric
-	CacheWrite1hInputPrice  pgtype.Numeric
-	CacheWrite30mInputPrice pgtype.Numeric
-	OutputPrice             pgtype.Numeric
-	ReasoningOutputPrice    pgtype.Numeric
-	ReferenceSource         pgtype.Text
-	ReferenceCheckedAt      pgtype.Date
-	CreatedAt               pgtype.Timestamptz
+	ID                         int64
+	ModelPriceID               int64
+	ServiceTier                string
+	UncachedInputPrice         pgtype.Numeric
+	CacheReadInputPrice        pgtype.Numeric
+	CacheCreation5mInputPrice  pgtype.Numeric
+	CacheCreation1hInputPrice  pgtype.Numeric
+	CacheCreation30mInputPrice pgtype.Numeric
+	OutputPrice                pgtype.Numeric
+	ReasoningOutputPrice       pgtype.Numeric
+	ReferenceSource            pgtype.Text
+	ReferenceCheckedAt         pgtype.Date
+	CreatedAt                  pgtype.Timestamptz
 	// Fast 档对外绝对售价；整组为空时回退「该档基准价 × 模型 sale_price_ratio」（与 Standard 共用倍率）。
-	SaleUncachedInputPrice      pgtype.Numeric
-	SaleCacheReadInputPrice     pgtype.Numeric
-	SaleCacheWrite5mInputPrice  pgtype.Numeric
-	SaleCacheWrite1hInputPrice  pgtype.Numeric
-	SaleCacheWrite30mInputPrice pgtype.Numeric
-	SaleOutputPrice             pgtype.Numeric
-	SaleReasoningOutputPrice    pgtype.Numeric
+	SaleUncachedInputPrice         pgtype.Numeric
+	SaleCacheReadInputPrice        pgtype.Numeric
+	SaleCacheCreation5mInputPrice  pgtype.Numeric
+	SaleCacheCreation1hInputPrice  pgtype.Numeric
+	SaleCacheCreation30mInputPrice pgtype.Numeric
+	SaleOutputPrice                pgtype.Numeric
+	SaleReasoningOutputPrice       pgtype.Numeric
 }
 
 type PriceSnapshot struct {
-	ID                      int64
-	RequestRecordID         int64
-	PriceID                 pgtype.Int8
-	Currency                string
-	PricingUnit             string
-	UncachedInputPrice      pgtype.Numeric
-	CacheReadInputPrice     pgtype.Numeric
-	CacheWrite5mInputPrice  pgtype.Numeric
-	CacheWrite1hInputPrice  pgtype.Numeric
-	OutputPrice             pgtype.Numeric
-	ReasoningOutputPrice    pgtype.Numeric
-	FormulaVersion          string
-	CreatedAt               pgtype.Timestamptz
-	PriceRatio              pgtype.Numeric
-	CacheWrite30mInputPrice pgtype.Numeric
-	LongContextApplied      bool
-	ServiceTier             pgtype.Text
-	ModelPriceServiceTierID pgtype.Int8
+	ID                         int64
+	RequestRecordID            int64
+	PriceID                    pgtype.Int8
+	Currency                   string
+	PricingUnit                string
+	UncachedInputPrice         pgtype.Numeric
+	CacheReadInputPrice        pgtype.Numeric
+	CacheCreation5mInputPrice  pgtype.Numeric
+	CacheCreation1hInputPrice  pgtype.Numeric
+	OutputPrice                pgtype.Numeric
+	ReasoningOutputPrice       pgtype.Numeric
+	FormulaVersion             string
+	CreatedAt                  pgtype.Timestamptz
+	PriceRatio                 pgtype.Numeric
+	CacheCreation30mInputPrice pgtype.Numeric
+	LongContextApplied         bool
+	ServiceTier                pgtype.Text
+	ModelPriceServiceTierID    pgtype.Int8
 }
 
 type Provider struct {
@@ -749,88 +749,88 @@ type SchemaHealthCheck struct {
 }
 
 type SettlementRecoveryJob struct {
-	ID                                 int64
-	UserID                             int64
-	RequestRecordID                    int64
-	AttemptID                          int64
-	ReservationID                      int64
-	ResponseProtocol                   string
-	ResponseID                         string
-	ResponseModelID                    string
-	ModelID                            int64
-	ProviderID                         int64
-	ChannelID                          int64
-	UpstreamProtocol                   string
-	UpstreamResponseID                 string
-	UpstreamModel                      string
-	FinishClass                        string
-	UpstreamFinishReason               string
-	UpstreamStatusCode                 int32
-	UpstreamRequestID                  pgtype.Text
-	UsageUncachedInputTokens           int64
-	UsageUncachedInputTokensState      string
-	UsageCacheReadInputTokens          int64
-	UsageCacheReadInputTokensState     string
-	UsageCacheWrite5mInputTokens       int64
-	UsageCacheWrite5mInputTokensState  string
-	UsageCacheWrite1hInputTokens       int64
-	UsageCacheWrite1hInputTokensState  string
-	UsageOutputTokensTotal             int64
-	UsageOutputTokensTotalState        string
-	UsageReasoningOutputTokens         int64
-	UsageReasoningOutputTokensState    string
-	UsageServerWebSearchRequests       int64
-	UsageServerWebFetchRequests        int64
-	UsageSource                        string
-	UsageMappingVersion                string
-	PriceID                            pgtype.Int8
-	Currency                           string
-	PricingUnit                        string
-	UncachedInputPrice                 pgtype.Numeric
-	CacheReadInputPrice                pgtype.Numeric
-	CacheWrite5mInputPrice             pgtype.Numeric
-	CacheWrite1hInputPrice             pgtype.Numeric
-	OutputPrice                        pgtype.Numeric
-	ReasoningOutputPrice               pgtype.Numeric
-	FormulaVersion                     string
-	EstimatedAmount                    pgtype.Numeric
-	AuthorizedAmount                   pgtype.Numeric
-	Status                             string
-	AttemptCount                       int32
-	MaxAttempts                        int32
-	NextRunAt                          pgtype.Timestamptz
-	LockedBy                           pgtype.Text
-	LockedUntil                        pgtype.Timestamptz
-	LastErrorCode                      pgtype.Text
-	LastErrorMessage                   pgtype.Text
-	LastInternalErrorDetail            pgtype.Text
-	LastAttemptedAt                    pgtype.Timestamptz
-	CompletedAt                        pgtype.Timestamptz
-	CreatedAt                          pgtype.Timestamptz
-	UpdatedAt                          pgtype.Timestamptz
-	PriceRatio                         pgtype.Numeric
-	UsageCacheWrite30mInputTokens      int64
-	UsageCacheWrite30mInputTokensState string
-	CacheWrite30mInputPrice            pgtype.Numeric
-	CostBaseModelPriceID               pgtype.Int8
-	ChannelCostMultiplierID            pgtype.Int8
-	ChannelRechargeFactorID            pgtype.Int8
-	RequestFinalStatus                 string
-	AttemptFinalStatus                 string
-	SettlementErrorCode                string
-	SettlementErrorMessage             string
-	SettlementInternalErrorDetail      string
-	LongContextEnabled                 bool
-	LongContextThreshold               pgtype.Int8
-	LongContextInputMultiplier         pgtype.Numeric
-	LongContextOutputMultiplier        pgtype.Numeric
-	RequestedServiceTier               pgtype.Text
-	ActualServiceTier                  pgtype.Text
-	SettledServiceTier                 pgtype.Text
-	UpstreamServiceTier                pgtype.Text
-	ServiceTierResolution              pgtype.Text
-	ModelPriceServiceTierID            pgtype.Int8
-	ChannelPriceServiceTierID          pgtype.Int8
+	ID                                    int64
+	UserID                                int64
+	RequestRecordID                       int64
+	AttemptID                             int64
+	ReservationID                         int64
+	ResponseProtocol                      string
+	ResponseID                            string
+	ResponseModelID                       string
+	ModelID                               int64
+	ProviderID                            int64
+	ChannelID                             int64
+	UpstreamProtocol                      string
+	UpstreamResponseID                    string
+	UpstreamModel                         string
+	FinishClass                           string
+	UpstreamFinishReason                  string
+	UpstreamStatusCode                    int32
+	UpstreamRequestID                     pgtype.Text
+	UsageUncachedInputTokens              int64
+	UsageUncachedInputTokensState         string
+	UsageCacheReadInputTokens             int64
+	UsageCacheReadInputTokensState        string
+	UsageCacheCreation5mInputTokens       int64
+	UsageCacheCreation5mInputTokensState  string
+	UsageCacheCreation1hInputTokens       int64
+	UsageCacheCreation1hInputTokensState  string
+	UsageOutputTokensTotal                int64
+	UsageOutputTokensTotalState           string
+	UsageReasoningOutputTokens            int64
+	UsageReasoningOutputTokensState       string
+	UsageServerWebSearchRequests          int64
+	UsageServerWebFetchRequests           int64
+	UsageSource                           string
+	UsageMappingVersion                   string
+	PriceID                               pgtype.Int8
+	Currency                              string
+	PricingUnit                           string
+	UncachedInputPrice                    pgtype.Numeric
+	CacheReadInputPrice                   pgtype.Numeric
+	CacheCreation5mInputPrice             pgtype.Numeric
+	CacheCreation1hInputPrice             pgtype.Numeric
+	OutputPrice                           pgtype.Numeric
+	ReasoningOutputPrice                  pgtype.Numeric
+	FormulaVersion                        string
+	EstimatedAmount                       pgtype.Numeric
+	AuthorizedAmount                      pgtype.Numeric
+	Status                                string
+	AttemptCount                          int32
+	MaxAttempts                           int32
+	NextRunAt                             pgtype.Timestamptz
+	LockedBy                              pgtype.Text
+	LockedUntil                           pgtype.Timestamptz
+	LastErrorCode                         pgtype.Text
+	LastErrorMessage                      pgtype.Text
+	LastInternalErrorDetail               pgtype.Text
+	LastAttemptedAt                       pgtype.Timestamptz
+	CompletedAt                           pgtype.Timestamptz
+	CreatedAt                             pgtype.Timestamptz
+	UpdatedAt                             pgtype.Timestamptz
+	PriceRatio                            pgtype.Numeric
+	UsageCacheCreation30mInputTokens      int64
+	UsageCacheCreation30mInputTokensState string
+	CacheCreation30mInputPrice            pgtype.Numeric
+	CostBaseModelPriceID                  pgtype.Int8
+	ChannelCostMultiplierID               pgtype.Int8
+	ChannelRechargeFactorID               pgtype.Int8
+	RequestFinalStatus                    string
+	AttemptFinalStatus                    string
+	SettlementErrorCode                   string
+	SettlementErrorMessage                string
+	SettlementInternalErrorDetail         string
+	LongContextEnabled                    bool
+	LongContextThreshold                  pgtype.Int8
+	LongContextInputMultiplier            pgtype.Numeric
+	LongContextOutputMultiplier           pgtype.Numeric
+	RequestedServiceTier                  pgtype.Text
+	ActualServiceTier                     pgtype.Text
+	SettledServiceTier                    pgtype.Text
+	UpstreamServiceTier                   pgtype.Text
+	ServiceTierResolution                 pgtype.Text
+	ModelPriceServiceTierID               pgtype.Int8
+	ChannelPriceServiceTierID             pgtype.Int8
 }
 
 type UsageLineItem struct {
@@ -842,25 +842,25 @@ type UsageLineItem struct {
 }
 
 type UsageRecord struct {
-	ID                            int64
-	RequestRecordID               int64
-	UncachedInputTokens           int64
-	UncachedInputTokensState      string
-	CacheReadInputTokens          int64
-	CacheReadInputTokensState     string
-	CacheWrite5mInputTokens       int64
-	CacheWrite5mInputTokensState  string
-	CacheWrite1hInputTokens       int64
-	CacheWrite1hInputTokensState  string
-	OutputTokensTotal             int64
-	OutputTokensTotalState        string
-	ReasoningOutputTokens         int64
-	ReasoningOutputTokensState    string
-	UsageSource                   string
-	UsageMappingVersion           string
-	CreatedAt                     pgtype.Timestamptz
-	CacheWrite30mInputTokens      int64
-	CacheWrite30mInputTokensState string
+	ID                               int64
+	RequestRecordID                  int64
+	UncachedInputTokens              int64
+	UncachedInputTokensState         string
+	CacheReadInputTokens             int64
+	CacheReadInputTokensState        string
+	CacheCreation5mInputTokens       int64
+	CacheCreation5mInputTokensState  string
+	CacheCreation1hInputTokens       int64
+	CacheCreation1hInputTokensState  string
+	OutputTokensTotal                int64
+	OutputTokensTotalState           string
+	ReasoningOutputTokens            int64
+	ReasoningOutputTokensState       string
+	UsageSource                      string
+	UsageMappingVersion              string
+	CreatedAt                        pgtype.Timestamptz
+	CacheCreation30mInputTokens      int64
+	CacheCreation30mInputTokensState string
 }
 
 type User struct {

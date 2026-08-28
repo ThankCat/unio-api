@@ -115,15 +115,15 @@ type Facts struct {
 	// CacheReadInputTokens 是命中上游 prompt cache 读取的输入 token。
 	CacheReadInputTokens TokenCount
 
-	// CacheWrite5mInputTokens 是写入 5m TTL cache 的输入 token（Anthropic 5m 档；OpenAI 不适用）。
-	CacheWrite5mInputTokens TokenCount
+	// CacheCreation5mInputTokens 是写入 5m TTL cache 的输入 token（Anthropic 5m 档；OpenAI 不适用）。
+	CacheCreation5mInputTokens TokenCount
 
-	// CacheWrite1hInputTokens 是写入 1h TTL cache 的输入 token（Anthropic 1h 档；OpenAI 不适用）。
-	CacheWrite1hInputTokens TokenCount
+	// CacheCreation1hInputTokens 是写入 1h TTL cache 的输入 token（Anthropic 1h 档；OpenAI 不适用）。
+	CacheCreation1hInputTokens TokenCount
 
-	// CacheWrite30mInputTokens 是写入 30m TTL cache 的输入 token（OpenAI GPT-5.6+ 单档缓存写；
+	// CacheCreation30mInputTokens 是写入 30m TTL cache 的输入 token（OpenAI GPT-5.6+ 单档缓存创建；
 	// Anthropic 不适用）。与 5m/1h 并列，按 TTL 语义独立计价与审计，绝不混入其它档位。
-	CacheWrite30mInputTokens TokenCount
+	CacheCreation30mInputTokens TokenCount
 
 	// OutputTokensTotal 是包含 reasoning 的 authoritative 输出总量。
 	OutputTokensTotal TokenCount
@@ -144,9 +144,9 @@ func (f Facts) ActualTotalTokens() (int64, bool) {
 	counts := []TokenCount{
 		f.UncachedInputTokens,
 		f.CacheReadInputTokens,
-		f.CacheWrite5mInputTokens,
-		f.CacheWrite30mInputTokens,
-		f.CacheWrite1hInputTokens,
+		f.CacheCreation5mInputTokens,
+		f.CacheCreation30mInputTokens,
+		f.CacheCreation1hInputTokens,
 		f.OutputTokensTotal,
 	}
 	total := int64(0)
@@ -169,9 +169,9 @@ func (f Facts) ObservedInputTokens() (int64, bool) {
 	counts := []TokenCount{
 		f.UncachedInputTokens,
 		f.CacheReadInputTokens,
-		f.CacheWrite5mInputTokens,
-		f.CacheWrite30mInputTokens,
-		f.CacheWrite1hInputTokens,
+		f.CacheCreation5mInputTokens,
+		f.CacheCreation30mInputTokens,
+		f.CacheCreation1hInputTokens,
 	}
 	total := int64(0)
 	for _, count := range counts {
@@ -205,9 +205,9 @@ func (f Facts) Valid() bool {
 	counts := []TokenCount{
 		f.UncachedInputTokens,
 		f.CacheReadInputTokens,
-		f.CacheWrite5mInputTokens,
-		f.CacheWrite1hInputTokens,
-		f.CacheWrite30mInputTokens,
+		f.CacheCreation5mInputTokens,
+		f.CacheCreation1hInputTokens,
+		f.CacheCreation30mInputTokens,
 		f.OutputTokensTotal,
 		f.ReasoningOutputTokens,
 	}

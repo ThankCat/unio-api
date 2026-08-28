@@ -41,24 +41,24 @@ SELECT
     base.pricing_unit AS base_pricing_unit,
     base.uncached_input_price,
     base.cache_read_input_price,
-    base.cache_write_5m_input_price,
-    base.cache_write_1h_input_price,
-    base.cache_write_30m_input_price,
+    base.cache_creation_5m_input_price,
+    base.cache_creation_1h_input_price,
+    base.cache_creation_30m_input_price,
     base.output_price,
     base.reasoning_output_price,
     COALESCE(fast_base.id, 0)::bigint AS fast_model_price_service_tier_id,
     fast_base.uncached_input_price AS fast_uncached_input_price,
     fast_base.cache_read_input_price AS fast_cache_read_input_price,
-    fast_base.cache_write_5m_input_price AS fast_cache_write_5m_input_price,
-    fast_base.cache_write_1h_input_price AS fast_cache_write_1h_input_price,
-    fast_base.cache_write_30m_input_price AS fast_cache_write_30m_input_price,
+    fast_base.cache_creation_5m_input_price AS fast_cache_creation_5m_input_price,
+    fast_base.cache_creation_1h_input_price AS fast_cache_creation_1h_input_price,
+    fast_base.cache_creation_30m_input_price AS fast_cache_creation_30m_input_price,
     fast_base.output_price AS fast_output_price,
     fast_base.reasoning_output_price AS fast_reasoning_output_price,
     fast_base.sale_uncached_input_price AS fast_sale_uncached_input_price,
     fast_base.sale_cache_read_input_price AS fast_sale_cache_read_input_price,
-    fast_base.sale_cache_write_5m_input_price AS fast_sale_cache_write_5m_input_price,
-    fast_base.sale_cache_write_1h_input_price AS fast_sale_cache_write_1h_input_price,
-    fast_base.sale_cache_write_30m_input_price AS fast_sale_cache_write_30m_input_price,
+    fast_base.sale_cache_creation_5m_input_price AS fast_sale_cache_creation_5m_input_price,
+    fast_base.sale_cache_creation_1h_input_price AS fast_sale_cache_creation_1h_input_price,
+    fast_base.sale_cache_creation_30m_input_price AS fast_sale_cache_creation_30m_input_price,
     fast_base.sale_output_price AS fast_sale_output_price,
     fast_base.sale_reasoning_output_price AS fast_sale_reasoning_output_price,
     -- 售价的两种表达都挂在模型自己的价格行上，是两套独立实体：绝对售价整组非空时
@@ -68,9 +68,9 @@ SELECT
     base.sale_price_ratio,
     base.sale_uncached_input_price,
     base.sale_cache_read_input_price,
-    base.sale_cache_write_5m_input_price,
-    base.sale_cache_write_1h_input_price,
-    base.sale_cache_write_30m_input_price,
+    base.sale_cache_creation_5m_input_price,
+    base.sale_cache_creation_1h_input_price,
+    base.sale_cache_creation_30m_input_price,
     base.sale_output_price,
     base.sale_reasoning_output_price,
     base.long_context_enabled AS base_long_context_enabled,
@@ -84,17 +84,17 @@ SELECT
     COALESCE(cost.pricing_unit, '')::text AS cost_pricing_unit,
     cost.uncached_input_cost,
     cost.cache_read_input_cost,
-    cost.cache_write_5m_input_cost,
-    cost.cache_write_1h_input_cost,
-    cost.cache_write_30m_input_cost,
+    cost.cache_creation_5m_input_cost,
+    cost.cache_creation_1h_input_cost,
+    cost.cache_creation_30m_input_cost,
     cost.output_cost,
     cost.reasoning_output_cost,
     COALESCE(fast_cost.id, 0)::bigint AS fast_channel_price_service_tier_id,
     fast_cost.uncached_input_cost AS fast_uncached_input_cost,
     fast_cost.cache_read_input_cost AS fast_cache_read_input_cost,
-    fast_cost.cache_write_5m_input_cost AS fast_cache_write_5m_input_cost,
-    fast_cost.cache_write_1h_input_cost AS fast_cache_write_1h_input_cost,
-    fast_cost.cache_write_30m_input_cost AS fast_cache_write_30m_input_cost,
+    fast_cost.cache_creation_5m_input_cost AS fast_cache_creation_5m_input_cost,
+    fast_cost.cache_creation_1h_input_cost AS fast_cache_creation_1h_input_cost,
+    fast_cost.cache_creation_30m_input_cost AS fast_cache_creation_30m_input_cost,
     fast_cost.output_cost AS fast_output_cost,
     fast_cost.reasoning_output_cost AS fast_reasoning_output_cost,
     COALESCE(mult.id, 0)::bigint AS channel_cost_multiplier_id,
@@ -110,13 +110,13 @@ JOIN LATERAL (
     -- 客户售价 = base × 模型倍率 sale_price_ratio；渠道真实成本（倍率路径）= base × 价格倍率 × 充值倍率。
     SELECT mp.id, mp.currency, mp.pricing_unit,
         mp.uncached_input_price, mp.cache_read_input_price,
-        mp.cache_write_5m_input_price, mp.cache_write_1h_input_price,
-        mp.cache_write_30m_input_price,
+        mp.cache_creation_5m_input_price, mp.cache_creation_1h_input_price,
+        mp.cache_creation_30m_input_price,
         mp.output_price, mp.reasoning_output_price,
         mp.sale_price_ratio,
         mp.sale_uncached_input_price, mp.sale_cache_read_input_price,
-        mp.sale_cache_write_5m_input_price, mp.sale_cache_write_1h_input_price,
-        mp.sale_cache_write_30m_input_price,
+        mp.sale_cache_creation_5m_input_price, mp.sale_cache_creation_1h_input_price,
+        mp.sale_cache_creation_30m_input_price,
         mp.sale_output_price, mp.sale_reasoning_output_price,
         mp.long_context_enabled, mp.long_context_threshold,
         mp.long_context_input_multiplier, mp.long_context_output_multiplier
@@ -134,8 +134,8 @@ LEFT JOIN LATERAL (
     -- cost: 命中渠道当前生效的绝对成本覆盖（channel_prices，优先级最高，可空）。
     SELECT cp.id, cp.currency, cp.pricing_unit,
         cp.uncached_input_cost, cp.cache_read_input_cost,
-        cp.cache_write_5m_input_cost, cp.cache_write_1h_input_cost,
-        cp.cache_write_30m_input_cost,
+        cp.cache_creation_5m_input_cost, cp.cache_creation_1h_input_cost,
+        cp.cache_creation_30m_input_cost,
         cp.output_cost, cp.reasoning_output_cost
     FROM channel_prices cp
     WHERE cp.channel_id = c.id
@@ -192,88 +192,88 @@ type FindModelCandidatesParams struct {
 }
 
 type FindModelCandidatesRow struct {
-	ModelDbID                       int64
-	RequestedModelID                string
-	ModelMaxOutputTokens            pgtype.Int8
-	ProviderID                      int64
-	ProviderSlug                    string
-	AdapterKey                      string
-	Protocol                        string
-	ChannelID                       int64
-	ChannelName                     string
-	Origin                          string
-	ProviderOriginRevision          int64
-	ProviderStatusRevision          int64
-	ChannelConfigRevision           int64
-	ChannelCapacityRevision         int64
-	Credential                      string
-	SupportsOpenaiFast              bool
-	ResponseTimeoutMs               pgtype.Int4
-	FirstTokenTimeoutMs             pgtype.Int4
-	Priority                        int32
-	ChannelConcurrencyLimit         pgtype.Int4
-	ChannelStickyEnabled            pgtype.Bool
-	ChannelStickyTtlMs              pgtype.Int8
-	UpstreamModel                   string
-	ModelPriceID                    int64
-	BaseCurrency                    string
-	BasePricingUnit                 string
-	UncachedInputPrice              pgtype.Numeric
-	CacheReadInputPrice             pgtype.Numeric
-	CacheWrite5mInputPrice          pgtype.Numeric
-	CacheWrite1hInputPrice          pgtype.Numeric
-	CacheWrite30mInputPrice         pgtype.Numeric
-	OutputPrice                     pgtype.Numeric
-	ReasoningOutputPrice            pgtype.Numeric
-	FastModelPriceServiceTierID     int64
-	FastUncachedInputPrice          pgtype.Numeric
-	FastCacheReadInputPrice         pgtype.Numeric
-	FastCacheWrite5mInputPrice      pgtype.Numeric
-	FastCacheWrite1hInputPrice      pgtype.Numeric
-	FastCacheWrite30mInputPrice     pgtype.Numeric
-	FastOutputPrice                 pgtype.Numeric
-	FastReasoningOutputPrice        pgtype.Numeric
-	FastSaleUncachedInputPrice      pgtype.Numeric
-	FastSaleCacheReadInputPrice     pgtype.Numeric
-	FastSaleCacheWrite5mInputPrice  pgtype.Numeric
-	FastSaleCacheWrite1hInputPrice  pgtype.Numeric
-	FastSaleCacheWrite30mInputPrice pgtype.Numeric
-	FastSaleOutputPrice             pgtype.Numeric
-	FastSaleReasoningOutputPrice    pgtype.Numeric
-	SalePriceRatio                  pgtype.Numeric
-	SaleUncachedInputPrice          pgtype.Numeric
-	SaleCacheReadInputPrice         pgtype.Numeric
-	SaleCacheWrite5mInputPrice      pgtype.Numeric
-	SaleCacheWrite1hInputPrice      pgtype.Numeric
-	SaleCacheWrite30mInputPrice     pgtype.Numeric
-	SaleOutputPrice                 pgtype.Numeric
-	SaleReasoningOutputPrice        pgtype.Numeric
-	BaseLongContextEnabled          bool
-	BaseLongContextThreshold        pgtype.Int8
-	BaseLongContextInputMultiplier  pgtype.Numeric
-	BaseLongContextOutputMultiplier pgtype.Numeric
-	ChannelPriceID                  int64
-	CostCurrency                    string
-	CostPricingUnit                 string
-	UncachedInputCost               pgtype.Numeric
-	CacheReadInputCost              pgtype.Numeric
-	CacheWrite5mInputCost           pgtype.Numeric
-	CacheWrite1hInputCost           pgtype.Numeric
-	CacheWrite30mInputCost          pgtype.Numeric
-	OutputCost                      pgtype.Numeric
-	ReasoningOutputCost             pgtype.Numeric
-	FastChannelPriceServiceTierID   int64
-	FastUncachedInputCost           pgtype.Numeric
-	FastCacheReadInputCost          pgtype.Numeric
-	FastCacheWrite5mInputCost       pgtype.Numeric
-	FastCacheWrite1hInputCost       pgtype.Numeric
-	FastCacheWrite30mInputCost      pgtype.Numeric
-	FastOutputCost                  pgtype.Numeric
-	FastReasoningOutputCost         pgtype.Numeric
-	ChannelCostMultiplierID         int64
-	CostMultiplier                  pgtype.Numeric
-	ChannelRechargeFactorID         int64
-	RechargeFactor                  pgtype.Numeric
+	ModelDbID                          int64
+	RequestedModelID                   string
+	ModelMaxOutputTokens               pgtype.Int8
+	ProviderID                         int64
+	ProviderSlug                       string
+	AdapterKey                         string
+	Protocol                           string
+	ChannelID                          int64
+	ChannelName                        string
+	Origin                             string
+	ProviderOriginRevision             int64
+	ProviderStatusRevision             int64
+	ChannelConfigRevision              int64
+	ChannelCapacityRevision            int64
+	Credential                         string
+	SupportsOpenaiFast                 bool
+	ResponseTimeoutMs                  pgtype.Int4
+	FirstTokenTimeoutMs                pgtype.Int4
+	Priority                           int32
+	ChannelConcurrencyLimit            pgtype.Int4
+	ChannelStickyEnabled               pgtype.Bool
+	ChannelStickyTtlMs                 pgtype.Int8
+	UpstreamModel                      string
+	ModelPriceID                       int64
+	BaseCurrency                       string
+	BasePricingUnit                    string
+	UncachedInputPrice                 pgtype.Numeric
+	CacheReadInputPrice                pgtype.Numeric
+	CacheCreation5mInputPrice          pgtype.Numeric
+	CacheCreation1hInputPrice          pgtype.Numeric
+	CacheCreation30mInputPrice         pgtype.Numeric
+	OutputPrice                        pgtype.Numeric
+	ReasoningOutputPrice               pgtype.Numeric
+	FastModelPriceServiceTierID        int64
+	FastUncachedInputPrice             pgtype.Numeric
+	FastCacheReadInputPrice            pgtype.Numeric
+	FastCacheCreation5mInputPrice      pgtype.Numeric
+	FastCacheCreation1hInputPrice      pgtype.Numeric
+	FastCacheCreation30mInputPrice     pgtype.Numeric
+	FastOutputPrice                    pgtype.Numeric
+	FastReasoningOutputPrice           pgtype.Numeric
+	FastSaleUncachedInputPrice         pgtype.Numeric
+	FastSaleCacheReadInputPrice        pgtype.Numeric
+	FastSaleCacheCreation5mInputPrice  pgtype.Numeric
+	FastSaleCacheCreation1hInputPrice  pgtype.Numeric
+	FastSaleCacheCreation30mInputPrice pgtype.Numeric
+	FastSaleOutputPrice                pgtype.Numeric
+	FastSaleReasoningOutputPrice       pgtype.Numeric
+	SalePriceRatio                     pgtype.Numeric
+	SaleUncachedInputPrice             pgtype.Numeric
+	SaleCacheReadInputPrice            pgtype.Numeric
+	SaleCacheCreation5mInputPrice      pgtype.Numeric
+	SaleCacheCreation1hInputPrice      pgtype.Numeric
+	SaleCacheCreation30mInputPrice     pgtype.Numeric
+	SaleOutputPrice                    pgtype.Numeric
+	SaleReasoningOutputPrice           pgtype.Numeric
+	BaseLongContextEnabled             bool
+	BaseLongContextThreshold           pgtype.Int8
+	BaseLongContextInputMultiplier     pgtype.Numeric
+	BaseLongContextOutputMultiplier    pgtype.Numeric
+	ChannelPriceID                     int64
+	CostCurrency                       string
+	CostPricingUnit                    string
+	UncachedInputCost                  pgtype.Numeric
+	CacheReadInputCost                 pgtype.Numeric
+	CacheCreation5mInputCost           pgtype.Numeric
+	CacheCreation1hInputCost           pgtype.Numeric
+	CacheCreation30mInputCost          pgtype.Numeric
+	OutputCost                         pgtype.Numeric
+	ReasoningOutputCost                pgtype.Numeric
+	FastChannelPriceServiceTierID      int64
+	FastUncachedInputCost              pgtype.Numeric
+	FastCacheReadInputCost             pgtype.Numeric
+	FastCacheCreation5mInputCost       pgtype.Numeric
+	FastCacheCreation1hInputCost       pgtype.Numeric
+	FastCacheCreation30mInputCost      pgtype.Numeric
+	FastOutputCost                     pgtype.Numeric
+	FastReasoningOutputCost            pgtype.Numeric
+	ChannelCostMultiplierID            int64
+	CostMultiplier                     pgtype.Numeric
+	ChannelRechargeFactorID            int64
+	RechargeFactor                     pgtype.Numeric
 }
 
 // FindModelCandidates 按请求模型与入口协议查找可用 channel 候选。
@@ -326,32 +326,32 @@ func (q *Queries) FindModelCandidates(ctx context.Context, arg FindModelCandidat
 			&i.BasePricingUnit,
 			&i.UncachedInputPrice,
 			&i.CacheReadInputPrice,
-			&i.CacheWrite5mInputPrice,
-			&i.CacheWrite1hInputPrice,
-			&i.CacheWrite30mInputPrice,
+			&i.CacheCreation5mInputPrice,
+			&i.CacheCreation1hInputPrice,
+			&i.CacheCreation30mInputPrice,
 			&i.OutputPrice,
 			&i.ReasoningOutputPrice,
 			&i.FastModelPriceServiceTierID,
 			&i.FastUncachedInputPrice,
 			&i.FastCacheReadInputPrice,
-			&i.FastCacheWrite5mInputPrice,
-			&i.FastCacheWrite1hInputPrice,
-			&i.FastCacheWrite30mInputPrice,
+			&i.FastCacheCreation5mInputPrice,
+			&i.FastCacheCreation1hInputPrice,
+			&i.FastCacheCreation30mInputPrice,
 			&i.FastOutputPrice,
 			&i.FastReasoningOutputPrice,
 			&i.FastSaleUncachedInputPrice,
 			&i.FastSaleCacheReadInputPrice,
-			&i.FastSaleCacheWrite5mInputPrice,
-			&i.FastSaleCacheWrite1hInputPrice,
-			&i.FastSaleCacheWrite30mInputPrice,
+			&i.FastSaleCacheCreation5mInputPrice,
+			&i.FastSaleCacheCreation1hInputPrice,
+			&i.FastSaleCacheCreation30mInputPrice,
 			&i.FastSaleOutputPrice,
 			&i.FastSaleReasoningOutputPrice,
 			&i.SalePriceRatio,
 			&i.SaleUncachedInputPrice,
 			&i.SaleCacheReadInputPrice,
-			&i.SaleCacheWrite5mInputPrice,
-			&i.SaleCacheWrite1hInputPrice,
-			&i.SaleCacheWrite30mInputPrice,
+			&i.SaleCacheCreation5mInputPrice,
+			&i.SaleCacheCreation1hInputPrice,
+			&i.SaleCacheCreation30mInputPrice,
 			&i.SaleOutputPrice,
 			&i.SaleReasoningOutputPrice,
 			&i.BaseLongContextEnabled,
@@ -363,17 +363,17 @@ func (q *Queries) FindModelCandidates(ctx context.Context, arg FindModelCandidat
 			&i.CostPricingUnit,
 			&i.UncachedInputCost,
 			&i.CacheReadInputCost,
-			&i.CacheWrite5mInputCost,
-			&i.CacheWrite1hInputCost,
-			&i.CacheWrite30mInputCost,
+			&i.CacheCreation5mInputCost,
+			&i.CacheCreation1hInputCost,
+			&i.CacheCreation30mInputCost,
 			&i.OutputCost,
 			&i.ReasoningOutputCost,
 			&i.FastChannelPriceServiceTierID,
 			&i.FastUncachedInputCost,
 			&i.FastCacheReadInputCost,
-			&i.FastCacheWrite5mInputCost,
-			&i.FastCacheWrite1hInputCost,
-			&i.FastCacheWrite30mInputCost,
+			&i.FastCacheCreation5mInputCost,
+			&i.FastCacheCreation1hInputCost,
+			&i.FastCacheCreation30mInputCost,
 			&i.FastOutputCost,
 			&i.FastReasoningOutputCost,
 			&i.ChannelCostMultiplierID,

@@ -54,43 +54,43 @@ type requestSummaryDTO struct {
 // requestListItemDTO 是请求列表项（富化）：请求事实 + 用量/成本/扣费 + 线路/渠道链 + 时延。
 type requestListItemDTO struct {
 	requestSummaryDTO
-	UncachedInputTokens      int64 `json:"uncached_input_tokens"`
-	CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
-	CacheWrite5mInputTokens  int64 `json:"cache_write_5m_input_tokens"`
-	CacheWrite1hInputTokens  int64 `json:"cache_write_1h_input_tokens"`
-	CacheWrite30mInputTokens int64 `json:"cache_write_30m_input_tokens"`
-	OutputTokens             int64 `json:"output_tokens"`
-	ReasoningOutputTokens    int64 `json:"reasoning_output_tokens"`
+	UncachedInputTokens         int64 `json:"uncached_input_tokens"`
+	CacheReadInputTokens        int64 `json:"cache_read_input_tokens"`
+	CacheCreation5mInputTokens  int64 `json:"cache_creation_5m_input_tokens"`
+	CacheCreation1hInputTokens  int64 `json:"cache_creation_1h_input_tokens"`
+	CacheCreation30mInputTokens int64 `json:"cache_creation_30m_input_tokens"`
+	OutputTokens                int64 `json:"output_tokens"`
+	ReasoningOutputTokens       int64 `json:"reasoning_output_tokens"`
 	// USD 十进制字符串；无结算快照 / 账本时为 null。
-	UserChargeUsd             *string `json:"user_charge_usd"`
-	TotalCostUsd              *string `json:"total_cost_usd"`
-	UncachedInputCostUsd      *string `json:"uncached_input_cost_usd"`
-	CacheReadInputCostUsd     *string `json:"cache_read_input_cost_usd"`
-	CacheWrite5mInputCostUsd  *string `json:"cache_write_5m_input_cost_usd"`
-	CacheWrite1hInputCostUsd  *string `json:"cache_write_1h_input_cost_usd"`
-	CacheWrite30mInputCostUsd *string `json:"cache_write_30m_input_cost_usd"`
-	OutputCostUsd             *string `json:"output_cost_usd"`
-	ReasoningOutputCostUsd    *string `json:"reasoning_output_cost_usd"`
+	UserChargeUsd                *string `json:"user_charge_usd"`
+	TotalCostUsd                 *string `json:"total_cost_usd"`
+	UncachedInputCostUsd         *string `json:"uncached_input_cost_usd"`
+	CacheReadInputCostUsd        *string `json:"cache_read_input_cost_usd"`
+	CacheCreation5mInputCostUsd  *string `json:"cache_creation_5m_input_cost_usd"`
+	CacheCreation1hInputCostUsd  *string `json:"cache_creation_1h_input_cost_usd"`
+	CacheCreation30mInputCostUsd *string `json:"cache_creation_30m_input_cost_usd"`
+	OutputCostUsd                *string `json:"output_cost_usd"`
+	ReasoningOutputCostUsd       *string `json:"reasoning_output_cost_usd"`
 	// 计费单价快照（USD 字符串，per_1m_tokens）：平台成本单价×7 + 用户售价单价×7，供「单价×tokens=金额」计算过程展示。
-	UncachedInputCostUnitUsd       *string `json:"uncached_input_cost_unit_usd"`
-	CacheReadInputCostUnitUsd      *string `json:"cache_read_input_cost_unit_usd"`
-	CacheWrite5mInputCostUnitUsd   *string `json:"cache_write_5m_input_cost_unit_usd"`
-	CacheWrite1hInputCostUnitUsd   *string `json:"cache_write_1h_input_cost_unit_usd"`
-	CacheWrite30mInputCostUnitUsd  *string `json:"cache_write_30m_input_cost_unit_usd"`
-	OutputCostUnitUsd              *string `json:"output_cost_unit_usd"`
-	ReasoningOutputCostUnitUsd     *string `json:"reasoning_output_cost_unit_usd"`
-	UncachedInputPriceUnitUsd      *string `json:"uncached_input_price_unit_usd"`
-	CacheReadInputPriceUnitUsd     *string `json:"cache_read_input_price_unit_usd"`
-	CacheWrite5mInputPriceUnitUsd  *string `json:"cache_write_5m_input_price_unit_usd"`
-	CacheWrite1hInputPriceUnitUsd  *string `json:"cache_write_1h_input_price_unit_usd"`
-	CacheWrite30mInputPriceUnitUsd *string `json:"cache_write_30m_input_price_unit_usd"`
-	OutputPriceUnitUsd             *string `json:"output_price_unit_usd"`
-	ReasoningOutputPriceUnitUsd    *string `json:"reasoning_output_price_unit_usd"`
-	PriceServiceTier               *string `json:"price_service_tier"`
-	CostServiceTier                *string `json:"cost_service_tier"`
-	ModelPriceServiceTierID        *int64  `json:"model_price_service_tier_id"`
-	ChannelPriceServiceTierID      *int64  `json:"channel_price_service_tier_id"`
-	TierCostSource                 *string `json:"tier_cost_source"`
+	UncachedInputCostUnitUsd          *string `json:"uncached_input_cost_unit_usd"`
+	CacheReadInputCostUnitUsd         *string `json:"cache_read_input_cost_unit_usd"`
+	CacheCreation5mInputCostUnitUsd   *string `json:"cache_creation_5m_input_cost_unit_usd"`
+	CacheCreation1hInputCostUnitUsd   *string `json:"cache_creation_1h_input_cost_unit_usd"`
+	CacheCreation30mInputCostUnitUsd  *string `json:"cache_creation_30m_input_cost_unit_usd"`
+	OutputCostUnitUsd                 *string `json:"output_cost_unit_usd"`
+	ReasoningOutputCostUnitUsd        *string `json:"reasoning_output_cost_unit_usd"`
+	UncachedInputPriceUnitUsd         *string `json:"uncached_input_price_unit_usd"`
+	CacheReadInputPriceUnitUsd        *string `json:"cache_read_input_price_unit_usd"`
+	CacheCreation5mInputPriceUnitUsd  *string `json:"cache_creation_5m_input_price_unit_usd"`
+	CacheCreation1hInputPriceUnitUsd  *string `json:"cache_creation_1h_input_price_unit_usd"`
+	CacheCreation30mInputPriceUnitUsd *string `json:"cache_creation_30m_input_price_unit_usd"`
+	OutputPriceUnitUsd                *string `json:"output_price_unit_usd"`
+	ReasoningOutputPriceUnitUsd       *string `json:"reasoning_output_price_unit_usd"`
+	PriceServiceTier                  *string `json:"price_service_tier"`
+	CostServiceTier                   *string `json:"cost_service_tier"`
+	ModelPriceServiceTierID           *int64  `json:"model_price_service_tier_id"`
+	ChannelPriceServiceTierID         *int64  `json:"channel_price_service_tier_id"`
+	TierCostSource                    *string `json:"tier_cost_source"`
 	// DEC-027 成本来源倍率（倍率路径有值，覆盖/旧数据为 null）：价格倍率 + 充值倍率。
 	ChannelCostMultiplier *string `json:"channel_cost_multiplier"`
 	RechargeFactor        *string `json:"recharge_factor"`
@@ -127,21 +127,21 @@ type requestListItemDTO struct {
 
 // costSnapshotDTO 是平台成本快照（单价 per_1m_tokens + 金额，USD 字符串）。
 type costSnapshotDTO struct {
-	UncachedInputCostUnit        *string `json:"uncached_input_cost_unit"`
-	CacheReadInputCostUnit       *string `json:"cache_read_input_cost_unit"`
-	CacheWrite5mInputCostUnit    *string `json:"cache_write_5m_input_cost_unit"`
-	CacheWrite1hInputCostUnit    *string `json:"cache_write_1h_input_cost_unit"`
-	CacheWrite30mInputCostUnit   *string `json:"cache_write_30m_input_cost_unit"`
-	OutputCostUnit               *string `json:"output_cost_unit"`
-	ReasoningOutputCostUnit      *string `json:"reasoning_output_cost_unit"`
-	UncachedInputCostAmount      *string `json:"uncached_input_cost_amount"`
-	CacheReadInputCostAmount     *string `json:"cache_read_input_cost_amount"`
-	CacheWrite5mInputCostAmount  *string `json:"cache_write_5m_input_cost_amount"`
-	CacheWrite1hInputCostAmount  *string `json:"cache_write_1h_input_cost_amount"`
-	CacheWrite30mInputCostAmount *string `json:"cache_write_30m_input_cost_amount"`
-	OutputCostAmount             *string `json:"output_cost_amount"`
-	ReasoningOutputCostAmount    *string `json:"reasoning_output_cost_amount"`
-	TotalCostAmount              *string `json:"total_cost_amount"`
+	UncachedInputCostUnit           *string `json:"uncached_input_cost_unit"`
+	CacheReadInputCostUnit          *string `json:"cache_read_input_cost_unit"`
+	CacheCreation5mInputCostUnit    *string `json:"cache_creation_5m_input_cost_unit"`
+	CacheCreation1hInputCostUnit    *string `json:"cache_creation_1h_input_cost_unit"`
+	CacheCreation30mInputCostUnit   *string `json:"cache_creation_30m_input_cost_unit"`
+	OutputCostUnit                  *string `json:"output_cost_unit"`
+	ReasoningOutputCostUnit         *string `json:"reasoning_output_cost_unit"`
+	UncachedInputCostAmount         *string `json:"uncached_input_cost_amount"`
+	CacheReadInputCostAmount        *string `json:"cache_read_input_cost_amount"`
+	CacheCreation5mInputCostAmount  *string `json:"cache_creation_5m_input_cost_amount"`
+	CacheCreation1hInputCostAmount  *string `json:"cache_creation_1h_input_cost_amount"`
+	CacheCreation30mInputCostAmount *string `json:"cache_creation_30m_input_cost_amount"`
+	OutputCostAmount                *string `json:"output_cost_amount"`
+	ReasoningOutputCostAmount       *string `json:"reasoning_output_cost_amount"`
+	TotalCostAmount                 *string `json:"total_cost_amount"`
 	// DEC-027 成本来源倍率（倍率路径有值，覆盖/旧数据为 null）：价格倍率 + 充值倍率，供费用处展示新旧倍率。
 	ChannelCostMultiplier     *string `json:"channel_cost_multiplier"`
 	RechargeFactor            *string `json:"recharge_factor"`
@@ -153,15 +153,15 @@ type costSnapshotDTO struct {
 
 // priceSnapshotDTO 是客户售价快照（单价 per_1m_tokens，USD 字符串）。
 type priceSnapshotDTO struct {
-	UncachedInputPrice      *string `json:"uncached_input_price"`
-	CacheReadInputPrice     *string `json:"cache_read_input_price"`
-	CacheWrite5mInputPrice  *string `json:"cache_write_5m_input_price"`
-	CacheWrite1hInputPrice  *string `json:"cache_write_1h_input_price"`
-	CacheWrite30mInputPrice *string `json:"cache_write_30m_input_price"`
-	OutputPrice             *string `json:"output_price"`
-	ReasoningOutputPrice    *string `json:"reasoning_output_price"`
-	ServiceTier             *string `json:"service_tier"`
-	ModelPriceServiceTierID *int64  `json:"model_price_service_tier_id"`
+	UncachedInputPrice         *string `json:"uncached_input_price"`
+	CacheReadInputPrice        *string `json:"cache_read_input_price"`
+	CacheCreation5mInputPrice  *string `json:"cache_creation_5m_input_price"`
+	CacheCreation1hInputPrice  *string `json:"cache_creation_1h_input_price"`
+	CacheCreation30mInputPrice *string `json:"cache_creation_30m_input_price"`
+	OutputPrice                *string `json:"output_price"`
+	ReasoningOutputPrice       *string `json:"reasoning_output_price"`
+	ServiceTier                *string `json:"service_tier"`
+	ModelPriceServiceTierID    *int64  `json:"model_price_service_tier_id"`
 }
 
 // attemptDTO 是请求详情中的一次上游尝试；internal_error_detail 仅在 ?include_internal=true 时出现。
@@ -205,18 +205,18 @@ type attemptDTO struct {
 
 // usageDTO 是请求详情中的协议无关用量事实。
 type usageDTO struct {
-	ID                       int64  `json:"id"`
-	RequestRecordID          int64  `json:"request_record_id"`
-	UncachedInputTokens      int64  `json:"uncached_input_tokens"`
-	CacheReadInputTokens     int64  `json:"cache_read_input_tokens"`
-	CacheWrite5mInputTokens  int64  `json:"cache_write_5m_input_tokens"`
-	CacheWrite1hInputTokens  int64  `json:"cache_write_1h_input_tokens"`
-	CacheWrite30mInputTokens int64  `json:"cache_write_30m_input_tokens"`
-	OutputTokensTotal        int64  `json:"output_tokens_total"`
-	ReasoningOutputTokens    int64  `json:"reasoning_output_tokens"`
-	UsageSource              string `json:"usage_source"`
-	UsageMappingVersion      string `json:"usage_mapping_version"`
-	CreatedAt                string `json:"created_at"`
+	ID                          int64  `json:"id"`
+	RequestRecordID             int64  `json:"request_record_id"`
+	UncachedInputTokens         int64  `json:"uncached_input_tokens"`
+	CacheReadInputTokens        int64  `json:"cache_read_input_tokens"`
+	CacheCreation5mInputTokens  int64  `json:"cache_creation_5m_input_tokens"`
+	CacheCreation1hInputTokens  int64  `json:"cache_creation_1h_input_tokens"`
+	CacheCreation30mInputTokens int64  `json:"cache_creation_30m_input_tokens"`
+	OutputTokensTotal           int64  `json:"output_tokens_total"`
+	ReasoningOutputTokens       int64  `json:"reasoning_output_tokens"`
+	UsageSource                 string `json:"usage_source"`
+	UsageMappingVersion         string `json:"usage_mapping_version"`
+	CreatedAt                   string `json:"created_at"`
 }
 
 // requestDetailDTO 是请求详情聚合响应体。
@@ -375,43 +375,43 @@ func toRequestSummaryDTO(s query.RequestSummary) requestSummaryDTO {
 
 func toRequestListItemDTO(item query.RequestListItem) requestListItemDTO {
 	return requestListItemDTO{
-		requestSummaryDTO:         toRequestSummaryDTO(item.RequestSummary),
-		UncachedInputTokens:       item.UncachedInputTokens,
-		CacheReadInputTokens:      item.CacheReadInputTokens,
-		CacheWrite5mInputTokens:   item.CacheWrite5mInputTokens,
-		CacheWrite1hInputTokens:   item.CacheWrite1hInputTokens,
-		CacheWrite30mInputTokens:  item.CacheWrite30mInputTokens,
-		OutputTokens:              item.OutputTokens,
-		ReasoningOutputTokens:     item.ReasoningOutputTokens,
-		UserChargeUsd:             item.UserChargeUSD,
-		TotalCostUsd:              item.TotalCostUSD,
-		UncachedInputCostUsd:      item.UncachedInputCostUSD,
-		CacheReadInputCostUsd:     item.CacheReadInputCostUSD,
-		CacheWrite5mInputCostUsd:  item.CacheWrite5mInputCostUSD,
-		CacheWrite1hInputCostUsd:  item.CacheWrite1hInputCostUSD,
-		CacheWrite30mInputCostUsd: item.CacheWrite30mInputCostUSD,
-		OutputCostUsd:             item.OutputCostUSD,
-		ReasoningOutputCostUsd:    item.ReasoningOutputCostUSD,
+		requestSummaryDTO:            toRequestSummaryDTO(item.RequestSummary),
+		UncachedInputTokens:          item.UncachedInputTokens,
+		CacheReadInputTokens:         item.CacheReadInputTokens,
+		CacheCreation5mInputTokens:   item.CacheCreation5mInputTokens,
+		CacheCreation1hInputTokens:   item.CacheCreation1hInputTokens,
+		CacheCreation30mInputTokens:  item.CacheCreation30mInputTokens,
+		OutputTokens:                 item.OutputTokens,
+		ReasoningOutputTokens:        item.ReasoningOutputTokens,
+		UserChargeUsd:                item.UserChargeUSD,
+		TotalCostUsd:                 item.TotalCostUSD,
+		UncachedInputCostUsd:         item.UncachedInputCostUSD,
+		CacheReadInputCostUsd:        item.CacheReadInputCostUSD,
+		CacheCreation5mInputCostUsd:  item.CacheCreation5mInputCostUSD,
+		CacheCreation1hInputCostUsd:  item.CacheCreation1hInputCostUSD,
+		CacheCreation30mInputCostUsd: item.CacheCreation30mInputCostUSD,
+		OutputCostUsd:                item.OutputCostUSD,
+		ReasoningOutputCostUsd:       item.ReasoningOutputCostUSD,
 
-		UncachedInputCostUnitUsd:       item.UncachedInputCostUnitUSD,
-		CacheReadInputCostUnitUsd:      item.CacheReadInputCostUnitUSD,
-		CacheWrite5mInputCostUnitUsd:   item.CacheWrite5mInputCostUnitUSD,
-		CacheWrite1hInputCostUnitUsd:   item.CacheWrite1hInputCostUnitUSD,
-		CacheWrite30mInputCostUnitUsd:  item.CacheWrite30mInputCostUnitUSD,
-		OutputCostUnitUsd:              item.OutputCostUnitUSD,
-		ReasoningOutputCostUnitUsd:     item.ReasoningOutputCostUnitUSD,
-		UncachedInputPriceUnitUsd:      item.UncachedInputPriceUnitUSD,
-		CacheReadInputPriceUnitUsd:     item.CacheReadInputPriceUnitUSD,
-		CacheWrite5mInputPriceUnitUsd:  item.CacheWrite5mInputPriceUnitUSD,
-		CacheWrite1hInputPriceUnitUsd:  item.CacheWrite1hInputPriceUnitUSD,
-		CacheWrite30mInputPriceUnitUsd: item.CacheWrite30mInputPriceUnitUSD,
-		OutputPriceUnitUsd:             item.OutputPriceUnitUSD,
-		ReasoningOutputPriceUnitUsd:    item.ReasoningOutputPriceUnitUSD,
-		PriceServiceTier:               item.PriceServiceTier,
-		CostServiceTier:                item.CostServiceTier,
-		ModelPriceServiceTierID:        item.ModelPriceServiceTierID,
-		ChannelPriceServiceTierID:      item.ChannelPriceServiceTierID,
-		TierCostSource:                 item.TierCostSource,
+		UncachedInputCostUnitUsd:          item.UncachedInputCostUnitUSD,
+		CacheReadInputCostUnitUsd:         item.CacheReadInputCostUnitUSD,
+		CacheCreation5mInputCostUnitUsd:   item.CacheCreation5mInputCostUnitUSD,
+		CacheCreation1hInputCostUnitUsd:   item.CacheCreation1hInputCostUnitUSD,
+		CacheCreation30mInputCostUnitUsd:  item.CacheCreation30mInputCostUnitUSD,
+		OutputCostUnitUsd:                 item.OutputCostUnitUSD,
+		ReasoningOutputCostUnitUsd:        item.ReasoningOutputCostUnitUSD,
+		UncachedInputPriceUnitUsd:         item.UncachedInputPriceUnitUSD,
+		CacheReadInputPriceUnitUsd:        item.CacheReadInputPriceUnitUSD,
+		CacheCreation5mInputPriceUnitUsd:  item.CacheCreation5mInputPriceUnitUSD,
+		CacheCreation1hInputPriceUnitUsd:  item.CacheCreation1hInputPriceUnitUSD,
+		CacheCreation30mInputPriceUnitUsd: item.CacheCreation30mInputPriceUnitUSD,
+		OutputPriceUnitUsd:                item.OutputPriceUnitUSD,
+		ReasoningOutputPriceUnitUsd:       item.ReasoningOutputPriceUnitUSD,
+		PriceServiceTier:                  item.PriceServiceTier,
+		CostServiceTier:                   item.CostServiceTier,
+		ModelPriceServiceTierID:           item.ModelPriceServiceTierID,
+		ChannelPriceServiceTierID:         item.ChannelPriceServiceTierID,
+		TierCostSource:                    item.TierCostSource,
 
 		ChannelCostMultiplier: item.ChannelCostMultiplier,
 		RechargeFactor:        item.RechargeFactor,
@@ -449,41 +449,41 @@ func toRequestListItemDTO(item query.RequestListItem) requestListItemDTO {
 
 func toCostSnapshotDTO(c query.CostSnapshotView) costSnapshotDTO {
 	return costSnapshotDTO{
-		UncachedInputCostUnit:        c.UncachedInputCostUnit,
-		CacheReadInputCostUnit:       c.CacheReadInputCostUnit,
-		CacheWrite5mInputCostUnit:    c.CacheWrite5mInputCostUnit,
-		CacheWrite1hInputCostUnit:    c.CacheWrite1hInputCostUnit,
-		CacheWrite30mInputCostUnit:   c.CacheWrite30mInputCostUnit,
-		OutputCostUnit:               c.OutputCostUnit,
-		ReasoningOutputCostUnit:      c.ReasoningOutputCostUnit,
-		UncachedInputCostAmount:      c.UncachedInputCostAmount,
-		CacheReadInputCostAmount:     c.CacheReadInputCostAmount,
-		CacheWrite5mInputCostAmount:  c.CacheWrite5mInputCostAmount,
-		CacheWrite1hInputCostAmount:  c.CacheWrite1hInputCostAmount,
-		CacheWrite30mInputCostAmount: c.CacheWrite30mInputCostAmount,
-		OutputCostAmount:             c.OutputCostAmount,
-		ReasoningOutputCostAmount:    c.ReasoningOutputCostAmount,
-		TotalCostAmount:              c.TotalCostAmount,
-		ChannelCostMultiplier:        c.ChannelCostMultiplier,
-		RechargeFactor:               c.RechargeFactor,
-		ServiceTier:                  c.ServiceTier,
-		ModelPriceServiceTierID:      c.ModelPriceServiceTierID,
-		ChannelPriceServiceTierID:    c.ChannelPriceServiceTierID,
-		TierCostSource:               c.TierCostSource,
+		UncachedInputCostUnit:           c.UncachedInputCostUnit,
+		CacheReadInputCostUnit:          c.CacheReadInputCostUnit,
+		CacheCreation5mInputCostUnit:    c.CacheCreation5mInputCostUnit,
+		CacheCreation1hInputCostUnit:    c.CacheCreation1hInputCostUnit,
+		CacheCreation30mInputCostUnit:   c.CacheCreation30mInputCostUnit,
+		OutputCostUnit:                  c.OutputCostUnit,
+		ReasoningOutputCostUnit:         c.ReasoningOutputCostUnit,
+		UncachedInputCostAmount:         c.UncachedInputCostAmount,
+		CacheReadInputCostAmount:        c.CacheReadInputCostAmount,
+		CacheCreation5mInputCostAmount:  c.CacheCreation5mInputCostAmount,
+		CacheCreation1hInputCostAmount:  c.CacheCreation1hInputCostAmount,
+		CacheCreation30mInputCostAmount: c.CacheCreation30mInputCostAmount,
+		OutputCostAmount:                c.OutputCostAmount,
+		ReasoningOutputCostAmount:       c.ReasoningOutputCostAmount,
+		TotalCostAmount:                 c.TotalCostAmount,
+		ChannelCostMultiplier:           c.ChannelCostMultiplier,
+		RechargeFactor:                  c.RechargeFactor,
+		ServiceTier:                     c.ServiceTier,
+		ModelPriceServiceTierID:         c.ModelPriceServiceTierID,
+		ChannelPriceServiceTierID:       c.ChannelPriceServiceTierID,
+		TierCostSource:                  c.TierCostSource,
 	}
 }
 
 func toPriceSnapshotDTO(p query.PriceSnapshotView) priceSnapshotDTO {
 	return priceSnapshotDTO{
-		UncachedInputPrice:      p.UncachedInputPrice,
-		CacheReadInputPrice:     p.CacheReadInputPrice,
-		CacheWrite5mInputPrice:  p.CacheWrite5mInputPrice,
-		CacheWrite1hInputPrice:  p.CacheWrite1hInputPrice,
-		CacheWrite30mInputPrice: p.CacheWrite30mInputPrice,
-		OutputPrice:             p.OutputPrice,
-		ReasoningOutputPrice:    p.ReasoningOutputPrice,
-		ServiceTier:             p.ServiceTier,
-		ModelPriceServiceTierID: p.ModelPriceServiceTierID,
+		UncachedInputPrice:         p.UncachedInputPrice,
+		CacheReadInputPrice:        p.CacheReadInputPrice,
+		CacheCreation5mInputPrice:  p.CacheCreation5mInputPrice,
+		CacheCreation1hInputPrice:  p.CacheCreation1hInputPrice,
+		CacheCreation30mInputPrice: p.CacheCreation30mInputPrice,
+		OutputPrice:                p.OutputPrice,
+		ReasoningOutputPrice:       p.ReasoningOutputPrice,
+		ServiceTier:                p.ServiceTier,
+		ModelPriceServiceTierID:    p.ModelPriceServiceTierID,
 	}
 }
 
@@ -568,17 +568,17 @@ func toAttemptDTO(a query.Attempt) attemptDTO {
 
 func toUsageDTO(u query.Usage) usageDTO {
 	return usageDTO{
-		ID:                       u.ID,
-		RequestRecordID:          u.RequestRecordID,
-		UncachedInputTokens:      u.UncachedInputTokens,
-		CacheReadInputTokens:     u.CacheReadInputTokens,
-		CacheWrite5mInputTokens:  u.CacheWrite5mInputTokens,
-		CacheWrite1hInputTokens:  u.CacheWrite1hInputTokens,
-		CacheWrite30mInputTokens: u.CacheWrite30mInputTokens,
-		OutputTokensTotal:        u.OutputTokensTotal,
-		ReasoningOutputTokens:    u.ReasoningOutputTokens,
-		UsageSource:              u.UsageSource,
-		UsageMappingVersion:      u.UsageMappingVersion,
-		CreatedAt:                adminhttp.RFC3339(u.CreatedAt),
+		ID:                          u.ID,
+		RequestRecordID:             u.RequestRecordID,
+		UncachedInputTokens:         u.UncachedInputTokens,
+		CacheReadInputTokens:        u.CacheReadInputTokens,
+		CacheCreation5mInputTokens:  u.CacheCreation5mInputTokens,
+		CacheCreation1hInputTokens:  u.CacheCreation1hInputTokens,
+		CacheCreation30mInputTokens: u.CacheCreation30mInputTokens,
+		OutputTokensTotal:           u.OutputTokensTotal,
+		ReasoningOutputTokens:       u.ReasoningOutputTokens,
+		UsageSource:                 u.UsageSource,
+		UsageMappingVersion:         u.UsageMappingVersion,
+		CreatedAt:                   adminhttp.RFC3339(u.CreatedAt),
 	}
 }

@@ -45,32 +45,32 @@ type Fields struct {
 	hasChannelID  bool
 	channel       string
 
-	upstreamTTFTMs        int64
-	hasUpstreamTTFT       bool
-	gatewayTTFTMs         int64
-	hasGatewayTTFT        bool
-	attemptCount          int
-	hasAttemptCount       bool
-	fallbackCount         int
-	hasFallbackCount      bool
-	capacityWaitMs        int64
-	hasCapacityWait       bool
-	stickyAction          string
-	deliveryStatus        string
-	settlementStatus      string
-	inputTokens           int64
-	cacheReadInputTokens  int64
-	cacheWriteInputTokens int64
-	outputTokens          int64
-	reasoningTokens       int64
-	totalTokens           int64
-	hasUsage              bool
-	chargedAmount         string
-	currency              string
-	errorCode             string
-	completionLevel       string
-	jsonDecode            JSONDecodeSummary
-	hasJSONDecode         bool
+	upstreamTTFTMs           int64
+	hasUpstreamTTFT          bool
+	gatewayTTFTMs            int64
+	hasGatewayTTFT           bool
+	attemptCount             int
+	hasAttemptCount          bool
+	fallbackCount            int
+	hasFallbackCount         bool
+	capacityWaitMs           int64
+	hasCapacityWait          bool
+	stickyAction             string
+	deliveryStatus           string
+	settlementStatus         string
+	inputTokens              int64
+	cacheReadInputTokens     int64
+	cacheCreationInputTokens int64
+	outputTokens             int64
+	reasoningTokens          int64
+	totalTokens              int64
+	hasUsage                 bool
+	chargedAmount            string
+	currency                 string
+	errorCode                string
+	completionLevel          string
+	jsonDecode               JSONDecodeSummary
+	hasJSONDecode            bool
 }
 
 // NewContext 在 ctx 中安装一个携带 traceID 的 Fields，并返回该 Fields 指针。
@@ -214,14 +214,14 @@ func (f *Fields) SetSettlementStatus(value string) {
 }
 
 type UsageSummary struct {
-	InputTokens           int64
-	CacheReadInputTokens  int64
-	CacheWriteInputTokens int64
-	OutputTokens          int64
-	ReasoningTokens       int64
-	TotalTokens           int64
-	ChargedAmount         string
-	Currency              string
+	InputTokens              int64
+	CacheReadInputTokens     int64
+	CacheCreationInputTokens int64
+	OutputTokens             int64
+	ReasoningTokens          int64
+	TotalTokens              int64
+	ChargedAmount            string
+	Currency                 string
 }
 
 // JSONDecodeSummary 是公开 Gateway JSON 解码拒绝写入请求完成日志的脱敏诊断。
@@ -259,7 +259,7 @@ func (f *Fields) SetUsageSummary(summary UsageSummary) {
 	defer f.mu.Unlock()
 	f.inputTokens = summary.InputTokens
 	f.cacheReadInputTokens = summary.CacheReadInputTokens
-	f.cacheWriteInputTokens = summary.CacheWriteInputTokens
+	f.cacheCreationInputTokens = summary.CacheCreationInputTokens
 	f.outputTokens = summary.OutputTokens
 	f.reasoningTokens = summary.ReasoningTokens
 	f.totalTokens = summary.TotalTokens
@@ -414,7 +414,7 @@ func (f *Fields) ZapFields() []zap.Field {
 		fields = append(fields,
 			zap.Int64("input_tokens", f.inputTokens),
 			zap.Int64("cache_read_input_tokens", f.cacheReadInputTokens),
-			zap.Int64("cache_write_input_tokens", f.cacheWriteInputTokens),
+			zap.Int64("cache_creation_input_tokens", f.cacheCreationInputTokens),
 			zap.Int64("output_tokens", f.outputTokens),
 			zap.Int64("reasoning_tokens", f.reasoningTokens),
 			zap.Int64("total_tokens", f.totalTokens),

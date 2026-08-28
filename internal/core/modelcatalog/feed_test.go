@@ -127,8 +127,8 @@ func TestParseFeedMergesMetadataAndPrice(t *testing.T) {
 	if deepseek.CacheReadPrice == nil || *deepseek.CacheReadPrice != "0.05" {
 		t.Fatalf("cache read price = %v, want 0.05", deepseek.CacheReadPrice)
 	}
-	if deepseek.CacheWritePrice == nil || *deepseek.CacheWritePrice != "0.6" {
-		t.Fatalf("cache write price = %v, want 0.6", deepseek.CacheWritePrice)
+	if deepseek.CacheCreationPrice == nil || *deepseek.CacheCreationPrice != "0.6" {
+		t.Fatalf("cache write price = %v, want 0.6", deepseek.CacheCreationPrice)
 	}
 
 	// reasoning_options 只认 type=effort，档位枚举挂进 reasoning.effort 提示的 limits。
@@ -165,7 +165,7 @@ func TestParseFeedMergesMetadataAndPrice(t *testing.T) {
 	if acme.LastUpdated != nil || acme.InputLimitTokens != nil {
 		t.Fatalf("acme last_updated/input_limit should be nil")
 	}
-	if acme.CacheReadPrice != nil || acme.CacheWritePrice != nil {
+	if acme.CacheReadPrice != nil || acme.CacheCreationPrice != nil {
 		t.Fatalf("acme cache prices should be nil without api.json entry")
 	}
 	wantAcmeCaps := sortedKeyStrings([]capability.Key{capability.Key("text.input"), capability.Key("text.output")})

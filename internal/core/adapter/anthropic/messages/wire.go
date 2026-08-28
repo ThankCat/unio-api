@@ -218,7 +218,7 @@ func mergeUsageWire(dst *usageWire, src usageWire) {
 		// cache_creation_input_tokens 放在 message_delta，而 message_start 只带全 0 的 cache_creation
 		// 占位对象），既有 TTL 拆分来自更早事件、已过期。若其汇总与新 flat 总量不一致，清空它，
 		// 让 ToUsageFacts 回退到权威的 flat 总量——否则流式 cache write 会被 message_start 的 0 拆分
-		// 吞没，导致 cache 成本严重少计（少计缓存写入 token → 成本/售价被大幅低估）。
+		// 吞没，导致 cache 成本严重少计（少计缓存创建 token → 成本/售价被大幅低估）。
 		if src.CacheCreation == nil && dst.CacheCreation != nil &&
 			cacheCreationWireSum(dst.CacheCreation) != *src.CacheCreationInputTokens {
 			dst.CacheCreation = nil

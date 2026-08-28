@@ -179,7 +179,7 @@ func (q *Queries) ArchiveChannel(ctx context.Context, id int64) (int64, error) {
 
 const channelOpsDetail = `-- name: ChannelOpsDetail :one
 WITH cache_usage AS (
-    SELECT u.id, u.request_record_id, u.uncached_input_tokens, u.uncached_input_tokens_state, u.cache_read_input_tokens, u.cache_read_input_tokens_state, u.cache_write_5m_input_tokens, u.cache_write_5m_input_tokens_state, u.cache_write_1h_input_tokens, u.cache_write_1h_input_tokens_state, u.output_tokens_total, u.output_tokens_total_state, u.reasoning_output_tokens, u.reasoning_output_tokens_state, u.usage_source, u.usage_mapping_version, u.created_at, u.cache_write_30m_input_tokens, u.cache_write_30m_input_tokens_state
+    SELECT u.id, u.request_record_id, u.uncached_input_tokens, u.uncached_input_tokens_state, u.cache_read_input_tokens, u.cache_read_input_tokens_state, u.cache_creation_5m_input_tokens, u.cache_creation_5m_input_tokens_state, u.cache_creation_1h_input_tokens, u.cache_creation_1h_input_tokens_state, u.output_tokens_total, u.output_tokens_total_state, u.reasoning_output_tokens, u.reasoning_output_tokens_state, u.usage_source, u.usage_mapping_version, u.created_at, u.cache_creation_30m_input_tokens, u.cache_creation_30m_input_tokens_state
     FROM request_records r
     JOIN usage_records u ON u.request_record_id = r.id
     WHERE r.final_channel_id = $1
@@ -199,57 +199,57 @@ cache AS (
         COALESCE(SUM(uncached_input_tokens) FILTER (WHERE
             uncached_input_tokens_state = 'known'
             AND cache_read_input_tokens_state = 'known'
-            AND cache_write_5m_input_tokens_state <> 'unknown'
-            AND cache_write_1h_input_tokens_state <> 'unknown'
-            AND cache_write_30m_input_tokens_state <> 'unknown'
+            AND cache_creation_5m_input_tokens_state <> 'unknown'
+            AND cache_creation_1h_input_tokens_state <> 'unknown'
+            AND cache_creation_30m_input_tokens_state <> 'unknown'
             AND uncached_input_tokens + cache_read_input_tokens
-                + cache_write_5m_input_tokens + cache_write_1h_input_tokens + cache_write_30m_input_tokens > 0
+                + cache_creation_5m_input_tokens + cache_creation_1h_input_tokens + cache_creation_30m_input_tokens > 0
         ), 0)::bigint AS cache_uncached_input,
         COALESCE(SUM(cache_read_input_tokens) FILTER (WHERE
             uncached_input_tokens_state = 'known'
             AND cache_read_input_tokens_state = 'known'
-            AND cache_write_5m_input_tokens_state <> 'unknown'
-            AND cache_write_1h_input_tokens_state <> 'unknown'
-            AND cache_write_30m_input_tokens_state <> 'unknown'
+            AND cache_creation_5m_input_tokens_state <> 'unknown'
+            AND cache_creation_1h_input_tokens_state <> 'unknown'
+            AND cache_creation_30m_input_tokens_state <> 'unknown'
             AND uncached_input_tokens + cache_read_input_tokens
-                + cache_write_5m_input_tokens + cache_write_1h_input_tokens + cache_write_30m_input_tokens > 0
+                + cache_creation_5m_input_tokens + cache_creation_1h_input_tokens + cache_creation_30m_input_tokens > 0
         ), 0)::bigint AS cache_read_input,
-        COALESCE(SUM(cache_write_5m_input_tokens) FILTER (WHERE
+        COALESCE(SUM(cache_creation_5m_input_tokens) FILTER (WHERE
             uncached_input_tokens_state = 'known'
             AND cache_read_input_tokens_state = 'known'
-            AND cache_write_5m_input_tokens_state <> 'unknown'
-            AND cache_write_1h_input_tokens_state <> 'unknown'
-            AND cache_write_30m_input_tokens_state <> 'unknown'
+            AND cache_creation_5m_input_tokens_state <> 'unknown'
+            AND cache_creation_1h_input_tokens_state <> 'unknown'
+            AND cache_creation_30m_input_tokens_state <> 'unknown'
             AND uncached_input_tokens + cache_read_input_tokens
-                + cache_write_5m_input_tokens + cache_write_1h_input_tokens + cache_write_30m_input_tokens > 0
-        ), 0)::bigint AS cache_write_5m_input,
-        COALESCE(SUM(cache_write_1h_input_tokens) FILTER (WHERE
+                + cache_creation_5m_input_tokens + cache_creation_1h_input_tokens + cache_creation_30m_input_tokens > 0
+        ), 0)::bigint AS cache_creation_5m_input,
+        COALESCE(SUM(cache_creation_1h_input_tokens) FILTER (WHERE
             uncached_input_tokens_state = 'known'
             AND cache_read_input_tokens_state = 'known'
-            AND cache_write_5m_input_tokens_state <> 'unknown'
-            AND cache_write_1h_input_tokens_state <> 'unknown'
-            AND cache_write_30m_input_tokens_state <> 'unknown'
+            AND cache_creation_5m_input_tokens_state <> 'unknown'
+            AND cache_creation_1h_input_tokens_state <> 'unknown'
+            AND cache_creation_30m_input_tokens_state <> 'unknown'
             AND uncached_input_tokens + cache_read_input_tokens
-                + cache_write_5m_input_tokens + cache_write_1h_input_tokens + cache_write_30m_input_tokens > 0
-        ), 0)::bigint AS cache_write_1h_input,
-        COALESCE(SUM(cache_write_30m_input_tokens) FILTER (WHERE
+                + cache_creation_5m_input_tokens + cache_creation_1h_input_tokens + cache_creation_30m_input_tokens > 0
+        ), 0)::bigint AS cache_creation_1h_input,
+        COALESCE(SUM(cache_creation_30m_input_tokens) FILTER (WHERE
             uncached_input_tokens_state = 'known'
             AND cache_read_input_tokens_state = 'known'
-            AND cache_write_5m_input_tokens_state <> 'unknown'
-            AND cache_write_1h_input_tokens_state <> 'unknown'
-            AND cache_write_30m_input_tokens_state <> 'unknown'
+            AND cache_creation_5m_input_tokens_state <> 'unknown'
+            AND cache_creation_1h_input_tokens_state <> 'unknown'
+            AND cache_creation_30m_input_tokens_state <> 'unknown'
             AND uncached_input_tokens + cache_read_input_tokens
-                + cache_write_5m_input_tokens + cache_write_1h_input_tokens + cache_write_30m_input_tokens > 0
-        ), 0)::bigint AS cache_write_30m_input,
+                + cache_creation_5m_input_tokens + cache_creation_1h_input_tokens + cache_creation_30m_input_tokens > 0
+        ), 0)::bigint AS cache_creation_30m_input,
         COUNT(*) AS cache_usage_records,
         COUNT(*) FILTER (WHERE
             uncached_input_tokens_state = 'known'
             AND cache_read_input_tokens_state = 'known'
-            AND cache_write_5m_input_tokens_state <> 'unknown'
-            AND cache_write_1h_input_tokens_state <> 'unknown'
-            AND cache_write_30m_input_tokens_state <> 'unknown'
+            AND cache_creation_5m_input_tokens_state <> 'unknown'
+            AND cache_creation_1h_input_tokens_state <> 'unknown'
+            AND cache_creation_30m_input_tokens_state <> 'unknown'
             AND uncached_input_tokens + cache_read_input_tokens
-                + cache_write_5m_input_tokens + cache_write_1h_input_tokens + cache_write_30m_input_tokens > 0
+                + cache_creation_5m_input_tokens + cache_creation_1h_input_tokens + cache_creation_30m_input_tokens > 0
         ) AS cache_evaluable_records,
         COUNT(*) FILTER (WHERE cache_read_input_tokens_state = 'not_applicable') AS cache_read_not_applicable_records
     FROM cache_usage
@@ -277,9 +277,9 @@ SELECT
     (MAX(completed_at) FILTER (WHERE status = 'failed' AND fault_party = 'upstream'))::timestamptz AS last_failure_at,
     (SELECT cache_uncached_input FROM cache) AS cache_uncached_input,
     (SELECT cache_read_input FROM cache) AS cache_read_input,
-    (SELECT cache_write_5m_input FROM cache) AS cache_write_5m_input,
-    (SELECT cache_write_1h_input FROM cache) AS cache_write_1h_input,
-    (SELECT cache_write_30m_input FROM cache) AS cache_write_30m_input,
+    (SELECT cache_creation_5m_input FROM cache) AS cache_creation_5m_input,
+    (SELECT cache_creation_1h_input FROM cache) AS cache_creation_1h_input,
+    (SELECT cache_creation_30m_input FROM cache) AS cache_creation_30m_input,
     (SELECT cache_usage_records FROM cache) AS cache_usage_records,
     (SELECT cache_evaluable_records FROM cache) AS cache_evaluable_records,
     (SELECT cache_read_not_applicable_records FROM cache) AS cache_read_not_applicable_records
@@ -309,9 +309,9 @@ type ChannelOpsDetailRow struct {
 	LastFailureAt                 pgtype.Timestamptz
 	CacheUncachedInput            int64
 	CacheReadInput                int64
-	CacheWrite5mInput             int64
-	CacheWrite1hInput             int64
-	CacheWrite30mInput            int64
+	CacheCreation5mInput          int64
+	CacheCreation1hInput          int64
+	CacheCreation30mInput         int64
 	CacheUsageRecords             int64
 	CacheEvaluableRecords         int64
 	CacheReadNotApplicableRecords int64
@@ -335,9 +335,9 @@ func (q *Queries) ChannelOpsDetail(ctx context.Context, arg ChannelOpsDetailPara
 		&i.LastFailureAt,
 		&i.CacheUncachedInput,
 		&i.CacheReadInput,
-		&i.CacheWrite5mInput,
-		&i.CacheWrite1hInput,
-		&i.CacheWrite30mInput,
+		&i.CacheCreation5mInput,
+		&i.CacheCreation1hInput,
+		&i.CacheCreation30mInput,
 		&i.CacheUsageRecords,
 		&i.CacheEvaluableRecords,
 		&i.CacheReadNotApplicableRecords,
@@ -1149,9 +1149,9 @@ INSERT INTO channel_prices (
     pricing_unit,
     uncached_input_cost,
     cache_read_input_cost,
-    cache_write_5m_input_cost,
-    cache_write_1h_input_cost,
-    cache_write_30m_input_cost,
+    cache_creation_5m_input_cost,
+    cache_creation_1h_input_cost,
+    cache_creation_30m_input_cost,
     output_cost,
     reasoning_output_cost,
     status,
@@ -1174,16 +1174,16 @@ VALUES (
     $13,
     $14
 )
-RETURNING id, channel_id, model_id, currency, pricing_unit, uncached_input_cost, cache_read_input_cost, cache_write_5m_input_cost, cache_write_1h_input_cost, output_cost, reasoning_output_cost, status, effective_from, effective_to, created_at, updated_at, cache_write_30m_input_cost
+RETURNING id, channel_id, model_id, currency, pricing_unit, uncached_input_cost, cache_read_input_cost, cache_creation_5m_input_cost, cache_creation_1h_input_cost, output_cost, reasoning_output_cost, status, effective_from, effective_to, created_at, updated_at, cache_creation_30m_input_cost
 ), created_fast AS (
 INSERT INTO channel_price_service_tiers (
     channel_price_id,
     service_tier,
     uncached_input_cost,
     cache_read_input_cost,
-    cache_write_5m_input_cost,
-    cache_write_1h_input_cost,
-    cache_write_30m_input_cost,
+    cache_creation_5m_input_cost,
+    cache_creation_1h_input_cost,
+    cache_creation_30m_input_cost,
     output_cost,
     reasoning_output_cost
 )
@@ -1199,16 +1199,16 @@ SELECT
     $21
 FROM created_price
 WHERE $22::boolean
-RETURNING id, channel_price_id, service_tier, uncached_input_cost, cache_read_input_cost, cache_write_5m_input_cost, cache_write_1h_input_cost, cache_write_30m_input_cost, output_cost, reasoning_output_cost, created_at
+RETURNING id, channel_price_id, service_tier, uncached_input_cost, cache_read_input_cost, cache_creation_5m_input_cost, cache_creation_1h_input_cost, cache_creation_30m_input_cost, output_cost, reasoning_output_cost, created_at
 )
 SELECT
-    created_price.id, created_price.channel_id, created_price.model_id, created_price.currency, created_price.pricing_unit, created_price.uncached_input_cost, created_price.cache_read_input_cost, created_price.cache_write_5m_input_cost, created_price.cache_write_1h_input_cost, created_price.output_cost, created_price.reasoning_output_cost, created_price.status, created_price.effective_from, created_price.effective_to, created_price.created_at, created_price.updated_at, created_price.cache_write_30m_input_cost,
+    created_price.id, created_price.channel_id, created_price.model_id, created_price.currency, created_price.pricing_unit, created_price.uncached_input_cost, created_price.cache_read_input_cost, created_price.cache_creation_5m_input_cost, created_price.cache_creation_1h_input_cost, created_price.output_cost, created_price.reasoning_output_cost, created_price.status, created_price.effective_from, created_price.effective_to, created_price.created_at, created_price.updated_at, created_price.cache_creation_30m_input_cost,
     COALESCE(created_fast.id, 0)::bigint AS fast_service_tier_id,
     created_fast.uncached_input_cost AS fast_uncached_input_cost,
     created_fast.cache_read_input_cost AS fast_cache_read_input_cost,
-    created_fast.cache_write_5m_input_cost AS fast_cache_write_5m_input_cost,
-    created_fast.cache_write_1h_input_cost AS fast_cache_write_1h_input_cost,
-    created_fast.cache_write_30m_input_cost AS fast_cache_write_30m_input_cost,
+    created_fast.cache_creation_5m_input_cost AS fast_cache_creation_5m_input_cost,
+    created_fast.cache_creation_1h_input_cost AS fast_cache_creation_1h_input_cost,
+    created_fast.cache_creation_30m_input_cost AS fast_cache_creation_30m_input_cost,
     created_fast.output_cost AS fast_output_cost,
     created_fast.reasoning_output_cost AS fast_reasoning_output_cost
 FROM created_price
@@ -1216,56 +1216,56 @@ LEFT JOIN created_fast ON created_fast.channel_price_id = created_price.id
 `
 
 type CreateChannelPriceParams struct {
-	ChannelID                  int64
-	ModelID                    int64
-	Currency                   string
-	PricingUnit                string
-	UncachedInputCost          pgtype.Numeric
-	CacheReadInputCost         pgtype.Numeric
-	CacheWrite5mInputCost      pgtype.Numeric
-	CacheWrite1hInputCost      pgtype.Numeric
-	CacheWrite30mInputCost     pgtype.Numeric
-	OutputCost                 pgtype.Numeric
-	ReasoningOutputCost        pgtype.Numeric
-	Status                     string
-	EffectiveFrom              pgtype.Timestamptz
-	EffectiveTo                pgtype.Timestamptz
-	FastUncachedInputCost      pgtype.Numeric
-	FastCacheReadInputCost     pgtype.Numeric
-	FastCacheWrite5mInputCost  pgtype.Numeric
-	FastCacheWrite1hInputCost  pgtype.Numeric
-	FastCacheWrite30mInputCost pgtype.Numeric
-	FastOutputCost             pgtype.Numeric
-	FastReasoningOutputCost    pgtype.Numeric
-	FastConfigured             bool
+	ChannelID                     int64
+	ModelID                       int64
+	Currency                      string
+	PricingUnit                   string
+	UncachedInputCost             pgtype.Numeric
+	CacheReadInputCost            pgtype.Numeric
+	CacheCreation5mInputCost      pgtype.Numeric
+	CacheCreation1hInputCost      pgtype.Numeric
+	CacheCreation30mInputCost     pgtype.Numeric
+	OutputCost                    pgtype.Numeric
+	ReasoningOutputCost           pgtype.Numeric
+	Status                        string
+	EffectiveFrom                 pgtype.Timestamptz
+	EffectiveTo                   pgtype.Timestamptz
+	FastUncachedInputCost         pgtype.Numeric
+	FastCacheReadInputCost        pgtype.Numeric
+	FastCacheCreation5mInputCost  pgtype.Numeric
+	FastCacheCreation1hInputCost  pgtype.Numeric
+	FastCacheCreation30mInputCost pgtype.Numeric
+	FastOutputCost                pgtype.Numeric
+	FastReasoningOutputCost       pgtype.Numeric
+	FastConfigured                bool
 }
 
 type CreateChannelPriceRow struct {
-	ID                         int64
-	ChannelID                  int64
-	ModelID                    int64
-	Currency                   string
-	PricingUnit                string
-	UncachedInputCost          pgtype.Numeric
-	CacheReadInputCost         pgtype.Numeric
-	CacheWrite5mInputCost      pgtype.Numeric
-	CacheWrite1hInputCost      pgtype.Numeric
-	OutputCost                 pgtype.Numeric
-	ReasoningOutputCost        pgtype.Numeric
-	Status                     string
-	EffectiveFrom              pgtype.Timestamptz
-	EffectiveTo                pgtype.Timestamptz
-	CreatedAt                  pgtype.Timestamptz
-	UpdatedAt                  pgtype.Timestamptz
-	CacheWrite30mInputCost     pgtype.Numeric
-	FastServiceTierID          int64
-	FastUncachedInputCost      pgtype.Numeric
-	FastCacheReadInputCost     pgtype.Numeric
-	FastCacheWrite5mInputCost  pgtype.Numeric
-	FastCacheWrite1hInputCost  pgtype.Numeric
-	FastCacheWrite30mInputCost pgtype.Numeric
-	FastOutputCost             pgtype.Numeric
-	FastReasoningOutputCost    pgtype.Numeric
+	ID                            int64
+	ChannelID                     int64
+	ModelID                       int64
+	Currency                      string
+	PricingUnit                   string
+	UncachedInputCost             pgtype.Numeric
+	CacheReadInputCost            pgtype.Numeric
+	CacheCreation5mInputCost      pgtype.Numeric
+	CacheCreation1hInputCost      pgtype.Numeric
+	OutputCost                    pgtype.Numeric
+	ReasoningOutputCost           pgtype.Numeric
+	Status                        string
+	EffectiveFrom                 pgtype.Timestamptz
+	EffectiveTo                   pgtype.Timestamptz
+	CreatedAt                     pgtype.Timestamptz
+	UpdatedAt                     pgtype.Timestamptz
+	CacheCreation30mInputCost     pgtype.Numeric
+	FastServiceTierID             int64
+	FastUncachedInputCost         pgtype.Numeric
+	FastCacheReadInputCost        pgtype.Numeric
+	FastCacheCreation5mInputCost  pgtype.Numeric
+	FastCacheCreation1hInputCost  pgtype.Numeric
+	FastCacheCreation30mInputCost pgtype.Numeric
+	FastOutputCost                pgtype.Numeric
+	FastReasoningOutputCost       pgtype.Numeric
 }
 
 // CreateChannelPrice 创建 Standard 绝对成本覆盖与可选 Fast 精确成本子记录，单条语句保证原子性。
@@ -1278,9 +1278,9 @@ func (q *Queries) CreateChannelPrice(ctx context.Context, arg CreateChannelPrice
 		arg.PricingUnit,
 		arg.UncachedInputCost,
 		arg.CacheReadInputCost,
-		arg.CacheWrite5mInputCost,
-		arg.CacheWrite1hInputCost,
-		arg.CacheWrite30mInputCost,
+		arg.CacheCreation5mInputCost,
+		arg.CacheCreation1hInputCost,
+		arg.CacheCreation30mInputCost,
 		arg.OutputCost,
 		arg.ReasoningOutputCost,
 		arg.Status,
@@ -1288,9 +1288,9 @@ func (q *Queries) CreateChannelPrice(ctx context.Context, arg CreateChannelPrice
 		arg.EffectiveTo,
 		arg.FastUncachedInputCost,
 		arg.FastCacheReadInputCost,
-		arg.FastCacheWrite5mInputCost,
-		arg.FastCacheWrite1hInputCost,
-		arg.FastCacheWrite30mInputCost,
+		arg.FastCacheCreation5mInputCost,
+		arg.FastCacheCreation1hInputCost,
+		arg.FastCacheCreation30mInputCost,
 		arg.FastOutputCost,
 		arg.FastReasoningOutputCost,
 		arg.FastConfigured,
@@ -1304,8 +1304,8 @@ func (q *Queries) CreateChannelPrice(ctx context.Context, arg CreateChannelPrice
 		&i.PricingUnit,
 		&i.UncachedInputCost,
 		&i.CacheReadInputCost,
-		&i.CacheWrite5mInputCost,
-		&i.CacheWrite1hInputCost,
+		&i.CacheCreation5mInputCost,
+		&i.CacheCreation1hInputCost,
 		&i.OutputCost,
 		&i.ReasoningOutputCost,
 		&i.Status,
@@ -1313,13 +1313,13 @@ func (q *Queries) CreateChannelPrice(ctx context.Context, arg CreateChannelPrice
 		&i.EffectiveTo,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.CacheWrite30mInputCost,
+		&i.CacheCreation30mInputCost,
 		&i.FastServiceTierID,
 		&i.FastUncachedInputCost,
 		&i.FastCacheReadInputCost,
-		&i.FastCacheWrite5mInputCost,
-		&i.FastCacheWrite1hInputCost,
-		&i.FastCacheWrite30mInputCost,
+		&i.FastCacheCreation5mInputCost,
+		&i.FastCacheCreation1hInputCost,
+		&i.FastCacheCreation30mInputCost,
 		&i.FastOutputCost,
 		&i.FastReasoningOutputCost,
 	)
@@ -1715,9 +1715,9 @@ SELECT
     cp.pricing_unit,
     cp.uncached_input_cost,
     cp.cache_read_input_cost,
-    cp.cache_write_5m_input_cost,
-    cp.cache_write_1h_input_cost,
-    cp.cache_write_30m_input_cost,
+    cp.cache_creation_5m_input_cost,
+    cp.cache_creation_1h_input_cost,
+    cp.cache_creation_30m_input_cost,
     cp.output_cost,
     cp.reasoning_output_cost,
     cp.status,
@@ -1728,9 +1728,9 @@ SELECT
     COALESCE(fast.id, 0)::bigint AS fast_service_tier_id,
     fast.uncached_input_cost AS fast_uncached_input_cost,
     fast.cache_read_input_cost AS fast_cache_read_input_cost,
-    fast.cache_write_5m_input_cost AS fast_cache_write_5m_input_cost,
-    fast.cache_write_1h_input_cost AS fast_cache_write_1h_input_cost,
-    fast.cache_write_30m_input_cost AS fast_cache_write_30m_input_cost,
+    fast.cache_creation_5m_input_cost AS fast_cache_creation_5m_input_cost,
+    fast.cache_creation_1h_input_cost AS fast_cache_creation_1h_input_cost,
+    fast.cache_creation_30m_input_cost AS fast_cache_creation_30m_input_cost,
     fast.output_cost AS fast_output_cost,
     fast.reasoning_output_cost AS fast_reasoning_output_cost,
     m.model_id AS model_external_id,
@@ -1744,33 +1744,33 @@ ORDER BY m.model_id, cp.effective_from DESC, cp.id DESC
 `
 
 type ListChannelPricesByChannelRow struct {
-	ID                         int64
-	ChannelID                  int64
-	ModelID                    int64
-	Currency                   string
-	PricingUnit                string
-	UncachedInputCost          pgtype.Numeric
-	CacheReadInputCost         pgtype.Numeric
-	CacheWrite5mInputCost      pgtype.Numeric
-	CacheWrite1hInputCost      pgtype.Numeric
-	CacheWrite30mInputCost     pgtype.Numeric
-	OutputCost                 pgtype.Numeric
-	ReasoningOutputCost        pgtype.Numeric
-	Status                     string
-	EffectiveFrom              pgtype.Timestamptz
-	EffectiveTo                pgtype.Timestamptz
-	CreatedAt                  pgtype.Timestamptz
-	UpdatedAt                  pgtype.Timestamptz
-	FastServiceTierID          int64
-	FastUncachedInputCost      pgtype.Numeric
-	FastCacheReadInputCost     pgtype.Numeric
-	FastCacheWrite5mInputCost  pgtype.Numeric
-	FastCacheWrite1hInputCost  pgtype.Numeric
-	FastCacheWrite30mInputCost pgtype.Numeric
-	FastOutputCost             pgtype.Numeric
-	FastReasoningOutputCost    pgtype.Numeric
-	ModelExternalID            string
-	ModelDisplayName           string
+	ID                            int64
+	ChannelID                     int64
+	ModelID                       int64
+	Currency                      string
+	PricingUnit                   string
+	UncachedInputCost             pgtype.Numeric
+	CacheReadInputCost            pgtype.Numeric
+	CacheCreation5mInputCost      pgtype.Numeric
+	CacheCreation1hInputCost      pgtype.Numeric
+	CacheCreation30mInputCost     pgtype.Numeric
+	OutputCost                    pgtype.Numeric
+	ReasoningOutputCost           pgtype.Numeric
+	Status                        string
+	EffectiveFrom                 pgtype.Timestamptz
+	EffectiveTo                   pgtype.Timestamptz
+	CreatedAt                     pgtype.Timestamptz
+	UpdatedAt                     pgtype.Timestamptz
+	FastServiceTierID             int64
+	FastUncachedInputCost         pgtype.Numeric
+	FastCacheReadInputCost        pgtype.Numeric
+	FastCacheCreation5mInputCost  pgtype.Numeric
+	FastCacheCreation1hInputCost  pgtype.Numeric
+	FastCacheCreation30mInputCost pgtype.Numeric
+	FastOutputCost                pgtype.Numeric
+	FastReasoningOutputCost       pgtype.Numeric
+	ModelExternalID               string
+	ModelDisplayName              string
 }
 
 // ListChannelPricesByChannel 列出某 channel 下全部渠道-模型成本价（含历史与停用），连带模型对外 ID/展示名，供 admin 管理台展示成本。
@@ -1791,9 +1791,9 @@ func (q *Queries) ListChannelPricesByChannel(ctx context.Context, channelID int6
 			&i.PricingUnit,
 			&i.UncachedInputCost,
 			&i.CacheReadInputCost,
-			&i.CacheWrite5mInputCost,
-			&i.CacheWrite1hInputCost,
-			&i.CacheWrite30mInputCost,
+			&i.CacheCreation5mInputCost,
+			&i.CacheCreation1hInputCost,
+			&i.CacheCreation30mInputCost,
 			&i.OutputCost,
 			&i.ReasoningOutputCost,
 			&i.Status,
@@ -1804,9 +1804,9 @@ func (q *Queries) ListChannelPricesByChannel(ctx context.Context, channelID int6
 			&i.FastServiceTierID,
 			&i.FastUncachedInputCost,
 			&i.FastCacheReadInputCost,
-			&i.FastCacheWrite5mInputCost,
-			&i.FastCacheWrite1hInputCost,
-			&i.FastCacheWrite30mInputCost,
+			&i.FastCacheCreation5mInputCost,
+			&i.FastCacheCreation1hInputCost,
+			&i.FastCacheCreation30mInputCost,
 			&i.FastOutputCost,
 			&i.FastReasoningOutputCost,
 			&i.ModelExternalID,
@@ -2565,7 +2565,7 @@ SET effective_to = $1,
     status = $2,
     updated_at = now()
 WHERE id = $3
-RETURNING id, channel_id, model_id, currency, pricing_unit, uncached_input_cost, cache_read_input_cost, cache_write_5m_input_cost, cache_write_1h_input_cost, output_cost, reasoning_output_cost, status, effective_from, effective_to, created_at, updated_at, cache_write_30m_input_cost
+RETURNING id, channel_id, model_id, currency, pricing_unit, uncached_input_cost, cache_read_input_cost, cache_creation_5m_input_cost, cache_creation_1h_input_cost, output_cost, reasoning_output_cost, status, effective_from, effective_to, created_at, updated_at, cache_creation_30m_input_cost
 `
 
 type UpdateChannelPriceWindowParams struct {
@@ -2586,8 +2586,8 @@ func (q *Queries) UpdateChannelPriceWindow(ctx context.Context, arg UpdateChanne
 		&i.PricingUnit,
 		&i.UncachedInputCost,
 		&i.CacheReadInputCost,
-		&i.CacheWrite5mInputCost,
-		&i.CacheWrite1hInputCost,
+		&i.CacheCreation5mInputCost,
+		&i.CacheCreation1hInputCost,
 		&i.OutputCost,
 		&i.ReasoningOutputCost,
 		&i.Status,
@@ -2595,7 +2595,7 @@ func (q *Queries) UpdateChannelPriceWindow(ctx context.Context, arg UpdateChanne
 		&i.EffectiveTo,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.CacheWrite30mInputCost,
+		&i.CacheCreation30mInputCost,
 	)
 	return i, err
 }

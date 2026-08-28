@@ -124,9 +124,9 @@ INSERT INTO channel_prices (
     pricing_unit,
     uncached_input_cost,
     cache_read_input_cost,
-    cache_write_5m_input_cost,
-    cache_write_1h_input_cost,
-    cache_write_30m_input_cost,
+    cache_creation_5m_input_cost,
+    cache_creation_1h_input_cost,
+    cache_creation_30m_input_cost,
     output_cost,
     reasoning_output_cost,
     status,
@@ -140,9 +140,9 @@ VALUES (
     sqlc.arg(pricing_unit),
     sqlc.arg(uncached_input_cost),
     sqlc.arg(cache_read_input_cost),
-    sqlc.arg(cache_write_5m_input_cost),
-    sqlc.arg(cache_write_1h_input_cost),
-    sqlc.arg(cache_write_30m_input_cost),
+    sqlc.arg(cache_creation_5m_input_cost),
+    sqlc.arg(cache_creation_1h_input_cost),
+    sqlc.arg(cache_creation_30m_input_cost),
     sqlc.arg(output_cost),
     sqlc.arg(reasoning_output_cost),
     sqlc.arg(status),
@@ -156,9 +156,9 @@ INSERT INTO channel_price_service_tiers (
     service_tier,
     uncached_input_cost,
     cache_read_input_cost,
-    cache_write_5m_input_cost,
-    cache_write_1h_input_cost,
-    cache_write_30m_input_cost,
+    cache_creation_5m_input_cost,
+    cache_creation_1h_input_cost,
+    cache_creation_30m_input_cost,
     output_cost,
     reasoning_output_cost
 )
@@ -167,9 +167,9 @@ SELECT
     'fast',
     sqlc.arg(fast_uncached_input_cost),
     sqlc.narg(fast_cache_read_input_cost),
-    sqlc.narg(fast_cache_write_5m_input_cost),
-    sqlc.narg(fast_cache_write_1h_input_cost),
-    sqlc.narg(fast_cache_write_30m_input_cost),
+    sqlc.narg(fast_cache_creation_5m_input_cost),
+    sqlc.narg(fast_cache_creation_1h_input_cost),
+    sqlc.narg(fast_cache_creation_30m_input_cost),
     sqlc.arg(fast_output_cost),
     sqlc.narg(fast_reasoning_output_cost)
 FROM created_price
@@ -181,9 +181,9 @@ SELECT
     COALESCE(created_fast.id, 0)::bigint AS fast_service_tier_id,
     created_fast.uncached_input_cost AS fast_uncached_input_cost,
     created_fast.cache_read_input_cost AS fast_cache_read_input_cost,
-    created_fast.cache_write_5m_input_cost AS fast_cache_write_5m_input_cost,
-    created_fast.cache_write_1h_input_cost AS fast_cache_write_1h_input_cost,
-    created_fast.cache_write_30m_input_cost AS fast_cache_write_30m_input_cost,
+    created_fast.cache_creation_5m_input_cost AS fast_cache_creation_5m_input_cost,
+    created_fast.cache_creation_1h_input_cost AS fast_cache_creation_1h_input_cost,
+    created_fast.cache_creation_30m_input_cost AS fast_cache_creation_30m_input_cost,
     created_fast.output_cost AS fast_output_cost,
     created_fast.reasoning_output_cost AS fast_reasoning_output_cost
 FROM created_price
@@ -199,9 +199,9 @@ SELECT
     cp.pricing_unit,
     cp.uncached_input_cost,
     cp.cache_read_input_cost,
-    cp.cache_write_5m_input_cost,
-    cp.cache_write_1h_input_cost,
-    cp.cache_write_30m_input_cost,
+    cp.cache_creation_5m_input_cost,
+    cp.cache_creation_1h_input_cost,
+    cp.cache_creation_30m_input_cost,
     cp.output_cost,
     cp.reasoning_output_cost,
     cp.status,
@@ -212,9 +212,9 @@ SELECT
     COALESCE(fast.id, 0)::bigint AS fast_service_tier_id,
     fast.uncached_input_cost AS fast_uncached_input_cost,
     fast.cache_read_input_cost AS fast_cache_read_input_cost,
-    fast.cache_write_5m_input_cost AS fast_cache_write_5m_input_cost,
-    fast.cache_write_1h_input_cost AS fast_cache_write_1h_input_cost,
-    fast.cache_write_30m_input_cost AS fast_cache_write_30m_input_cost,
+    fast.cache_creation_5m_input_cost AS fast_cache_creation_5m_input_cost,
+    fast.cache_creation_1h_input_cost AS fast_cache_creation_1h_input_cost,
+    fast.cache_creation_30m_input_cost AS fast_cache_creation_30m_input_cost,
     fast.output_cost AS fast_output_cost,
     fast.reasoning_output_cost AS fast_reasoning_output_cost,
     m.model_id AS model_external_id,
@@ -820,57 +820,57 @@ cache AS (
         COALESCE(SUM(uncached_input_tokens) FILTER (WHERE
             uncached_input_tokens_state = 'known'
             AND cache_read_input_tokens_state = 'known'
-            AND cache_write_5m_input_tokens_state <> 'unknown'
-            AND cache_write_1h_input_tokens_state <> 'unknown'
-            AND cache_write_30m_input_tokens_state <> 'unknown'
+            AND cache_creation_5m_input_tokens_state <> 'unknown'
+            AND cache_creation_1h_input_tokens_state <> 'unknown'
+            AND cache_creation_30m_input_tokens_state <> 'unknown'
             AND uncached_input_tokens + cache_read_input_tokens
-                + cache_write_5m_input_tokens + cache_write_1h_input_tokens + cache_write_30m_input_tokens > 0
+                + cache_creation_5m_input_tokens + cache_creation_1h_input_tokens + cache_creation_30m_input_tokens > 0
         ), 0)::bigint AS cache_uncached_input,
         COALESCE(SUM(cache_read_input_tokens) FILTER (WHERE
             uncached_input_tokens_state = 'known'
             AND cache_read_input_tokens_state = 'known'
-            AND cache_write_5m_input_tokens_state <> 'unknown'
-            AND cache_write_1h_input_tokens_state <> 'unknown'
-            AND cache_write_30m_input_tokens_state <> 'unknown'
+            AND cache_creation_5m_input_tokens_state <> 'unknown'
+            AND cache_creation_1h_input_tokens_state <> 'unknown'
+            AND cache_creation_30m_input_tokens_state <> 'unknown'
             AND uncached_input_tokens + cache_read_input_tokens
-                + cache_write_5m_input_tokens + cache_write_1h_input_tokens + cache_write_30m_input_tokens > 0
+                + cache_creation_5m_input_tokens + cache_creation_1h_input_tokens + cache_creation_30m_input_tokens > 0
         ), 0)::bigint AS cache_read_input,
-        COALESCE(SUM(cache_write_5m_input_tokens) FILTER (WHERE
+        COALESCE(SUM(cache_creation_5m_input_tokens) FILTER (WHERE
             uncached_input_tokens_state = 'known'
             AND cache_read_input_tokens_state = 'known'
-            AND cache_write_5m_input_tokens_state <> 'unknown'
-            AND cache_write_1h_input_tokens_state <> 'unknown'
-            AND cache_write_30m_input_tokens_state <> 'unknown'
+            AND cache_creation_5m_input_tokens_state <> 'unknown'
+            AND cache_creation_1h_input_tokens_state <> 'unknown'
+            AND cache_creation_30m_input_tokens_state <> 'unknown'
             AND uncached_input_tokens + cache_read_input_tokens
-                + cache_write_5m_input_tokens + cache_write_1h_input_tokens + cache_write_30m_input_tokens > 0
-        ), 0)::bigint AS cache_write_5m_input,
-        COALESCE(SUM(cache_write_1h_input_tokens) FILTER (WHERE
+                + cache_creation_5m_input_tokens + cache_creation_1h_input_tokens + cache_creation_30m_input_tokens > 0
+        ), 0)::bigint AS cache_creation_5m_input,
+        COALESCE(SUM(cache_creation_1h_input_tokens) FILTER (WHERE
             uncached_input_tokens_state = 'known'
             AND cache_read_input_tokens_state = 'known'
-            AND cache_write_5m_input_tokens_state <> 'unknown'
-            AND cache_write_1h_input_tokens_state <> 'unknown'
-            AND cache_write_30m_input_tokens_state <> 'unknown'
+            AND cache_creation_5m_input_tokens_state <> 'unknown'
+            AND cache_creation_1h_input_tokens_state <> 'unknown'
+            AND cache_creation_30m_input_tokens_state <> 'unknown'
             AND uncached_input_tokens + cache_read_input_tokens
-                + cache_write_5m_input_tokens + cache_write_1h_input_tokens + cache_write_30m_input_tokens > 0
-        ), 0)::bigint AS cache_write_1h_input,
-        COALESCE(SUM(cache_write_30m_input_tokens) FILTER (WHERE
+                + cache_creation_5m_input_tokens + cache_creation_1h_input_tokens + cache_creation_30m_input_tokens > 0
+        ), 0)::bigint AS cache_creation_1h_input,
+        COALESCE(SUM(cache_creation_30m_input_tokens) FILTER (WHERE
             uncached_input_tokens_state = 'known'
             AND cache_read_input_tokens_state = 'known'
-            AND cache_write_5m_input_tokens_state <> 'unknown'
-            AND cache_write_1h_input_tokens_state <> 'unknown'
-            AND cache_write_30m_input_tokens_state <> 'unknown'
+            AND cache_creation_5m_input_tokens_state <> 'unknown'
+            AND cache_creation_1h_input_tokens_state <> 'unknown'
+            AND cache_creation_30m_input_tokens_state <> 'unknown'
             AND uncached_input_tokens + cache_read_input_tokens
-                + cache_write_5m_input_tokens + cache_write_1h_input_tokens + cache_write_30m_input_tokens > 0
-        ), 0)::bigint AS cache_write_30m_input,
+                + cache_creation_5m_input_tokens + cache_creation_1h_input_tokens + cache_creation_30m_input_tokens > 0
+        ), 0)::bigint AS cache_creation_30m_input,
         COUNT(*) AS cache_usage_records,
         COUNT(*) FILTER (WHERE
             uncached_input_tokens_state = 'known'
             AND cache_read_input_tokens_state = 'known'
-            AND cache_write_5m_input_tokens_state <> 'unknown'
-            AND cache_write_1h_input_tokens_state <> 'unknown'
-            AND cache_write_30m_input_tokens_state <> 'unknown'
+            AND cache_creation_5m_input_tokens_state <> 'unknown'
+            AND cache_creation_1h_input_tokens_state <> 'unknown'
+            AND cache_creation_30m_input_tokens_state <> 'unknown'
             AND uncached_input_tokens + cache_read_input_tokens
-                + cache_write_5m_input_tokens + cache_write_1h_input_tokens + cache_write_30m_input_tokens > 0
+                + cache_creation_5m_input_tokens + cache_creation_1h_input_tokens + cache_creation_30m_input_tokens > 0
         ) AS cache_evaluable_records,
         COUNT(*) FILTER (WHERE cache_read_input_tokens_state = 'not_applicable') AS cache_read_not_applicable_records
     FROM cache_usage
@@ -898,9 +898,9 @@ SELECT
     (MAX(completed_at) FILTER (WHERE status = 'failed' AND fault_party = 'upstream'))::timestamptz AS last_failure_at,
     (SELECT cache_uncached_input FROM cache) AS cache_uncached_input,
     (SELECT cache_read_input FROM cache) AS cache_read_input,
-    (SELECT cache_write_5m_input FROM cache) AS cache_write_5m_input,
-    (SELECT cache_write_1h_input FROM cache) AS cache_write_1h_input,
-    (SELECT cache_write_30m_input FROM cache) AS cache_write_30m_input,
+    (SELECT cache_creation_5m_input FROM cache) AS cache_creation_5m_input,
+    (SELECT cache_creation_1h_input FROM cache) AS cache_creation_1h_input,
+    (SELECT cache_creation_30m_input FROM cache) AS cache_creation_30m_input,
     (SELECT cache_usage_records FROM cache) AS cache_usage_records,
     (SELECT cache_evaluable_records FROM cache) AS cache_evaluable_records,
     (SELECT cache_read_not_applicable_records FROM cache) AS cache_read_not_applicable_records

@@ -247,16 +247,16 @@ func (s *Service) Radar(ctx context.Context, from, to time.Time) (RadarReport, e
 	}
 
 	report.Tokens = TokenStats{
-		Input:  tok.UncachedInput + tok.CacheReadInput + tok.CacheWriteInput,
+		Input:  tok.UncachedInput + tok.CacheReadInput + tok.CacheCreationInput,
 		Output: tok.OutputTokens,
 	}
 	report.Tokens.Total = report.Tokens.Input + report.Tokens.Output
 	report.Cache = opsutil.CacheStatsFrom(opsutil.CacheAggregate{
 		UncachedInput:            tok.CacheMetricUncachedInput,
 		CacheReadInput:           tok.CacheMetricReadInput,
-		CacheWrite5mInput:        tok.CacheMetricWrite5mInput,
-		CacheWrite1hInput:        tok.CacheMetricWrite1hInput,
-		CacheWrite30mInput:       tok.CacheMetricWrite30mInput,
+		CacheCreation5mInput:     tok.CacheMetricWrite5mInput,
+		CacheCreation1hInput:     tok.CacheMetricWrite1hInput,
+		CacheCreation30mInput:    tok.CacheMetricWrite30mInput,
 		UsageRecords:             tok.CacheUsageRecords,
 		EvaluableRecords:         tok.CacheEvaluableRecords,
 		ReadNotApplicableRecords: tok.CacheReadNotApplicableRecords,

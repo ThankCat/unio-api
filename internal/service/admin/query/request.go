@@ -81,45 +81,45 @@ type RequestListItem struct {
 	RequestSummary
 
 	// token 用量（无 usage 记录时为 0）。
-	UncachedInputTokens      int64
-	CacheReadInputTokens     int64
-	CacheWrite5mInputTokens  int64
-	CacheWrite1hInputTokens  int64
-	CacheWrite30mInputTokens int64
-	OutputTokens             int64
-	ReasoningOutputTokens    int64
+	UncachedInputTokens         int64
+	CacheReadInputTokens        int64
+	CacheCreation5mInputTokens  int64
+	CacheCreation1hInputTokens  int64
+	CacheCreation30mInputTokens int64
+	OutputTokens                int64
+	ReasoningOutputTokens       int64
 
 	// 费用金额（USD 十进制字符串；无结算快照 / 账本时为 nil）。UserChargeUSD=用户实际扣费净额，TotalCostUSD=平台成本。
-	UserChargeUSD             *string
-	TotalCostUSD              *string
-	UncachedInputCostUSD      *string
-	CacheReadInputCostUSD     *string
-	CacheWrite5mInputCostUSD  *string
-	CacheWrite1hInputCostUSD  *string
-	CacheWrite30mInputCostUSD *string
-	OutputCostUSD             *string
-	ReasoningOutputCostUSD    *string
+	UserChargeUSD                *string
+	TotalCostUSD                 *string
+	UncachedInputCostUSD         *string
+	CacheReadInputCostUSD        *string
+	CacheCreation5mInputCostUSD  *string
+	CacheCreation1hInputCostUSD  *string
+	CacheCreation30mInputCostUSD *string
+	OutputCostUSD                *string
+	ReasoningOutputCostUSD       *string
 
 	// 计费单价快照（USD 十进制字符串，per_1m_tokens）。平台侧=成本单价，用户侧=售价单价，供「单价 × tokens = 金额」计算过程展示。
-	UncachedInputCostUnitUSD       *string
-	CacheReadInputCostUnitUSD      *string
-	CacheWrite5mInputCostUnitUSD   *string
-	CacheWrite1hInputCostUnitUSD   *string
-	CacheWrite30mInputCostUnitUSD  *string
-	OutputCostUnitUSD              *string
-	ReasoningOutputCostUnitUSD     *string
-	UncachedInputPriceUnitUSD      *string
-	CacheReadInputPriceUnitUSD     *string
-	CacheWrite5mInputPriceUnitUSD  *string
-	CacheWrite1hInputPriceUnitUSD  *string
-	CacheWrite30mInputPriceUnitUSD *string
-	OutputPriceUnitUSD             *string
-	ReasoningOutputPriceUnitUSD    *string
-	PriceServiceTier               *string
-	CostServiceTier                *string
-	ModelPriceServiceTierID        *int64
-	ChannelPriceServiceTierID      *int64
-	TierCostSource                 *string
+	UncachedInputCostUnitUSD          *string
+	CacheReadInputCostUnitUSD         *string
+	CacheCreation5mInputCostUnitUSD   *string
+	CacheCreation1hInputCostUnitUSD   *string
+	CacheCreation30mInputCostUnitUSD  *string
+	OutputCostUnitUSD                 *string
+	ReasoningOutputCostUnitUSD        *string
+	UncachedInputPriceUnitUSD         *string
+	CacheReadInputPriceUnitUSD        *string
+	CacheCreation5mInputPriceUnitUSD  *string
+	CacheCreation1hInputPriceUnitUSD  *string
+	CacheCreation30mInputPriceUnitUSD *string
+	OutputPriceUnitUSD                *string
+	ReasoningOutputPriceUnitUSD       *string
+	PriceServiceTier                  *string
+	CostServiceTier                   *string
+	ModelPriceServiceTierID           *int64
+	ChannelPriceServiceTierID         *int64
+	TierCostSource                    *string
 
 	// DEC-027 成本来源倍率快照（倍率路径有值，覆盖/旧数据为 nil）：价格倍率 + 充值倍率。
 	ChannelCostMultiplier *string
@@ -231,21 +231,21 @@ type RequestDetail struct {
 
 // CostSnapshotView 是平台成本快照的展示视图：每分项成本单价（per_1m_tokens）+ 实际金额 + 总额（USD 字符串）。
 type CostSnapshotView struct {
-	UncachedInputCostUnit        *string
-	CacheReadInputCostUnit       *string
-	CacheWrite5mInputCostUnit    *string
-	CacheWrite1hInputCostUnit    *string
-	CacheWrite30mInputCostUnit   *string
-	OutputCostUnit               *string
-	ReasoningOutputCostUnit      *string
-	UncachedInputCostAmount      *string
-	CacheReadInputCostAmount     *string
-	CacheWrite5mInputCostAmount  *string
-	CacheWrite1hInputCostAmount  *string
-	CacheWrite30mInputCostAmount *string
-	OutputCostAmount             *string
-	ReasoningOutputCostAmount    *string
-	TotalCostAmount              *string
+	UncachedInputCostUnit           *string
+	CacheReadInputCostUnit          *string
+	CacheCreation5mInputCostUnit    *string
+	CacheCreation1hInputCostUnit    *string
+	CacheCreation30mInputCostUnit   *string
+	OutputCostUnit                  *string
+	ReasoningOutputCostUnit         *string
+	UncachedInputCostAmount         *string
+	CacheReadInputCostAmount        *string
+	CacheCreation5mInputCostAmount  *string
+	CacheCreation1hInputCostAmount  *string
+	CacheCreation30mInputCostAmount *string
+	OutputCostAmount                *string
+	ReasoningOutputCostAmount       *string
+	TotalCostAmount                 *string
 	// DEC-027 成本来源倍率（倍率路径有值，覆盖/旧数据为 null）：价格倍率 + 充值倍率，供请求详情费用处展示新旧倍率。
 	ChannelCostMultiplier     *string
 	RechargeFactor            *string
@@ -257,54 +257,54 @@ type CostSnapshotView struct {
 
 // PriceSnapshotView 是客户售价快照的展示视图：每分项售价单价（per_1m_tokens，USD 字符串）。
 type PriceSnapshotView struct {
-	UncachedInputPrice      *string
-	CacheReadInputPrice     *string
-	CacheWrite5mInputPrice  *string
-	CacheWrite1hInputPrice  *string
-	CacheWrite30mInputPrice *string
-	OutputPrice             *string
-	ReasoningOutputPrice    *string
-	ServiceTier             *string
-	ModelPriceServiceTierID *int64
+	UncachedInputPrice         *string
+	CacheReadInputPrice        *string
+	CacheCreation5mInputPrice  *string
+	CacheCreation1hInputPrice  *string
+	CacheCreation30mInputPrice *string
+	OutputPrice                *string
+	ReasoningOutputPrice       *string
+	ServiceTier                *string
+	ModelPriceServiceTierID    *int64
 }
 
 func toCostSnapshotView(c sqlc.CostSnapshot) CostSnapshotView {
 	return CostSnapshotView{
-		UncachedInputCostUnit:        opsutil.NumericStringPtr(c.UncachedInputCost),
-		CacheReadInputCostUnit:       opsutil.NumericStringPtr(c.CacheReadInputCost),
-		CacheWrite5mInputCostUnit:    opsutil.NumericStringPtr(c.CacheWrite5mInputCost),
-		CacheWrite1hInputCostUnit:    opsutil.NumericStringPtr(c.CacheWrite1hInputCost),
-		CacheWrite30mInputCostUnit:   opsutil.NumericStringPtr(c.CacheWrite30mInputCost),
-		OutputCostUnit:               opsutil.NumericStringPtr(c.OutputCost),
-		ReasoningOutputCostUnit:      opsutil.NumericStringPtr(c.ReasoningOutputCost),
-		UncachedInputCostAmount:      opsutil.NumericStringPtr(c.UncachedInputCostAmount),
-		CacheReadInputCostAmount:     opsutil.NumericStringPtr(c.CacheReadInputCostAmount),
-		CacheWrite5mInputCostAmount:  opsutil.NumericStringPtr(c.CacheWrite5mInputCostAmount),
-		CacheWrite1hInputCostAmount:  opsutil.NumericStringPtr(c.CacheWrite1hInputCostAmount),
-		CacheWrite30mInputCostAmount: opsutil.NumericStringPtr(c.CacheWrite30mInputCostAmount),
-		OutputCostAmount:             opsutil.NumericStringPtr(c.OutputCostAmount),
-		ReasoningOutputCostAmount:    opsutil.NumericStringPtr(c.ReasoningOutputCostAmount),
-		TotalCostAmount:              opsutil.NumericStringPtr(c.TotalCostAmount),
-		ChannelCostMultiplier:        opsutil.NumericStringPtr(c.CostMultiplier),
-		RechargeFactor:               opsutil.NumericStringPtr(c.RechargeFactor),
-		ServiceTier:                  textPtr(c.ServiceTier),
-		ModelPriceServiceTierID:      int8Ptr(c.ModelPriceServiceTierID),
-		ChannelPriceServiceTierID:    int8Ptr(c.ChannelPriceServiceTierID),
-		TierCostSource:               textPtr(c.TierCostSource),
+		UncachedInputCostUnit:           opsutil.NumericStringPtr(c.UncachedInputCost),
+		CacheReadInputCostUnit:          opsutil.NumericStringPtr(c.CacheReadInputCost),
+		CacheCreation5mInputCostUnit:    opsutil.NumericStringPtr(c.CacheCreation5mInputCost),
+		CacheCreation1hInputCostUnit:    opsutil.NumericStringPtr(c.CacheCreation1hInputCost),
+		CacheCreation30mInputCostUnit:   opsutil.NumericStringPtr(c.CacheCreation30mInputCost),
+		OutputCostUnit:                  opsutil.NumericStringPtr(c.OutputCost),
+		ReasoningOutputCostUnit:         opsutil.NumericStringPtr(c.ReasoningOutputCost),
+		UncachedInputCostAmount:         opsutil.NumericStringPtr(c.UncachedInputCostAmount),
+		CacheReadInputCostAmount:        opsutil.NumericStringPtr(c.CacheReadInputCostAmount),
+		CacheCreation5mInputCostAmount:  opsutil.NumericStringPtr(c.CacheCreation5mInputCostAmount),
+		CacheCreation1hInputCostAmount:  opsutil.NumericStringPtr(c.CacheCreation1hInputCostAmount),
+		CacheCreation30mInputCostAmount: opsutil.NumericStringPtr(c.CacheCreation30mInputCostAmount),
+		OutputCostAmount:                opsutil.NumericStringPtr(c.OutputCostAmount),
+		ReasoningOutputCostAmount:       opsutil.NumericStringPtr(c.ReasoningOutputCostAmount),
+		TotalCostAmount:                 opsutil.NumericStringPtr(c.TotalCostAmount),
+		ChannelCostMultiplier:           opsutil.NumericStringPtr(c.CostMultiplier),
+		RechargeFactor:                  opsutil.NumericStringPtr(c.RechargeFactor),
+		ServiceTier:                     textPtr(c.ServiceTier),
+		ModelPriceServiceTierID:         int8Ptr(c.ModelPriceServiceTierID),
+		ChannelPriceServiceTierID:       int8Ptr(c.ChannelPriceServiceTierID),
+		TierCostSource:                  textPtr(c.TierCostSource),
 	}
 }
 
 func toPriceSnapshotView(p sqlc.PriceSnapshot) PriceSnapshotView {
 	return PriceSnapshotView{
-		UncachedInputPrice:      opsutil.NumericStringPtr(p.UncachedInputPrice),
-		CacheReadInputPrice:     opsutil.NumericStringPtr(p.CacheReadInputPrice),
-		CacheWrite5mInputPrice:  opsutil.NumericStringPtr(p.CacheWrite5mInputPrice),
-		CacheWrite1hInputPrice:  opsutil.NumericStringPtr(p.CacheWrite1hInputPrice),
-		CacheWrite30mInputPrice: opsutil.NumericStringPtr(p.CacheWrite30mInputPrice),
-		OutputPrice:             opsutil.NumericStringPtr(p.OutputPrice),
-		ReasoningOutputPrice:    opsutil.NumericStringPtr(p.ReasoningOutputPrice),
-		ServiceTier:             textPtr(p.ServiceTier),
-		ModelPriceServiceTierID: int8Ptr(p.ModelPriceServiceTierID),
+		UncachedInputPrice:         opsutil.NumericStringPtr(p.UncachedInputPrice),
+		CacheReadInputPrice:        opsutil.NumericStringPtr(p.CacheReadInputPrice),
+		CacheCreation5mInputPrice:  opsutil.NumericStringPtr(p.CacheCreation5mInputPrice),
+		CacheCreation1hInputPrice:  opsutil.NumericStringPtr(p.CacheCreation1hInputPrice),
+		CacheCreation30mInputPrice: opsutil.NumericStringPtr(p.CacheCreation30mInputPrice),
+		OutputPrice:                opsutil.NumericStringPtr(p.OutputPrice),
+		ReasoningOutputPrice:       opsutil.NumericStringPtr(p.ReasoningOutputPrice),
+		ServiceTier:                textPtr(p.ServiceTier),
+		ModelPriceServiceTierID:    int8Ptr(p.ModelPriceServiceTierID),
 	}
 }
 
@@ -505,43 +505,43 @@ func toRequestListItem(r sqlc.ListRequestRecordsPageRow) RequestListItem {
 			ServiceTierResolution: textPtr(r.ServiceTierResolution),
 			ServiceTierDowngraded: serviceTierDowngraded(r.RequestedServiceTier, r.ActualServiceTier),
 		},
-		UncachedInputTokens:      r.UncachedInputTokens,
-		CacheReadInputTokens:     r.CacheReadInputTokens,
-		CacheWrite5mInputTokens:  r.CacheWrite5mInputTokens,
-		CacheWrite1hInputTokens:  r.CacheWrite1hInputTokens,
-		CacheWrite30mInputTokens: r.CacheWrite30mInputTokens,
-		OutputTokens:             r.OutputTokensTotal,
-		ReasoningOutputTokens:    r.ReasoningOutputTokens,
+		UncachedInputTokens:         r.UncachedInputTokens,
+		CacheReadInputTokens:        r.CacheReadInputTokens,
+		CacheCreation5mInputTokens:  r.CacheCreation5mInputTokens,
+		CacheCreation1hInputTokens:  r.CacheCreation1hInputTokens,
+		CacheCreation30mInputTokens: r.CacheCreation30mInputTokens,
+		OutputTokens:                r.OutputTokensTotal,
+		ReasoningOutputTokens:       r.ReasoningOutputTokens,
 
-		UserChargeUSD:             opsutil.NumericStringPtr(r.UserChargeAmount),
-		TotalCostUSD:              opsutil.NumericStringPtr(r.TotalCostAmount),
-		UncachedInputCostUSD:      opsutil.NumericStringPtr(r.UncachedInputCostAmount),
-		CacheReadInputCostUSD:     opsutil.NumericStringPtr(r.CacheReadInputCostAmount),
-		CacheWrite5mInputCostUSD:  opsutil.NumericStringPtr(r.CacheWrite5mInputCostAmount),
-		CacheWrite1hInputCostUSD:  opsutil.NumericStringPtr(r.CacheWrite1hInputCostAmount),
-		CacheWrite30mInputCostUSD: opsutil.NumericStringPtr(r.CacheWrite30mInputCostAmount),
-		OutputCostUSD:             opsutil.NumericStringPtr(r.OutputCostAmount),
-		ReasoningOutputCostUSD:    opsutil.NumericStringPtr(r.ReasoningOutputCostAmount),
+		UserChargeUSD:                opsutil.NumericStringPtr(r.UserChargeAmount),
+		TotalCostUSD:                 opsutil.NumericStringPtr(r.TotalCostAmount),
+		UncachedInputCostUSD:         opsutil.NumericStringPtr(r.UncachedInputCostAmount),
+		CacheReadInputCostUSD:        opsutil.NumericStringPtr(r.CacheReadInputCostAmount),
+		CacheCreation5mInputCostUSD:  opsutil.NumericStringPtr(r.CacheCreation5mInputCostAmount),
+		CacheCreation1hInputCostUSD:  opsutil.NumericStringPtr(r.CacheCreation1hInputCostAmount),
+		CacheCreation30mInputCostUSD: opsutil.NumericStringPtr(r.CacheCreation30mInputCostAmount),
+		OutputCostUSD:                opsutil.NumericStringPtr(r.OutputCostAmount),
+		ReasoningOutputCostUSD:       opsutil.NumericStringPtr(r.ReasoningOutputCostAmount),
 
-		UncachedInputCostUnitUSD:       opsutil.NumericStringPtr(r.UncachedInputCost),
-		CacheReadInputCostUnitUSD:      opsutil.NumericStringPtr(r.CacheReadInputCost),
-		CacheWrite5mInputCostUnitUSD:   opsutil.NumericStringPtr(r.CacheWrite5mInputCost),
-		CacheWrite1hInputCostUnitUSD:   opsutil.NumericStringPtr(r.CacheWrite1hInputCost),
-		CacheWrite30mInputCostUnitUSD:  opsutil.NumericStringPtr(r.CacheWrite30mInputCost),
-		OutputCostUnitUSD:              opsutil.NumericStringPtr(r.OutputCost),
-		ReasoningOutputCostUnitUSD:     opsutil.NumericStringPtr(r.ReasoningOutputCost),
-		UncachedInputPriceUnitUSD:      opsutil.NumericStringPtr(r.UncachedInputPrice),
-		CacheReadInputPriceUnitUSD:     opsutil.NumericStringPtr(r.CacheReadInputPrice),
-		CacheWrite5mInputPriceUnitUSD:  opsutil.NumericStringPtr(r.CacheWrite5mInputPrice),
-		CacheWrite1hInputPriceUnitUSD:  opsutil.NumericStringPtr(r.CacheWrite1hInputPrice),
-		CacheWrite30mInputPriceUnitUSD: opsutil.NumericStringPtr(r.CacheWrite30mInputPrice),
-		OutputPriceUnitUSD:             opsutil.NumericStringPtr(r.OutputPrice),
-		ReasoningOutputPriceUnitUSD:    opsutil.NumericStringPtr(r.ReasoningOutputPrice),
-		PriceServiceTier:               textPtr(r.PriceServiceTier),
-		CostServiceTier:                textPtr(r.CostServiceTier),
-		ModelPriceServiceTierID:        int8Ptr(r.ModelPriceServiceTierID),
-		ChannelPriceServiceTierID:      int8Ptr(r.ChannelPriceServiceTierID),
-		TierCostSource:                 textPtr(r.TierCostSource),
+		UncachedInputCostUnitUSD:          opsutil.NumericStringPtr(r.UncachedInputCost),
+		CacheReadInputCostUnitUSD:         opsutil.NumericStringPtr(r.CacheReadInputCost),
+		CacheCreation5mInputCostUnitUSD:   opsutil.NumericStringPtr(r.CacheCreation5mInputCost),
+		CacheCreation1hInputCostUnitUSD:   opsutil.NumericStringPtr(r.CacheCreation1hInputCost),
+		CacheCreation30mInputCostUnitUSD:  opsutil.NumericStringPtr(r.CacheCreation30mInputCost),
+		OutputCostUnitUSD:                 opsutil.NumericStringPtr(r.OutputCost),
+		ReasoningOutputCostUnitUSD:        opsutil.NumericStringPtr(r.ReasoningOutputCost),
+		UncachedInputPriceUnitUSD:         opsutil.NumericStringPtr(r.UncachedInputPrice),
+		CacheReadInputPriceUnitUSD:        opsutil.NumericStringPtr(r.CacheReadInputPrice),
+		CacheCreation5mInputPriceUnitUSD:  opsutil.NumericStringPtr(r.CacheCreation5mInputPrice),
+		CacheCreation1hInputPriceUnitUSD:  opsutil.NumericStringPtr(r.CacheCreation1hInputPrice),
+		CacheCreation30mInputPriceUnitUSD: opsutil.NumericStringPtr(r.CacheCreation30mInputPrice),
+		OutputPriceUnitUSD:                opsutil.NumericStringPtr(r.OutputPrice),
+		ReasoningOutputPriceUnitUSD:       opsutil.NumericStringPtr(r.ReasoningOutputPrice),
+		PriceServiceTier:                  textPtr(r.PriceServiceTier),
+		CostServiceTier:                   textPtr(r.CostServiceTier),
+		ModelPriceServiceTierID:           int8Ptr(r.ModelPriceServiceTierID),
+		ChannelPriceServiceTierID:         int8Ptr(r.ChannelPriceServiceTierID),
+		TierCostSource:                    textPtr(r.TierCostSource),
 
 		ChannelCostMultiplier: opsutil.NumericStringPtr(r.ChannelCostMultiplier),
 		RechargeFactor:        opsutil.NumericStringPtr(r.RechargeFactor),

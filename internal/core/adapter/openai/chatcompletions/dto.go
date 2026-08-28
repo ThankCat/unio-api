@@ -127,7 +127,7 @@ type chatPromptTokensDetails struct {
 	CacheCreationTokens int `json:"cache_creation_tokens"`
 }
 
-// CacheWrite 返回缓存写入 token，按别名优先级兜底（cache_write_tokens > cache_creation_tokens）。
+// CacheWrite 返回缓存创建 token，按别名优先级兜底（cache_write_tokens > cache_creation_tokens）。
 func (d chatPromptTokensDetails) CacheWrite() int {
 	if d.CacheWriteTokens > 0 {
 		return d.CacheWriteTokens

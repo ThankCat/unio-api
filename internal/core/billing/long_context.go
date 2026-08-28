@@ -10,7 +10,7 @@ import (
 
 // LongContextPolicy 是绑定在 model_prices 价格窗口上的长上下文阶梯策略。
 //
-// 对齐 OpenAI GPT-5.4+ / sub2api：当输入合计（未缓存 + cache_read + 各档 cache_write）
+// 对齐 OpenAI GPT-5.4+ / sub2api：当输入合计（未缓存 + cache_read + 各档 cache_creation）
 // 超过 Threshold 时，整单输入侧单价 × InputMultiplier、输出侧单价 × OutputMultiplier。
 type LongContextPolicy struct {
 	Enabled          bool
@@ -34,9 +34,9 @@ func LongContextInputTokenSum(facts usage.Facts) int64 {
 	for _, c := range []usage.TokenCount{
 		facts.UncachedInputTokens,
 		facts.CacheReadInputTokens,
-		facts.CacheWrite5mInputTokens,
-		facts.CacheWrite1hInputTokens,
-		facts.CacheWrite30mInputTokens,
+		facts.CacheCreation5mInputTokens,
+		facts.CacheCreation1hInputTokens,
+		facts.CacheCreation30mInputTokens,
 	} {
 		if c.IsKnown() && c.Value > 0 {
 			sum += c.Value
@@ -71,9 +71,9 @@ func ApplyLongContextToCustomerPrice(price CustomerPriceSnapshot, policy LongCon
 	}{
 		{price.UncachedInputPrice, inRat, &scaled.UncachedInputPrice},
 		{price.CacheReadInputPrice, inRat, &scaled.CacheReadInputPrice},
-		{price.CacheWrite5mInputPrice, inRat, &scaled.CacheWrite5mInputPrice},
-		{price.CacheWrite1hInputPrice, inRat, &scaled.CacheWrite1hInputPrice},
-		{price.CacheWrite30mInputPrice, inRat, &scaled.CacheWrite30mInputPrice},
+		{price.CacheCreation5mInputPrice, inRat, &scaled.CacheCreation5mInputPrice},
+		{price.CacheCreation1hInputPrice, inRat, &scaled.CacheCreation1hInputPrice},
+		{price.CacheCreation30mInputPrice, inRat, &scaled.CacheCreation30mInputPrice},
 		{price.OutputPrice, outRat, &scaled.OutputPrice},
 		{price.ReasoningOutputPrice, outRat, &scaled.ReasoningOutputPrice},
 	} {
@@ -107,9 +107,9 @@ func ApplyLongContextToProviderCost(cost ProviderCostSnapshot, policy LongContex
 	}{
 		{cost.UncachedInputCost, inRat, &scaled.UncachedInputCost},
 		{cost.CacheReadInputCost, inRat, &scaled.CacheReadInputCost},
-		{cost.CacheWrite5mInputCost, inRat, &scaled.CacheWrite5mInputCost},
-		{cost.CacheWrite1hInputCost, inRat, &scaled.CacheWrite1hInputCost},
-		{cost.CacheWrite30mInputCost, inRat, &scaled.CacheWrite30mInputCost},
+		{cost.CacheCreation5mInputCost, inRat, &scaled.CacheCreation5mInputCost},
+		{cost.CacheCreation1hInputCost, inRat, &scaled.CacheCreation1hInputCost},
+		{cost.CacheCreation30mInputCost, inRat, &scaled.CacheCreation30mInputCost},
 		{cost.OutputCost, outRat, &scaled.OutputCost},
 		{cost.ReasoningOutputCost, outRat, &scaled.ReasoningOutputCost},
 	} {

@@ -171,7 +171,7 @@ INSERT INTO model_catalog (
     input_price_usd_per_million_tokens,
     output_price_usd_per_million_tokens,
     cache_read_price_usd_per_million_tokens,
-    cache_write_price_usd_per_million_tokens,
+    cache_creation_price_usd_per_million_tokens,
     open_weights,
     modalities_input,
     modalities_output,
@@ -216,7 +216,7 @@ SET lab = EXCLUDED.lab,
     input_price_usd_per_million_tokens = EXCLUDED.input_price_usd_per_million_tokens,
     output_price_usd_per_million_tokens = EXCLUDED.output_price_usd_per_million_tokens,
     cache_read_price_usd_per_million_tokens = EXCLUDED.cache_read_price_usd_per_million_tokens,
-    cache_write_price_usd_per_million_tokens = EXCLUDED.cache_write_price_usd_per_million_tokens,
+    cache_creation_price_usd_per_million_tokens = EXCLUDED.cache_creation_price_usd_per_million_tokens,
     open_weights = EXCLUDED.open_weights,
     modalities_input = EXCLUDED.modalities_input,
     modalities_output = EXCLUDED.modalities_output,
@@ -226,29 +226,29 @@ SET lab = EXCLUDED.lab,
     removed_upstream_at = NULL,
     synced_at = now(),
     updated_at = now()
-RETURNING canonical_id, lab, display_name, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, removed_upstream_at, fingerprint, synced_at, created_at, updated_at, family, description, knowledge_cutoff, cache_read_price_usd_per_million_tokens, cache_write_price_usd_per_million_tokens, input_limit_tokens, open_weights, modalities_input, modalities_output, last_updated
+RETURNING canonical_id, lab, display_name, context_window_tokens, max_output_tokens, input_price_usd_per_million_tokens, output_price_usd_per_million_tokens, release_date, removed_upstream_at, fingerprint, synced_at, created_at, updated_at, family, description, knowledge_cutoff, cache_read_price_usd_per_million_tokens, cache_creation_price_usd_per_million_tokens, input_limit_tokens, open_weights, modalities_input, modalities_output, last_updated
 `
 
 type UpsertModelCatalogEntryParams struct {
-	CanonicalID                        string
-	Lab                                string
-	Family                             string
-	DisplayName                        string
-	Description                        string
-	KnowledgeCutoff                    string
-	ContextWindowTokens                pgtype.Int8
-	InputLimitTokens                   pgtype.Int8
-	MaxOutputTokens                    pgtype.Int8
-	InputPriceUsdPerMillionTokens      pgtype.Numeric
-	OutputPriceUsdPerMillionTokens     pgtype.Numeric
-	CacheReadPriceUsdPerMillionTokens  pgtype.Numeric
-	CacheWritePriceUsdPerMillionTokens pgtype.Numeric
-	OpenWeights                        pgtype.Bool
-	ModalitiesInput                    []string
-	ModalitiesOutput                   []string
-	ReleaseDate                        pgtype.Date
-	LastUpdated                        pgtype.Date
-	Fingerprint                        string
+	CanonicalID                           string
+	Lab                                   string
+	Family                                string
+	DisplayName                           string
+	Description                           string
+	KnowledgeCutoff                       string
+	ContextWindowTokens                   pgtype.Int8
+	InputLimitTokens                      pgtype.Int8
+	MaxOutputTokens                       pgtype.Int8
+	InputPriceUsdPerMillionTokens         pgtype.Numeric
+	OutputPriceUsdPerMillionTokens        pgtype.Numeric
+	CacheReadPriceUsdPerMillionTokens     pgtype.Numeric
+	CacheCreationPriceUsdPerMillionTokens pgtype.Numeric
+	OpenWeights                           pgtype.Bool
+	ModalitiesInput                       []string
+	ModalitiesOutput                      []string
+	ReleaseDate                           pgtype.Date
+	LastUpdated                           pgtype.Date
+	Fingerprint                           string
 }
 
 // UpsertModelCatalogEntry 按 canonical_id 全量 upsert 目录条目；覆盖时刷新 fingerprint/synced_at 并清除下架标记。
@@ -266,7 +266,7 @@ func (q *Queries) UpsertModelCatalogEntry(ctx context.Context, arg UpsertModelCa
 		arg.InputPriceUsdPerMillionTokens,
 		arg.OutputPriceUsdPerMillionTokens,
 		arg.CacheReadPriceUsdPerMillionTokens,
-		arg.CacheWritePriceUsdPerMillionTokens,
+		arg.CacheCreationPriceUsdPerMillionTokens,
 		arg.OpenWeights,
 		arg.ModalitiesInput,
 		arg.ModalitiesOutput,
@@ -293,7 +293,7 @@ func (q *Queries) UpsertModelCatalogEntry(ctx context.Context, arg UpsertModelCa
 		&i.Description,
 		&i.KnowledgeCutoff,
 		&i.CacheReadPriceUsdPerMillionTokens,
-		&i.CacheWritePriceUsdPerMillionTokens,
+		&i.CacheCreationPriceUsdPerMillionTokens,
 		&i.InputLimitTokens,
 		&i.OpenWeights,
 		&i.ModalitiesInput,

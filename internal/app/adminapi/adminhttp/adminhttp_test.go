@@ -40,14 +40,14 @@ func TestWriteServiceErrorSurfacesMarginComponent(t *testing.T) {
 	WriteServiceError(recorder, &pgconn.PgError{
 		Code:           "23514",
 		ConstraintName: marginGuardConstraint,
-		Message:        "negative margin: channel=7 model=3 component=standard/cache_write_1h_input sale=1 cost=2",
+		Message:        "negative margin: channel=7 model=3 component=standard/cache_creation_1h_input sale=1 cost=2",
 		// 与 json_build_object 的实际输出对齐：sale / cost 是数字，不是字符串。
 		Detail: `{"channel_id" : 7, "model_id" : 3, ` +
-			`"component" : "standard/cache_write_1h_input", "sale" : 1.0000000000, "cost" : 2.0000000000}`,
+			`"component" : "standard/cache_creation_1h_input", "sale" : 1.0000000000, "cost" : 2.0000000000}`,
 	})
 
 	body := recorder.Body.String()
-	for _, want := range []string{"standard/cache_write_1h_input", "模型 3", "渠道 7"} {
+	for _, want := range []string{"standard/cache_creation_1h_input", "模型 3", "渠道 7"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("margin rejection body must mention %q, got %s", want, body)
 		}

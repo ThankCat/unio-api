@@ -216,9 +216,9 @@ func (s *Service) Detail(ctx context.Context, channelID int64, from, to time.Tim
 		Cache: opsutil.CacheStatsFrom(opsutil.CacheAggregate{
 			UncachedInput:            r.CacheUncachedInput,
 			CacheReadInput:           r.CacheReadInput,
-			CacheWrite5mInput:        r.CacheWrite5mInput,
-			CacheWrite1hInput:        r.CacheWrite1hInput,
-			CacheWrite30mInput:       r.CacheWrite30mInput,
+			CacheCreation5mInput:     r.CacheCreation5mInput,
+			CacheCreation1hInput:     r.CacheCreation1hInput,
+			CacheCreation30mInput:    r.CacheCreation30mInput,
 			UsageRecords:             r.CacheUsageRecords,
 			EvaluableRecords:         r.CacheEvaluableRecords,
 			ReadNotApplicableRecords: r.CacheReadNotApplicableRecords,

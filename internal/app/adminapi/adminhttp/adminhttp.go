@@ -457,29 +457,29 @@ func LatencyStatsFrom(s opsutil.LatencyStats) LatencyStatsDTO {
 
 // CacheStatsDTO 是 Provider、Channel 与 Dashboard 共用的缓存率响应体。
 type CacheStatsDTO struct {
-	Status              string   `json:"status"`
-	ReadRate            *float64 `json:"read_rate"`
-	WriteRate           *float64 `json:"write_rate"`
-	InputTokens         int64    `json:"input_tokens"`
-	UncachedTokens      int64    `json:"uncached_tokens"`
-	CacheReadTokens     int64    `json:"cache_read_tokens"`
-	CacheWrite5mTokens  int64    `json:"cache_write_5m_tokens"`
-	CacheWrite1hTokens  int64    `json:"cache_write_1h_tokens"`
-	CacheWrite30mTokens int64    `json:"cache_write_30m_tokens"`
+	Status                 string   `json:"status"`
+	ReadRate               *float64 `json:"read_rate"`
+	CreationRate           *float64 `json:"creation_rate"`
+	InputTokens            int64    `json:"input_tokens"`
+	UncachedTokens         int64    `json:"uncached_tokens"`
+	CacheReadTokens        int64    `json:"cache_read_tokens"`
+	CacheCreation5mTokens  int64    `json:"cache_creation_5m_tokens"`
+	CacheCreation1hTokens  int64    `json:"cache_creation_1h_tokens"`
+	CacheCreation30mTokens int64    `json:"cache_creation_30m_tokens"`
 }
 
 // CacheStatsFrom 从 service 层缓存画像组装响应 DTO。
 func CacheStatsFrom(s opsutil.CacheStats) CacheStatsDTO {
 	return CacheStatsDTO{
-		Status:              string(s.Status),
-		ReadRate:            s.ReadRate,
-		WriteRate:           s.WriteRate,
-		InputTokens:         s.InputTokens,
-		UncachedTokens:      s.UncachedTokens,
-		CacheReadTokens:     s.CacheReadTokens,
-		CacheWrite5mTokens:  s.CacheWrite5mTokens,
-		CacheWrite1hTokens:  s.CacheWrite1hTokens,
-		CacheWrite30mTokens: s.CacheWrite30mTokens,
+		Status:                 string(s.Status),
+		ReadRate:               s.ReadRate,
+		CreationRate:           s.CreationRate,
+		InputTokens:            s.InputTokens,
+		UncachedTokens:         s.UncachedTokens,
+		CacheReadTokens:        s.CacheReadTokens,
+		CacheCreation5mTokens:  s.CacheCreation5mTokens,
+		CacheCreation1hTokens:  s.CacheCreation1hTokens,
+		CacheCreation30mTokens: s.CacheCreation30mTokens,
 	}
 }
 

@@ -45,69 +45,69 @@ type Store interface {
 
 // ChannelPrice 是 admin 视角的渠道-模型成本价事实；金额以十进制字符串承载，可空项用 *string。
 type ChannelPrice struct {
-	ID                     int64
-	ChannelID              int64
-	ModelID                int64
-	ModelExternalID        string
-	ModelDisplayName       string
-	Currency               string
-	PricingUnit            string
-	UncachedInputCost      string
-	CacheReadInputCost     *string
-	CacheWrite5mInputCost  *string
-	CacheWrite1hInputCost  *string
-	CacheWrite30mInputCost *string
-	OutputCost             string
-	ReasoningOutputCost    *string
-	FastCostStatus         string
-	FastCosts              *FastCost
-	Status                 string
-	EffectiveFrom          time.Time
-	EffectiveTo            *time.Time
-	CreatedAt              time.Time
-	UpdatedAt              time.Time
+	ID                        int64
+	ChannelID                 int64
+	ModelID                   int64
+	ModelExternalID           string
+	ModelDisplayName          string
+	Currency                  string
+	PricingUnit               string
+	UncachedInputCost         string
+	CacheReadInputCost        *string
+	CacheCreation5mInputCost  *string
+	CacheCreation1hInputCost  *string
+	CacheCreation30mInputCost *string
+	OutputCost                string
+	ReasoningOutputCost       *string
+	FastCostStatus            string
+	FastCosts                 *FastCost
+	Status                    string
+	EffectiveFrom             time.Time
+	EffectiveTo               *time.Time
+	CreatedAt                 time.Time
+	UpdatedAt                 time.Time
 }
 
 // FastCost 是同一绝对成本窗口下可选的 Fast 精确成本向量。
 type FastCost struct {
-	ServiceTierID          int64
-	UncachedInputCost      string
-	CacheReadInputCost     *string
-	CacheWrite5mInputCost  *string
-	CacheWrite1hInputCost  *string
-	CacheWrite30mInputCost *string
-	OutputCost             string
-	ReasoningOutputCost    *string
+	ServiceTierID             int64
+	UncachedInputCost         string
+	CacheReadInputCost        *string
+	CacheCreation5mInputCost  *string
+	CacheCreation1hInputCost  *string
+	CacheCreation30mInputCost *string
+	OutputCost                string
+	ReasoningOutputCost       *string
 }
 
 // FastCostInput 是创建绝对成本窗口时可选的 Fast 精确成本向量。
 type FastCostInput struct {
-	UncachedInputCost      string
-	CacheReadInputCost     *string
-	CacheWrite5mInputCost  *string
-	CacheWrite1hInputCost  *string
-	CacheWrite30mInputCost *string
-	OutputCost             string
-	ReasoningOutputCost    *string
+	UncachedInputCost         string
+	CacheReadInputCost        *string
+	CacheCreation5mInputCost  *string
+	CacheCreation1hInputCost  *string
+	CacheCreation30mInputCost *string
+	OutputCost                string
+	ReasoningOutputCost       *string
 }
 
 // CreateInput 是创建渠道-模型成本价的入参；主成本必填、其余分项可空，金额为十进制字符串。
 type CreateInput struct {
-	ChannelID              int64
-	ModelID                int64
-	Currency               string
-	PricingUnit            string
-	UncachedInputCost      string
-	CacheReadInputCost     *string
-	CacheWrite5mInputCost  *string
-	CacheWrite1hInputCost  *string
-	CacheWrite30mInputCost *string
-	OutputCost             string
-	ReasoningOutputCost    *string
-	FastCosts              *FastCostInput
-	Status                 string
-	EffectiveFrom          time.Time
-	EffectiveTo            *time.Time
+	ChannelID                 int64
+	ModelID                   int64
+	Currency                  string
+	PricingUnit               string
+	UncachedInputCost         string
+	CacheReadInputCost        *string
+	CacheCreation5mInputCost  *string
+	CacheCreation1hInputCost  *string
+	CacheCreation30mInputCost *string
+	OutputCost                string
+	ReasoningOutputCost       *string
+	FastCosts                 *FastCostInput
+	Status                    string
+	EffectiveFrom             time.Time
+	EffectiveTo               *time.Time
 }
 
 // UpdateInput 是 PATCH 渠道-模型成本价的入参：只改启停状态与生效结束时间（关闭窗口）；金额不可改。
@@ -204,28 +204,28 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (ChannelPrice, err
 	}
 
 	row, err := s.store.CreateChannelPrice(ctx, sqlc.CreateChannelPriceParams{
-		ChannelID:                  in.ChannelID,
-		ModelID:                    in.ModelID,
-		Currency:                   currency,
-		PricingUnit:                in.PricingUnit,
-		UncachedInputCost:          amounts.uncachedInputCost,
-		CacheReadInputCost:         amounts.cacheReadInputCost,
-		CacheWrite5mInputCost:      amounts.cacheWrite5mInputCost,
-		CacheWrite1hInputCost:      amounts.cacheWrite1hInputCost,
-		CacheWrite30mInputCost:     amounts.cacheWrite30mInputCost,
-		OutputCost:                 amounts.outputCost,
-		ReasoningOutputCost:        amounts.reasoningOutputCost,
-		FastUncachedInputCost:      fastCost.uncachedInputCost,
-		FastCacheReadInputCost:     fastCost.cacheReadInputCost,
-		FastCacheWrite5mInputCost:  fastCost.cacheWrite5mInputCost,
-		FastCacheWrite1hInputCost:  fastCost.cacheWrite1hInputCost,
-		FastCacheWrite30mInputCost: fastCost.cacheWrite30mInputCost,
-		FastOutputCost:             fastCost.outputCost,
-		FastReasoningOutputCost:    fastCost.reasoningOutputCost,
-		FastConfigured:             fastCost.configured,
-		Status:                     in.Status,
-		EffectiveFrom:              tsParam(&in.EffectiveFrom),
-		EffectiveTo:                tsParam(in.EffectiveTo),
+		ChannelID:                     in.ChannelID,
+		ModelID:                       in.ModelID,
+		Currency:                      currency,
+		PricingUnit:                   in.PricingUnit,
+		UncachedInputCost:             amounts.uncachedInputCost,
+		CacheReadInputCost:            amounts.cacheReadInputCost,
+		CacheCreation5mInputCost:      amounts.cacheCreation5mInputCost,
+		CacheCreation1hInputCost:      amounts.cacheCreation1hInputCost,
+		CacheCreation30mInputCost:     amounts.cacheCreation30mInputCost,
+		OutputCost:                    amounts.outputCost,
+		ReasoningOutputCost:           amounts.reasoningOutputCost,
+		FastUncachedInputCost:         fastCost.uncachedInputCost,
+		FastCacheReadInputCost:        fastCost.cacheReadInputCost,
+		FastCacheCreation5mInputCost:  fastCost.cacheCreation5mInputCost,
+		FastCacheCreation1hInputCost:  fastCost.cacheCreation1hInputCost,
+		FastCacheCreation30mInputCost: fastCost.cacheCreation30mInputCost,
+		FastOutputCost:                fastCost.outputCost,
+		FastReasoningOutputCost:       fastCost.reasoningOutputCost,
+		FastConfigured:                fastCost.configured,
+		Status:                        in.Status,
+		EffectiveFrom:                 tsParam(&in.EffectiveFrom),
+		EffectiveTo:                   tsParam(in.EffectiveTo),
 	})
 	if err != nil {
 		return ChannelPrice{}, storeFailed(err, "create channel price")
@@ -322,24 +322,24 @@ func windowsOverlap(aFrom time.Time, aTo *time.Time, bFrom time.Time, bTo *time.
 
 // channelPriceAmounts 持有解析后的 NUMERIC 成本价。
 type channelPriceAmounts struct {
-	uncachedInputCost      pgtype.Numeric
-	cacheReadInputCost     pgtype.Numeric
-	cacheWrite5mInputCost  pgtype.Numeric
-	cacheWrite1hInputCost  pgtype.Numeric
-	cacheWrite30mInputCost pgtype.Numeric
-	outputCost             pgtype.Numeric
-	reasoningOutputCost    pgtype.Numeric
+	uncachedInputCost         pgtype.Numeric
+	cacheReadInputCost        pgtype.Numeric
+	cacheCreation5mInputCost  pgtype.Numeric
+	cacheCreation1hInputCost  pgtype.Numeric
+	cacheCreation30mInputCost pgtype.Numeric
+	outputCost                pgtype.Numeric
+	reasoningOutputCost       pgtype.Numeric
 }
 
 type fastCostConfig struct {
-	configured             bool
-	uncachedInputCost      pgtype.Numeric
-	cacheReadInputCost     pgtype.Numeric
-	cacheWrite5mInputCost  pgtype.Numeric
-	cacheWrite1hInputCost  pgtype.Numeric
-	cacheWrite30mInputCost pgtype.Numeric
-	outputCost             pgtype.Numeric
-	reasoningOutputCost    pgtype.Numeric
+	configured                bool
+	uncachedInputCost         pgtype.Numeric
+	cacheReadInputCost        pgtype.Numeric
+	cacheCreation5mInputCost  pgtype.Numeric
+	cacheCreation1hInputCost  pgtype.Numeric
+	cacheCreation30mInputCost pgtype.Numeric
+	outputCost                pgtype.Numeric
+	reasoningOutputCost       pgtype.Numeric
 }
 
 func parseFastCostConfig(in *FastCostInput) (fastCostConfig, error) {
@@ -358,13 +358,13 @@ func parseFastCostConfig(in *FastCostInput) (fastCostConfig, error) {
 	if out.cacheReadInputCost, err = parseOptionalMoney("fast_costs.cache_read_input_cost", in.CacheReadInputCost); err != nil {
 		return fastCostConfig{}, err
 	}
-	if out.cacheWrite5mInputCost, err = parseOptionalMoney("fast_costs.cache_write_5m_input_cost", in.CacheWrite5mInputCost); err != nil {
+	if out.cacheCreation5mInputCost, err = parseOptionalMoney("fast_costs.cache_creation_5m_input_cost", in.CacheCreation5mInputCost); err != nil {
 		return fastCostConfig{}, err
 	}
-	if out.cacheWrite1hInputCost, err = parseOptionalMoney("fast_costs.cache_write_1h_input_cost", in.CacheWrite1hInputCost); err != nil {
+	if out.cacheCreation1hInputCost, err = parseOptionalMoney("fast_costs.cache_creation_1h_input_cost", in.CacheCreation1hInputCost); err != nil {
 		return fastCostConfig{}, err
 	}
-	if out.cacheWrite30mInputCost, err = parseOptionalMoney("fast_costs.cache_write_30m_input_cost", in.CacheWrite30mInputCost); err != nil {
+	if out.cacheCreation30mInputCost, err = parseOptionalMoney("fast_costs.cache_creation_30m_input_cost", in.CacheCreation30mInputCost); err != nil {
 		return fastCostConfig{}, err
 	}
 	if out.reasoningOutputCost, err = parseOptionalMoney("fast_costs.reasoning_output_cost", in.ReasoningOutputCost); err != nil {
@@ -386,13 +386,13 @@ func parseChannelPriceAmounts(in CreateInput) (channelPriceAmounts, error) {
 	if out.cacheReadInputCost, err = parseOptionalMoney("cache_read_input_cost", in.CacheReadInputCost); err != nil {
 		return channelPriceAmounts{}, err
 	}
-	if out.cacheWrite5mInputCost, err = parseOptionalMoney("cache_write_5m_input_cost", in.CacheWrite5mInputCost); err != nil {
+	if out.cacheCreation5mInputCost, err = parseOptionalMoney("cache_creation_5m_input_cost", in.CacheCreation5mInputCost); err != nil {
 		return channelPriceAmounts{}, err
 	}
-	if out.cacheWrite1hInputCost, err = parseOptionalMoney("cache_write_1h_input_cost", in.CacheWrite1hInputCost); err != nil {
+	if out.cacheCreation1hInputCost, err = parseOptionalMoney("cache_creation_1h_input_cost", in.CacheCreation1hInputCost); err != nil {
 		return channelPriceAmounts{}, err
 	}
-	if out.cacheWrite30mInputCost, err = parseOptionalMoney("cache_write_30m_input_cost", in.CacheWrite30mInputCost); err != nil {
+	if out.cacheCreation30mInputCost, err = parseOptionalMoney("cache_creation_30m_input_cost", in.CacheCreation30mInputCost); err != nil {
 		return channelPriceAmounts{}, err
 	}
 	if out.reasoningOutputCost, err = parseOptionalMoney("reasoning_output_cost", in.ReasoningOutputCost); err != nil {
@@ -404,76 +404,76 @@ func parseChannelPriceAmounts(in CreateInput) (channelPriceAmounts, error) {
 
 func toChannelPrice(c sqlc.ChannelPrice) ChannelPrice {
 	return ChannelPrice{
-		ID:                     c.ID,
-		ChannelID:              c.ChannelID,
-		ModelID:                c.ModelID,
-		Currency:               c.Currency,
-		PricingUnit:            c.PricingUnit,
-		UncachedInputCost:      numericString(c.UncachedInputCost),
-		CacheReadInputCost:     numericPtr(c.CacheReadInputCost),
-		CacheWrite5mInputCost:  numericPtr(c.CacheWrite5mInputCost),
-		CacheWrite1hInputCost:  numericPtr(c.CacheWrite1hInputCost),
-		CacheWrite30mInputCost: numericPtr(c.CacheWrite30mInputCost),
-		OutputCost:             numericString(c.OutputCost),
-		ReasoningOutputCost:    numericPtr(c.ReasoningOutputCost),
-		FastCostStatus:         "missing",
-		Status:                 c.Status,
-		EffectiveFrom:          c.EffectiveFrom.Time,
-		EffectiveTo:            timePtr(c.EffectiveTo),
-		CreatedAt:              c.CreatedAt.Time,
-		UpdatedAt:              c.UpdatedAt.Time,
+		ID:                        c.ID,
+		ChannelID:                 c.ChannelID,
+		ModelID:                   c.ModelID,
+		Currency:                  c.Currency,
+		PricingUnit:               c.PricingUnit,
+		UncachedInputCost:         numericString(c.UncachedInputCost),
+		CacheReadInputCost:        numericPtr(c.CacheReadInputCost),
+		CacheCreation5mInputCost:  numericPtr(c.CacheCreation5mInputCost),
+		CacheCreation1hInputCost:  numericPtr(c.CacheCreation1hInputCost),
+		CacheCreation30mInputCost: numericPtr(c.CacheCreation30mInputCost),
+		OutputCost:                numericString(c.OutputCost),
+		ReasoningOutputCost:       numericPtr(c.ReasoningOutputCost),
+		FastCostStatus:            "missing",
+		Status:                    c.Status,
+		EffectiveFrom:             c.EffectiveFrom.Time,
+		EffectiveTo:               timePtr(c.EffectiveTo),
+		CreatedAt:                 c.CreatedAt.Time,
+		UpdatedAt:                 c.UpdatedAt.Time,
 	}
 }
 
 func toChannelPriceFromCreateRow(c sqlc.CreateChannelPriceRow) ChannelPrice {
 	result := ChannelPrice{
-		ID:                     c.ID,
-		ChannelID:              c.ChannelID,
-		ModelID:                c.ModelID,
-		Currency:               c.Currency,
-		PricingUnit:            c.PricingUnit,
-		UncachedInputCost:      numericString(c.UncachedInputCost),
-		CacheReadInputCost:     numericPtr(c.CacheReadInputCost),
-		CacheWrite5mInputCost:  numericPtr(c.CacheWrite5mInputCost),
-		CacheWrite1hInputCost:  numericPtr(c.CacheWrite1hInputCost),
-		CacheWrite30mInputCost: numericPtr(c.CacheWrite30mInputCost),
-		OutputCost:             numericString(c.OutputCost),
-		ReasoningOutputCost:    numericPtr(c.ReasoningOutputCost),
-		FastCostStatus:         fastCostStatus(c.FastServiceTierID),
-		Status:                 c.Status,
-		EffectiveFrom:          c.EffectiveFrom.Time,
-		EffectiveTo:            timePtr(c.EffectiveTo),
-		CreatedAt:              c.CreatedAt.Time,
-		UpdatedAt:              c.UpdatedAt.Time,
+		ID:                        c.ID,
+		ChannelID:                 c.ChannelID,
+		ModelID:                   c.ModelID,
+		Currency:                  c.Currency,
+		PricingUnit:               c.PricingUnit,
+		UncachedInputCost:         numericString(c.UncachedInputCost),
+		CacheReadInputCost:        numericPtr(c.CacheReadInputCost),
+		CacheCreation5mInputCost:  numericPtr(c.CacheCreation5mInputCost),
+		CacheCreation1hInputCost:  numericPtr(c.CacheCreation1hInputCost),
+		CacheCreation30mInputCost: numericPtr(c.CacheCreation30mInputCost),
+		OutputCost:                numericString(c.OutputCost),
+		ReasoningOutputCost:       numericPtr(c.ReasoningOutputCost),
+		FastCostStatus:            fastCostStatus(c.FastServiceTierID),
+		Status:                    c.Status,
+		EffectiveFrom:             c.EffectiveFrom.Time,
+		EffectiveTo:               timePtr(c.EffectiveTo),
+		CreatedAt:                 c.CreatedAt.Time,
+		UpdatedAt:                 c.UpdatedAt.Time,
 	}
-	result.FastCosts = fastCostFromValues(c.FastServiceTierID, c.FastUncachedInputCost, c.FastCacheReadInputCost, c.FastCacheWrite5mInputCost, c.FastCacheWrite1hInputCost, c.FastCacheWrite30mInputCost, c.FastOutputCost, c.FastReasoningOutputCost)
+	result.FastCosts = fastCostFromValues(c.FastServiceTierID, c.FastUncachedInputCost, c.FastCacheReadInputCost, c.FastCacheCreation5mInputCost, c.FastCacheCreation1hInputCost, c.FastCacheCreation30mInputCost, c.FastOutputCost, c.FastReasoningOutputCost)
 	return result
 }
 
 func toChannelPriceFromRow(c sqlc.ListChannelPricesByChannelRow) ChannelPrice {
 	result := ChannelPrice{
-		ID:                     c.ID,
-		ChannelID:              c.ChannelID,
-		ModelID:                c.ModelID,
-		ModelExternalID:        c.ModelExternalID,
-		ModelDisplayName:       c.ModelDisplayName,
-		Currency:               c.Currency,
-		PricingUnit:            c.PricingUnit,
-		UncachedInputCost:      numericString(c.UncachedInputCost),
-		CacheReadInputCost:     numericPtr(c.CacheReadInputCost),
-		CacheWrite5mInputCost:  numericPtr(c.CacheWrite5mInputCost),
-		CacheWrite1hInputCost:  numericPtr(c.CacheWrite1hInputCost),
-		CacheWrite30mInputCost: numericPtr(c.CacheWrite30mInputCost),
-		OutputCost:             numericString(c.OutputCost),
-		ReasoningOutputCost:    numericPtr(c.ReasoningOutputCost),
-		FastCostStatus:         fastCostStatus(c.FastServiceTierID),
-		Status:                 c.Status,
-		EffectiveFrom:          c.EffectiveFrom.Time,
-		EffectiveTo:            timePtr(c.EffectiveTo),
-		CreatedAt:              c.CreatedAt.Time,
-		UpdatedAt:              c.UpdatedAt.Time,
+		ID:                        c.ID,
+		ChannelID:                 c.ChannelID,
+		ModelID:                   c.ModelID,
+		ModelExternalID:           c.ModelExternalID,
+		ModelDisplayName:          c.ModelDisplayName,
+		Currency:                  c.Currency,
+		PricingUnit:               c.PricingUnit,
+		UncachedInputCost:         numericString(c.UncachedInputCost),
+		CacheReadInputCost:        numericPtr(c.CacheReadInputCost),
+		CacheCreation5mInputCost:  numericPtr(c.CacheCreation5mInputCost),
+		CacheCreation1hInputCost:  numericPtr(c.CacheCreation1hInputCost),
+		CacheCreation30mInputCost: numericPtr(c.CacheCreation30mInputCost),
+		OutputCost:                numericString(c.OutputCost),
+		ReasoningOutputCost:       numericPtr(c.ReasoningOutputCost),
+		FastCostStatus:            fastCostStatus(c.FastServiceTierID),
+		Status:                    c.Status,
+		EffectiveFrom:             c.EffectiveFrom.Time,
+		EffectiveTo:               timePtr(c.EffectiveTo),
+		CreatedAt:                 c.CreatedAt.Time,
+		UpdatedAt:                 c.UpdatedAt.Time,
 	}
-	result.FastCosts = fastCostFromValues(c.FastServiceTierID, c.FastUncachedInputCost, c.FastCacheReadInputCost, c.FastCacheWrite5mInputCost, c.FastCacheWrite1hInputCost, c.FastCacheWrite30mInputCost, c.FastOutputCost, c.FastReasoningOutputCost)
+	result.FastCosts = fastCostFromValues(c.FastServiceTierID, c.FastUncachedInputCost, c.FastCacheReadInputCost, c.FastCacheCreation5mInputCost, c.FastCacheCreation1hInputCost, c.FastCacheCreation30mInputCost, c.FastOutputCost, c.FastReasoningOutputCost)
 	return result
 }
 
@@ -484,19 +484,19 @@ func fastCostStatus(serviceTierID int64) string {
 	return "missing"
 }
 
-func fastCostFromValues(serviceTierID int64, uncached, cacheRead, cacheWrite5m, cacheWrite1h, cacheWrite30m, output, reasoning pgtype.Numeric) *FastCost {
+func fastCostFromValues(serviceTierID int64, uncached, cacheRead, cacheCreation5m, cacheCreation1h, cacheCreation30m, output, reasoning pgtype.Numeric) *FastCost {
 	if serviceTierID <= 0 {
 		return nil
 	}
 	return &FastCost{
-		ServiceTierID:          serviceTierID,
-		UncachedInputCost:      numericString(uncached),
-		CacheReadInputCost:     numericPtr(cacheRead),
-		CacheWrite5mInputCost:  numericPtr(cacheWrite5m),
-		CacheWrite1hInputCost:  numericPtr(cacheWrite1h),
-		CacheWrite30mInputCost: numericPtr(cacheWrite30m),
-		OutputCost:             numericString(output),
-		ReasoningOutputCost:    numericPtr(reasoning),
+		ServiceTierID:             serviceTierID,
+		UncachedInputCost:         numericString(uncached),
+		CacheReadInputCost:        numericPtr(cacheRead),
+		CacheCreation5mInputCost:  numericPtr(cacheCreation5m),
+		CacheCreation1hInputCost:  numericPtr(cacheCreation1h),
+		CacheCreation30mInputCost: numericPtr(cacheCreation30m),
+		OutputCost:                numericString(output),
+		ReasoningOutputCost:       numericPtr(reasoning),
 	}
 }
 

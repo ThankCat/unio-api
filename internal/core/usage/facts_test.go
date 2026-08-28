@@ -51,13 +51,13 @@ func TestTokenCountIsKnown(t *testing.T) {
 
 func TestActualTotalTokensRequiresCompleteLuaExactUsage(t *testing.T) {
 	complete := Facts{
-		UncachedInputTokens:      KnownTokens(11),
-		CacheReadInputTokens:     KnownTokens(12),
-		CacheWrite5mInputTokens:  KnownTokens(13),
-		CacheWrite30mInputTokens: KnownTokens(14),
-		CacheWrite1hInputTokens:  KnownTokens(15),
-		OutputTokensTotal:        KnownTokens(16),
-		ReasoningOutputTokens:    KnownTokens(7),
+		UncachedInputTokens:         KnownTokens(11),
+		CacheReadInputTokens:        KnownTokens(12),
+		CacheCreation5mInputTokens:  KnownTokens(13),
+		CacheCreation30mInputTokens: KnownTokens(14),
+		CacheCreation1hInputTokens:  KnownTokens(15),
+		OutputTokensTotal:           KnownTokens(16),
+		ReasoningOutputTokens:       KnownTokens(7),
 	}
 	if got, reliable := complete.ActualTotalTokens(); !reliable || got != 81 {
 		t.Fatalf("ActualTotalTokens() = (%d, %v), want (81, true)", got, reliable)
@@ -87,13 +87,13 @@ func TestSourceValid(t *testing.T) {
 
 func TestObservedInputAndOutputSplitEveryCategoryOnce(t *testing.T) {
 	facts := Facts{
-		UncachedInputTokens:      KnownTokens(1_000),
-		CacheReadInputTokens:     KnownTokens(80_000),
-		CacheWrite5mInputTokens:  KnownTokens(200),
-		CacheWrite30mInputTokens: KnownTokens(400),
-		CacheWrite1hInputTokens:  KnownTokens(300),
-		OutputTokensTotal:        KnownTokens(500),
-		ReasoningOutputTokens:    KnownTokens(100),
+		UncachedInputTokens:         KnownTokens(1_000),
+		CacheReadInputTokens:        KnownTokens(80_000),
+		CacheCreation5mInputTokens:  KnownTokens(200),
+		CacheCreation30mInputTokens: KnownTokens(400),
+		CacheCreation1hInputTokens:  KnownTokens(300),
+		OutputTokensTotal:           KnownTokens(500),
+		ReasoningOutputTokens:       KnownTokens(100),
 	}
 
 	input, inputOK := facts.ObservedInputTokens()
@@ -113,13 +113,13 @@ func TestObservedInputAndOutputSplitEveryCategoryOnce(t *testing.T) {
 
 func TestObservedInputRejectsUnknownCategory(t *testing.T) {
 	facts := Facts{
-		UncachedInputTokens:      KnownTokens(0),
-		CacheReadInputTokens:     KnownTokens(90_000),
-		CacheWrite5mInputTokens:  NotApplicableTokens(),
-		CacheWrite30mInputTokens: UnknownTokens(),
-		CacheWrite1hInputTokens:  NotApplicableTokens(),
-		OutputTokensTotal:        KnownTokens(42),
-		ReasoningOutputTokens:    NotApplicableTokens(),
+		UncachedInputTokens:         KnownTokens(0),
+		CacheReadInputTokens:        KnownTokens(90_000),
+		CacheCreation5mInputTokens:  NotApplicableTokens(),
+		CacheCreation30mInputTokens: UnknownTokens(),
+		CacheCreation1hInputTokens:  NotApplicableTokens(),
+		OutputTokensTotal:           KnownTokens(42),
+		ReasoningOutputTokens:       NotApplicableTokens(),
 	}
 	if got, ok := facts.ObservedInputTokens(); ok || got != 0 {
 		t.Fatalf("ObservedInputTokens = (%d, %v), want (0, false)", got, ok)

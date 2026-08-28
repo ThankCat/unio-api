@@ -29,11 +29,11 @@ func TestShouldApplyLongContext(t *testing.T) {
 
 func TestLongContextInputTokenSum(t *testing.T) {
 	sum := LongContextInputTokenSum(coreusage.Facts{
-		UncachedInputTokens:      coreusage.KnownTokens(200_000),
-		CacheReadInputTokens:     coreusage.KnownTokens(70_000),
-		CacheWrite5mInputTokens:  coreusage.KnownTokens(2_000),
-		CacheWrite1hInputTokens:  coreusage.NotApplicableTokens(),
-		CacheWrite30mInputTokens: coreusage.KnownTokens(1_000),
+		UncachedInputTokens:         coreusage.KnownTokens(200_000),
+		CacheReadInputTokens:        coreusage.KnownTokens(70_000),
+		CacheCreation5mInputTokens:  coreusage.KnownTokens(2_000),
+		CacheCreation1hInputTokens:  coreusage.NotApplicableTokens(),
+		CacheCreation30mInputTokens: coreusage.KnownTokens(1_000),
 	})
 	if sum != 273_000 {
 		t.Fatalf("sum = %d, want 273000", sum)

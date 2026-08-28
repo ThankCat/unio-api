@@ -177,8 +177,8 @@ func (s *Service) resolveProbeCost(ctx context.Context, q *sqlc.Queries, channel
 	if err == nil {
 		return billing.ProviderCostSnapshot{Currency: price.Currency, PricingUnit: price.PricingUnit,
 			UncachedInputCost: numericOrZero(price.UncachedInputCost), CacheReadInputCost: price.CacheReadInputCost,
-			CacheWrite5mInputCost: price.CacheWrite5mInputCost, CacheWrite1hInputCost: price.CacheWrite1hInputCost,
-			CacheWrite30mInputCost: price.CacheWrite30mInputCost, OutputCost: numericOrZero(price.OutputCost),
+			CacheCreation5mInputCost: price.CacheCreation5mInputCost, CacheCreation1hInputCost: price.CacheCreation1hInputCost,
+			CacheCreation30mInputCost: price.CacheCreation30mInputCost, OutputCost: numericOrZero(price.OutputCost),
 			ReasoningOutputCost: price.ReasoningOutputCost, FormulaVersion: billing.FormulaVersionV1}, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
@@ -200,8 +200,8 @@ func (s *Service) resolveProbeCost(ctx context.Context, q *sqlc.Queries, channel
 	}
 	baseSnapshot := billing.ModelPriceToProviderCost(billing.CustomerPriceSnapshot{
 		Currency: base.Currency, PricingUnit: base.PricingUnit, UncachedInputPrice: base.UncachedInputPrice,
-		CacheReadInputPrice: base.CacheReadInputPrice, CacheWrite5mInputPrice: base.CacheWrite5mInputPrice,
-		CacheWrite1hInputPrice: base.CacheWrite1hInputPrice, CacheWrite30mInputPrice: base.CacheWrite30mInputPrice,
+		CacheReadInputPrice: base.CacheReadInputPrice, CacheCreation5mInputPrice: base.CacheCreation5mInputPrice,
+		CacheCreation1hInputPrice: base.CacheCreation1hInputPrice, CacheCreation30mInputPrice: base.CacheCreation30mInputPrice,
 		OutputPrice: base.OutputPrice, ReasoningOutputPrice: base.ReasoningOutputPrice, FormulaVersion: billing.FormulaVersionV1,
 	})
 	scaled, err := billing.ScaleProviderCostByFactors(baseSnapshot, mult.Multiplier, recharge)

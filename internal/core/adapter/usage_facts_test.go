@@ -6,7 +6,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/usage"
 )
 
-func TestChatUsageToUsageFactsSplitsCacheAndMarksCacheWriteNotApplicable(t *testing.T) {
+func TestChatUsageToUsageFactsSplitsCacheAndMarksCacheCreationNotApplicable(t *testing.T) {
 	facts := ChatUsage{
 		PromptTokens:     100,
 		CompletionTokens: 50,
@@ -20,18 +20,18 @@ func TestChatUsageToUsageFactsSplitsCacheAndMarksCacheWriteNotApplicable(t *test
 	assertKnownToken(t, "output_total", facts.OutputTokensTotal, 50)
 	assertKnownToken(t, "reasoning_output", facts.ReasoningOutputTokens, 10)
 
-	if facts.CacheWrite5mInputTokens.State != usage.CountNotApplicable {
-		t.Fatalf("cache_write_5m: expected not_applicable, got %q", facts.CacheWrite5mInputTokens.State)
+	if facts.CacheCreation5mInputTokens.State != usage.CountNotApplicable {
+		t.Fatalf("cache_creation_5m: expected not_applicable, got %q", facts.CacheCreation5mInputTokens.State)
 	}
-	if facts.CacheWrite1hInputTokens.State != usage.CountNotApplicable {
-		t.Fatalf("cache_write_1h: expected not_applicable, got %q", facts.CacheWrite1hInputTokens.State)
+	if facts.CacheCreation1hInputTokens.State != usage.CountNotApplicable {
+		t.Fatalf("cache_creation_1h: expected not_applicable, got %q", facts.CacheCreation1hInputTokens.State)
 	}
 	if len(facts.ServerToolUsage) != 0 {
 		t.Fatalf("expected no server tool usage, got %d", len(facts.ServerToolUsage))
 	}
 }
 
-func TestChatUsageToUsageFactsSplitsCacheWriteIntoThirtyMinuteBucket(t *testing.T) {
+func TestChatUsageToUsageFactsSplitsCacheCreationIntoThirtyMinuteBucket(t *testing.T) {
 	// GPT-5.6+：prompt=100 中 cached=20（读）、cache_write=30（写，1.25x），余 50 为纯未缓存。
 	facts := ChatUsage{
 		PromptTokens:     100,
@@ -45,15 +45,15 @@ func TestChatUsageToUsageFactsSplitsCacheWriteIntoThirtyMinuteBucket(t *testing.
 	// uncached 必须扣掉 cache_write，避免写入 token 被同时按 1x 与 1.25x 双重计费。
 	assertKnownToken(t, "uncached_input", facts.UncachedInputTokens, 50)
 	assertKnownToken(t, "cache_read_input", facts.CacheReadInputTokens, 20)
-	assertKnownToken(t, "cache_write_30m", facts.CacheWrite30mInputTokens, 30)
+	assertKnownToken(t, "cache_creation_30m", facts.CacheCreation30mInputTokens, 30)
 	assertKnownToken(t, "output_total", facts.OutputTokensTotal, 40)
 
 	// OpenAI 无 Anthropic 式 5m/1h 分档。
-	if facts.CacheWrite5mInputTokens.State != usage.CountNotApplicable {
-		t.Fatalf("cache_write_5m: expected not_applicable, got %q", facts.CacheWrite5mInputTokens.State)
+	if facts.CacheCreation5mInputTokens.State != usage.CountNotApplicable {
+		t.Fatalf("cache_creation_5m: expected not_applicable, got %q", facts.CacheCreation5mInputTokens.State)
 	}
-	if facts.CacheWrite1hInputTokens.State != usage.CountNotApplicable {
-		t.Fatalf("cache_write_1h: expected not_applicable, got %q", facts.CacheWrite1hInputTokens.State)
+	if facts.CacheCreation1hInputTokens.State != usage.CountNotApplicable {
+		t.Fatalf("cache_creation_1h: expected not_applicable, got %q", facts.CacheCreation1hInputTokens.State)
 	}
 }
 

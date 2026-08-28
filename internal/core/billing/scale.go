@@ -11,13 +11,13 @@ import (
 // 语义是「整组给齐或整组留空」，由数据库 CHECK 约束保证；判定只看必填的两项（uncached input 与
 // output），可选分项为空时沿用 NULL 语义，计费侧回退到这两项。
 type SaleOverride struct {
-	UncachedInputPrice      pgtype.Numeric
-	CacheReadInputPrice     pgtype.Numeric
-	CacheWrite5mInputPrice  pgtype.Numeric
-	CacheWrite1hInputPrice  pgtype.Numeric
-	CacheWrite30mInputPrice pgtype.Numeric
-	OutputPrice             pgtype.Numeric
-	ReasoningOutputPrice    pgtype.Numeric
+	UncachedInputPrice         pgtype.Numeric
+	CacheReadInputPrice        pgtype.Numeric
+	CacheCreation5mInputPrice  pgtype.Numeric
+	CacheCreation1hInputPrice  pgtype.Numeric
+	CacheCreation30mInputPrice pgtype.Numeric
+	OutputPrice                pgtype.Numeric
+	ReasoningOutputPrice       pgtype.Numeric
 }
 
 // Configured 判断该模型是否配了绝对售价。
@@ -35,16 +35,16 @@ func ResolveCustomerPrice(base CustomerPriceSnapshot, ratio pgtype.Numeric, over
 		return ScaleCustomerPrice(base, ratio)
 	}
 	return CustomerPriceSnapshot{
-		Currency:                base.Currency,
-		PricingUnit:             base.PricingUnit,
-		FormulaVersion:          base.FormulaVersion,
-		UncachedInputPrice:      override.UncachedInputPrice,
-		CacheReadInputPrice:     override.CacheReadInputPrice,
-		CacheWrite5mInputPrice:  override.CacheWrite5mInputPrice,
-		CacheWrite1hInputPrice:  override.CacheWrite1hInputPrice,
-		CacheWrite30mInputPrice: override.CacheWrite30mInputPrice,
-		OutputPrice:             override.OutputPrice,
-		ReasoningOutputPrice:    override.ReasoningOutputPrice,
+		Currency:                   base.Currency,
+		PricingUnit:                base.PricingUnit,
+		FormulaVersion:             base.FormulaVersion,
+		UncachedInputPrice:         override.UncachedInputPrice,
+		CacheReadInputPrice:        override.CacheReadInputPrice,
+		CacheCreation5mInputPrice:  override.CacheCreation5mInputPrice,
+		CacheCreation1hInputPrice:  override.CacheCreation1hInputPrice,
+		CacheCreation30mInputPrice: override.CacheCreation30mInputPrice,
+		OutputPrice:                override.OutputPrice,
+		ReasoningOutputPrice:       override.ReasoningOutputPrice,
 	}, nil
 }
 
@@ -73,9 +73,9 @@ func ScaleCustomerPrice(base CustomerPriceSnapshot, ratio pgtype.Numeric) (Custo
 	}{
 		{base.UncachedInputPrice, &scaled.UncachedInputPrice},
 		{base.CacheReadInputPrice, &scaled.CacheReadInputPrice},
-		{base.CacheWrite5mInputPrice, &scaled.CacheWrite5mInputPrice},
-		{base.CacheWrite1hInputPrice, &scaled.CacheWrite1hInputPrice},
-		{base.CacheWrite30mInputPrice, &scaled.CacheWrite30mInputPrice},
+		{base.CacheCreation5mInputPrice, &scaled.CacheCreation5mInputPrice},
+		{base.CacheCreation1hInputPrice, &scaled.CacheCreation1hInputPrice},
+		{base.CacheCreation30mInputPrice, &scaled.CacheCreation30mInputPrice},
 		{base.OutputPrice, &scaled.OutputPrice},
 		{base.ReasoningOutputPrice, &scaled.ReasoningOutputPrice},
 	} {
@@ -97,16 +97,16 @@ func ScaleCustomerPrice(base CustomerPriceSnapshot, ratio pgtype.Numeric) (Custo
 // 映射产出的向量再交给 ScaleProviderCostByFactors 缩放。Currency/PricingUnit/FormulaVersion 原样保留。
 func ModelPriceToProviderCost(price CustomerPriceSnapshot) ProviderCostSnapshot {
 	return ProviderCostSnapshot{
-		Currency:               price.Currency,
-		PricingUnit:            price.PricingUnit,
-		UncachedInputCost:      price.UncachedInputPrice,
-		CacheReadInputCost:     price.CacheReadInputPrice,
-		CacheWrite5mInputCost:  price.CacheWrite5mInputPrice,
-		CacheWrite1hInputCost:  price.CacheWrite1hInputPrice,
-		CacheWrite30mInputCost: price.CacheWrite30mInputPrice,
-		OutputCost:             price.OutputPrice,
-		ReasoningOutputCost:    price.ReasoningOutputPrice,
-		FormulaVersion:         price.FormulaVersion,
+		Currency:                  price.Currency,
+		PricingUnit:               price.PricingUnit,
+		UncachedInputCost:         price.UncachedInputPrice,
+		CacheReadInputCost:        price.CacheReadInputPrice,
+		CacheCreation5mInputCost:  price.CacheCreation5mInputPrice,
+		CacheCreation1hInputCost:  price.CacheCreation1hInputPrice,
+		CacheCreation30mInputCost: price.CacheCreation30mInputPrice,
+		OutputCost:                price.OutputPrice,
+		ReasoningOutputCost:       price.ReasoningOutputPrice,
+		FormulaVersion:            price.FormulaVersion,
 	}
 }
 
@@ -140,9 +140,9 @@ func scaleProviderCostByRat(base ProviderCostSnapshot, multiplierRat *big.Rat) (
 	}{
 		{base.UncachedInputCost, &scaled.UncachedInputCost},
 		{base.CacheReadInputCost, &scaled.CacheReadInputCost},
-		{base.CacheWrite5mInputCost, &scaled.CacheWrite5mInputCost},
-		{base.CacheWrite1hInputCost, &scaled.CacheWrite1hInputCost},
-		{base.CacheWrite30mInputCost, &scaled.CacheWrite30mInputCost},
+		{base.CacheCreation5mInputCost, &scaled.CacheCreation5mInputCost},
+		{base.CacheCreation1hInputCost, &scaled.CacheCreation1hInputCost},
+		{base.CacheCreation30mInputCost, &scaled.CacheCreation30mInputCost},
 		{base.OutputCost, &scaled.OutputCost},
 		{base.ReasoningOutputCost, &scaled.ReasoningOutputCost},
 	} {

@@ -87,31 +87,31 @@ func (s *fakeRequestService) List(_ context.Context, params consolerequests.List
 	firstToken := int64(400)
 	tps := 18.1818
 	return []consolerequests.Item{{
-		ID:                      11,
-		RequestID:               "req_safe",
-		CreatedAt:               time.Date(2026, 8, 20, 8, 0, 0, 0, time.UTC),
-		ClientIP:                "203.0.113.10",
-		APIKeyID:                9,
-		APIKeyName:              "prod",
-		APIKeyPrefix:            "sk-unio-xhe8wl5d",
-		Endpoint:                "/chat/completions",
-		Stream:                  true,
-		RequestedModelID:        "claude-sonnet-4-5",
-		ModelDisplayName:        "Claude Sonnet 4.5",
-		IngressProtocol:         "anthropic",
-		InputPricePer1M:         strPtr("3"),
-		OutputPricePer1M:        strPtr("15"),
-		ReasoningEffort:         &reasoning,
-		UncachedInputTokens:     80,
-		CacheReadInputTokens:    10,
-		CacheWrite5mInputTokens: 10,
-		InputTokens:             100,
-		OutputTokens:            20,
-		ReasoningOutputTokens:   5,
-		LatencyMs:               &latency,
-		FirstTokenMs:            &firstToken,
-		TPS:                     &tps,
-		UserChargeUSD:           "0.15",
+		ID:                         11,
+		RequestID:                  "req_safe",
+		CreatedAt:                  time.Date(2026, 8, 20, 8, 0, 0, 0, time.UTC),
+		ClientIP:                   "203.0.113.10",
+		APIKeyID:                   9,
+		APIKeyName:                 "prod",
+		APIKeyPrefix:               "sk-unio-xhe8wl5d",
+		Endpoint:                   "/chat/completions",
+		Stream:                     true,
+		RequestedModelID:           "claude-sonnet-4-5",
+		ModelDisplayName:           "Claude Sonnet 4.5",
+		IngressProtocol:            "anthropic",
+		InputPricePer1M:            strPtr("3"),
+		OutputPricePer1M:           strPtr("15"),
+		ReasoningEffort:            &reasoning,
+		UncachedInputTokens:        80,
+		CacheReadInputTokens:       10,
+		CacheCreation5mInputTokens: 10,
+		InputTokens:                100,
+		OutputTokens:               20,
+		ReasoningOutputTokens:      5,
+		LatencyMs:                  &latency,
+		FirstTokenMs:               &firstToken,
+		TPS:                        &tps,
+		UserChargeUSD:              "0.15",
 	}}, 1, nil
 }
 
@@ -125,12 +125,12 @@ func (s *fakeRequestService) Summary(_ context.Context, params consolerequests.S
 		OutputTokenCount:        60,
 		UncachedInputTokenCount: 90,
 		CacheReadTokenCount:     20,
-		CacheWriteTokenCount:    10,
+		CacheCreationTokenCount: 10,
 		ChargeUSD:               "1.25",
 		UncachedInputChargeUSD:  "0.9",
 		OutputChargeUSD:         "0.24",
 		CacheReadChargeUSD:      "0.04",
-		CacheWriteChargeUSD:     "0.07",
+		CacheCreationChargeUSD:  "0.07",
 		ListChargeUSD:           "2.5",
 		AverageLatencyMs:        750,
 		AverageFirstTokenMs:     400,
@@ -205,7 +205,7 @@ func TestRequestSummaryUsesAuthenticatedUserID(t *testing.T) {
 			OutputTokenCount        int64   `json:"output_token_count"`
 			UncachedInputTokenCount int64   `json:"uncached_input_token_count"`
 			CacheReadTokenCount     int64   `json:"cache_read_token_count"`
-			CacheWriteTokenCount    int64   `json:"cache_write_token_count"`
+			CacheCreationTokenCount int64   `json:"cache_creation_token_count"`
 			ChargeUSD               string  `json:"charge_usd"`
 			ListChargeUSD           string  `json:"list_charge_usd"`
 			AverageLatencyMs        float64 `json:"average_latency_ms"`
@@ -219,7 +219,7 @@ func TestRequestSummaryUsesAuthenticatedUserID(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.Data.RequestCount != 4 || payload.Data.StreamCount != 3 || payload.Data.ChargeUSD != "1.25" || payload.Data.ListChargeUSD != "2.5" || payload.Data.InputTokenCount != 120 || payload.Data.OutputTokenCount != 60 || payload.Data.UncachedInputTokenCount != 90 || payload.Data.CacheReadTokenCount != 20 || payload.Data.CacheWriteTokenCount != 10 {
+	if payload.Data.RequestCount != 4 || payload.Data.StreamCount != 3 || payload.Data.ChargeUSD != "1.25" || payload.Data.ListChargeUSD != "2.5" || payload.Data.InputTokenCount != 120 || payload.Data.OutputTokenCount != 60 || payload.Data.UncachedInputTokenCount != 90 || payload.Data.CacheReadTokenCount != 20 || payload.Data.CacheCreationTokenCount != 10 {
 		t.Fatalf("payload = %+v", payload.Data)
 	}
 	if len(payload.Data.TopModels) != 2 || payload.Data.TopModels[0].ModelID != "gpt-5.2" || payload.Data.TopModels[0].RequestCount != 3 {
@@ -328,7 +328,7 @@ func TestRequestListOmitsInternalFieldsAndScopesToUser(t *testing.T) {
 	if item["input_price_per_1m"] != "3" || item["output_price_per_1m"] != "15" {
 		t.Fatalf("prices = %#v", item)
 	}
-	if item["uncached_input_tokens"] != float64(80) || item["cache_write_5m_input_tokens"] != float64(10) {
+	if item["uncached_input_tokens"] != float64(80) || item["cache_creation_5m_input_tokens"] != float64(10) {
 		t.Fatalf("token breakdown = %#v", item)
 	}
 	if item["first_token_ms"] != float64(400) || item["tps"] == nil {

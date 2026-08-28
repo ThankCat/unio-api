@@ -419,26 +419,26 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindModel
 	// 两者都随价格行走、可以共存，但不能混算；都空则 ResolveCustomerPrice 失败，本候选被排除。
 	// 售价只取决于命中的价格行，与命中哪条渠道无关，同一请求的所有候选共享同一售价。
 	basePrice := billing.CustomerPriceSnapshot{
-		Currency:                row.BaseCurrency,
-		PricingUnit:             row.BasePricingUnit,
-		UncachedInputPrice:      row.UncachedInputPrice,
-		CacheReadInputPrice:     row.CacheReadInputPrice,
-		CacheWrite5mInputPrice:  row.CacheWrite5mInputPrice,
-		CacheWrite1hInputPrice:  row.CacheWrite1hInputPrice,
-		CacheWrite30mInputPrice: row.CacheWrite30mInputPrice,
-		OutputPrice:             row.OutputPrice,
-		ReasoningOutputPrice:    row.ReasoningOutputPrice,
-		FormulaVersion:          billing.FormulaVersionV1,
+		Currency:                   row.BaseCurrency,
+		PricingUnit:                row.BasePricingUnit,
+		UncachedInputPrice:         row.UncachedInputPrice,
+		CacheReadInputPrice:        row.CacheReadInputPrice,
+		CacheCreation5mInputPrice:  row.CacheCreation5mInputPrice,
+		CacheCreation1hInputPrice:  row.CacheCreation1hInputPrice,
+		CacheCreation30mInputPrice: row.CacheCreation30mInputPrice,
+		OutputPrice:                row.OutputPrice,
+		ReasoningOutputPrice:       row.ReasoningOutputPrice,
+		FormulaVersion:             billing.FormulaVersionV1,
 	}
 	ratio := row.SalePriceRatio
 	saleOverride := billing.SaleOverride{
-		UncachedInputPrice:      row.SaleUncachedInputPrice,
-		CacheReadInputPrice:     row.SaleCacheReadInputPrice,
-		CacheWrite5mInputPrice:  row.SaleCacheWrite5mInputPrice,
-		CacheWrite1hInputPrice:  row.SaleCacheWrite1hInputPrice,
-		CacheWrite30mInputPrice: row.SaleCacheWrite30mInputPrice,
-		OutputPrice:             row.SaleOutputPrice,
-		ReasoningOutputPrice:    row.SaleReasoningOutputPrice,
+		UncachedInputPrice:         row.SaleUncachedInputPrice,
+		CacheReadInputPrice:        row.SaleCacheReadInputPrice,
+		CacheCreation5mInputPrice:  row.SaleCacheCreation5mInputPrice,
+		CacheCreation1hInputPrice:  row.SaleCacheCreation1hInputPrice,
+		CacheCreation30mInputPrice: row.SaleCacheCreation30mInputPrice,
+		OutputPrice:                row.SaleOutputPrice,
+		ReasoningOutputPrice:       row.SaleReasoningOutputPrice,
 	}
 	salePrice, err := billing.ResolveCustomerPrice(basePrice, ratio, saleOverride)
 	if err != nil {
@@ -459,27 +459,27 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindModel
 	fastBasePrice := billing.CustomerPriceSnapshot{}
 	if row.FastModelPriceServiceTierID > 0 {
 		fastBasePrice = billing.CustomerPriceSnapshot{
-			Currency:                row.BaseCurrency,
-			PricingUnit:             row.BasePricingUnit,
-			UncachedInputPrice:      row.FastUncachedInputPrice,
-			CacheReadInputPrice:     row.FastCacheReadInputPrice,
-			CacheWrite5mInputPrice:  row.FastCacheWrite5mInputPrice,
-			CacheWrite1hInputPrice:  row.FastCacheWrite1hInputPrice,
-			CacheWrite30mInputPrice: row.FastCacheWrite30mInputPrice,
-			OutputPrice:             row.FastOutputPrice,
-			ReasoningOutputPrice:    row.FastReasoningOutputPrice,
-			FormulaVersion:          billing.FormulaVersionV1,
+			Currency:                   row.BaseCurrency,
+			PricingUnit:                row.BasePricingUnit,
+			UncachedInputPrice:         row.FastUncachedInputPrice,
+			CacheReadInputPrice:        row.FastCacheReadInputPrice,
+			CacheCreation5mInputPrice:  row.FastCacheCreation5mInputPrice,
+			CacheCreation1hInputPrice:  row.FastCacheCreation1hInputPrice,
+			CacheCreation30mInputPrice: row.FastCacheCreation30mInputPrice,
+			OutputPrice:                row.FastOutputPrice,
+			ReasoningOutputPrice:       row.FastReasoningOutputPrice,
+			FormulaVersion:             billing.FormulaVersionV1,
 		}
 		// Fast 与 Standard 必须走同一套售价实体：绝对售价整组覆盖时两边都用绝对售价，
 		// 否则两边都用各自基准价 × 同一倍率。缺 Fast 绝对售价时忽略 Fast，绝不回落到倍率。
 		fastOverride := billing.SaleOverride{
-			UncachedInputPrice:      row.FastSaleUncachedInputPrice,
-			CacheReadInputPrice:     row.FastSaleCacheReadInputPrice,
-			CacheWrite5mInputPrice:  row.FastSaleCacheWrite5mInputPrice,
-			CacheWrite1hInputPrice:  row.FastSaleCacheWrite1hInputPrice,
-			CacheWrite30mInputPrice: row.FastSaleCacheWrite30mInputPrice,
-			OutputPrice:             row.FastSaleOutputPrice,
-			ReasoningOutputPrice:    row.FastSaleReasoningOutputPrice,
+			UncachedInputPrice:         row.FastSaleUncachedInputPrice,
+			CacheReadInputPrice:        row.FastSaleCacheReadInputPrice,
+			CacheCreation5mInputPrice:  row.FastSaleCacheCreation5mInputPrice,
+			CacheCreation1hInputPrice:  row.FastSaleCacheCreation1hInputPrice,
+			CacheCreation30mInputPrice: row.FastSaleCacheCreation30mInputPrice,
+			OutputPrice:                row.FastSaleOutputPrice,
+			ReasoningOutputPrice:       row.FastSaleReasoningOutputPrice,
 		}
 		if saleOverride.Configured() && !fastOverride.Configured() {
 			logging.Warn(r.logger, "routing", "candidate", "fast sale price ignored because absolute override requires fast absolute",
@@ -609,16 +609,16 @@ func resolveFastCandidateCost(row sqlc.FindModelCandidatesRow, fastBasePrice bil
 			return billing.ProviderCostSnapshot{}, 0, false
 		}
 		return billing.ProviderCostSnapshot{
-			Currency:               row.CostCurrency,
-			PricingUnit:            row.CostPricingUnit,
-			UncachedInputCost:      row.FastUncachedInputCost,
-			CacheReadInputCost:     row.FastCacheReadInputCost,
-			CacheWrite5mInputCost:  row.FastCacheWrite5mInputCost,
-			CacheWrite1hInputCost:  row.FastCacheWrite1hInputCost,
-			CacheWrite30mInputCost: row.FastCacheWrite30mInputCost,
-			OutputCost:             row.FastOutputCost,
-			ReasoningOutputCost:    row.FastReasoningOutputCost,
-			FormulaVersion:         billing.FormulaVersionV1,
+			Currency:                  row.CostCurrency,
+			PricingUnit:               row.CostPricingUnit,
+			UncachedInputCost:         row.FastUncachedInputCost,
+			CacheReadInputCost:        row.FastCacheReadInputCost,
+			CacheCreation5mInputCost:  row.FastCacheCreation5mInputCost,
+			CacheCreation1hInputCost:  row.FastCacheCreation1hInputCost,
+			CacheCreation30mInputCost: row.FastCacheCreation30mInputCost,
+			OutputCost:                row.FastOutputCost,
+			ReasoningOutputCost:       row.FastReasoningOutputCost,
+			FormulaVersion:            billing.FormulaVersionV1,
 		}, row.FastChannelPriceServiceTierID, true
 	}
 
@@ -643,16 +643,16 @@ func resolveFastCandidateCost(row sqlc.FindModelCandidatesRow, fastBasePrice bil
 func resolveCandidateCost(row sqlc.FindModelCandidatesRow, basePrice billing.CustomerPriceSnapshot) (cost billing.ProviderCostSnapshot, costBaseModelPriceID, multiplierID, rechargeFactorID int64, err error) {
 	if row.ChannelPriceID != 0 {
 		return billing.ProviderCostSnapshot{
-			Currency:               row.CostCurrency,
-			PricingUnit:            row.CostPricingUnit,
-			UncachedInputCost:      row.UncachedInputCost,
-			CacheReadInputCost:     row.CacheReadInputCost,
-			CacheWrite5mInputCost:  row.CacheWrite5mInputCost,
-			CacheWrite1hInputCost:  row.CacheWrite1hInputCost,
-			CacheWrite30mInputCost: row.CacheWrite30mInputCost,
-			OutputCost:             row.OutputCost,
-			ReasoningOutputCost:    row.ReasoningOutputCost,
-			FormulaVersion:         billing.FormulaVersionV1,
+			Currency:                  row.CostCurrency,
+			PricingUnit:               row.CostPricingUnit,
+			UncachedInputCost:         row.UncachedInputCost,
+			CacheReadInputCost:        row.CacheReadInputCost,
+			CacheCreation5mInputCost:  row.CacheCreation5mInputCost,
+			CacheCreation1hInputCost:  row.CacheCreation1hInputCost,
+			CacheCreation30mInputCost: row.CacheCreation30mInputCost,
+			OutputCost:                row.OutputCost,
+			ReasoningOutputCost:       row.ReasoningOutputCost,
+			FormulaVersion:            billing.FormulaVersionV1,
 		}, 0, 0, 0, nil
 	}
 

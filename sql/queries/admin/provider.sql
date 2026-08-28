@@ -177,7 +177,7 @@ WITH money AS (
     SELECT
         COALESCE(SUM(
             u.uncached_input_tokens + u.cache_read_input_tokens
-            + u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens + u.cache_write_30m_input_tokens
+            + u.cache_creation_5m_input_tokens + u.cache_creation_1h_input_tokens + u.cache_creation_30m_input_tokens
             + u.output_tokens_total
         ), 0)::bigint AS tokens_total,
         COALESCE(SUM(le.amount) FILTER (WHERE le.entry_type = 'debit' AND le.currency = 'USD'), 0)::numeric AS revenue_usd,
@@ -234,57 +234,57 @@ cache AS (
         COALESCE(SUM(uncached_input_tokens) FILTER (WHERE
             uncached_input_tokens_state = 'known'
             AND cache_read_input_tokens_state = 'known'
-            AND cache_write_5m_input_tokens_state <> 'unknown'
-            AND cache_write_1h_input_tokens_state <> 'unknown'
-            AND cache_write_30m_input_tokens_state <> 'unknown'
+            AND cache_creation_5m_input_tokens_state <> 'unknown'
+            AND cache_creation_1h_input_tokens_state <> 'unknown'
+            AND cache_creation_30m_input_tokens_state <> 'unknown'
             AND uncached_input_tokens + cache_read_input_tokens
-                + cache_write_5m_input_tokens + cache_write_1h_input_tokens + cache_write_30m_input_tokens > 0
+                + cache_creation_5m_input_tokens + cache_creation_1h_input_tokens + cache_creation_30m_input_tokens > 0
         ), 0)::bigint AS cache_uncached_input,
         COALESCE(SUM(cache_read_input_tokens) FILTER (WHERE
             uncached_input_tokens_state = 'known'
             AND cache_read_input_tokens_state = 'known'
-            AND cache_write_5m_input_tokens_state <> 'unknown'
-            AND cache_write_1h_input_tokens_state <> 'unknown'
-            AND cache_write_30m_input_tokens_state <> 'unknown'
+            AND cache_creation_5m_input_tokens_state <> 'unknown'
+            AND cache_creation_1h_input_tokens_state <> 'unknown'
+            AND cache_creation_30m_input_tokens_state <> 'unknown'
             AND uncached_input_tokens + cache_read_input_tokens
-                + cache_write_5m_input_tokens + cache_write_1h_input_tokens + cache_write_30m_input_tokens > 0
+                + cache_creation_5m_input_tokens + cache_creation_1h_input_tokens + cache_creation_30m_input_tokens > 0
         ), 0)::bigint AS cache_read_input,
-        COALESCE(SUM(cache_write_5m_input_tokens) FILTER (WHERE
+        COALESCE(SUM(cache_creation_5m_input_tokens) FILTER (WHERE
             uncached_input_tokens_state = 'known'
             AND cache_read_input_tokens_state = 'known'
-            AND cache_write_5m_input_tokens_state <> 'unknown'
-            AND cache_write_1h_input_tokens_state <> 'unknown'
-            AND cache_write_30m_input_tokens_state <> 'unknown'
+            AND cache_creation_5m_input_tokens_state <> 'unknown'
+            AND cache_creation_1h_input_tokens_state <> 'unknown'
+            AND cache_creation_30m_input_tokens_state <> 'unknown'
             AND uncached_input_tokens + cache_read_input_tokens
-                + cache_write_5m_input_tokens + cache_write_1h_input_tokens + cache_write_30m_input_tokens > 0
-        ), 0)::bigint AS cache_write_5m_input,
-        COALESCE(SUM(cache_write_1h_input_tokens) FILTER (WHERE
+                + cache_creation_5m_input_tokens + cache_creation_1h_input_tokens + cache_creation_30m_input_tokens > 0
+        ), 0)::bigint AS cache_creation_5m_input,
+        COALESCE(SUM(cache_creation_1h_input_tokens) FILTER (WHERE
             uncached_input_tokens_state = 'known'
             AND cache_read_input_tokens_state = 'known'
-            AND cache_write_5m_input_tokens_state <> 'unknown'
-            AND cache_write_1h_input_tokens_state <> 'unknown'
-            AND cache_write_30m_input_tokens_state <> 'unknown'
+            AND cache_creation_5m_input_tokens_state <> 'unknown'
+            AND cache_creation_1h_input_tokens_state <> 'unknown'
+            AND cache_creation_30m_input_tokens_state <> 'unknown'
             AND uncached_input_tokens + cache_read_input_tokens
-                + cache_write_5m_input_tokens + cache_write_1h_input_tokens + cache_write_30m_input_tokens > 0
-        ), 0)::bigint AS cache_write_1h_input,
-        COALESCE(SUM(cache_write_30m_input_tokens) FILTER (WHERE
+                + cache_creation_5m_input_tokens + cache_creation_1h_input_tokens + cache_creation_30m_input_tokens > 0
+        ), 0)::bigint AS cache_creation_1h_input,
+        COALESCE(SUM(cache_creation_30m_input_tokens) FILTER (WHERE
             uncached_input_tokens_state = 'known'
             AND cache_read_input_tokens_state = 'known'
-            AND cache_write_5m_input_tokens_state <> 'unknown'
-            AND cache_write_1h_input_tokens_state <> 'unknown'
-            AND cache_write_30m_input_tokens_state <> 'unknown'
+            AND cache_creation_5m_input_tokens_state <> 'unknown'
+            AND cache_creation_1h_input_tokens_state <> 'unknown'
+            AND cache_creation_30m_input_tokens_state <> 'unknown'
             AND uncached_input_tokens + cache_read_input_tokens
-                + cache_write_5m_input_tokens + cache_write_1h_input_tokens + cache_write_30m_input_tokens > 0
-        ), 0)::bigint AS cache_write_30m_input,
+                + cache_creation_5m_input_tokens + cache_creation_1h_input_tokens + cache_creation_30m_input_tokens > 0
+        ), 0)::bigint AS cache_creation_30m_input,
         COUNT(*) AS cache_usage_records,
         COUNT(*) FILTER (WHERE
             uncached_input_tokens_state = 'known'
             AND cache_read_input_tokens_state = 'known'
-            AND cache_write_5m_input_tokens_state <> 'unknown'
-            AND cache_write_1h_input_tokens_state <> 'unknown'
-            AND cache_write_30m_input_tokens_state <> 'unknown'
+            AND cache_creation_5m_input_tokens_state <> 'unknown'
+            AND cache_creation_1h_input_tokens_state <> 'unknown'
+            AND cache_creation_30m_input_tokens_state <> 'unknown'
             AND uncached_input_tokens + cache_read_input_tokens
-                + cache_write_5m_input_tokens + cache_write_1h_input_tokens + cache_write_30m_input_tokens > 0
+                + cache_creation_5m_input_tokens + cache_creation_1h_input_tokens + cache_creation_30m_input_tokens > 0
         ) AS cache_evaluable_records,
         COUNT(*) FILTER (WHERE cache_read_input_tokens_state = 'not_applicable') AS cache_read_not_applicable_records
     FROM cache_usage
@@ -323,9 +323,9 @@ SELECT
     (SELECT avg_tps FROM tps) AS avg_tps,
     (SELECT cache_uncached_input FROM cache) AS cache_uncached_input,
     (SELECT cache_read_input FROM cache) AS cache_read_input,
-    (SELECT cache_write_5m_input FROM cache) AS cache_write_5m_input,
-    (SELECT cache_write_1h_input FROM cache) AS cache_write_1h_input,
-    (SELECT cache_write_30m_input FROM cache) AS cache_write_30m_input,
+    (SELECT cache_creation_5m_input FROM cache) AS cache_creation_5m_input,
+    (SELECT cache_creation_1h_input FROM cache) AS cache_creation_1h_input,
+    (SELECT cache_creation_30m_input FROM cache) AS cache_creation_30m_input,
     (SELECT cache_usage_records FROM cache) AS cache_usage_records,
     (SELECT cache_evaluable_records FROM cache) AS cache_evaluable_records,
     (SELECT cache_read_not_applicable_records FROM cache) AS cache_read_not_applicable_records;
@@ -356,57 +356,57 @@ WITH cache AS (
         COALESCE(SUM(u.uncached_input_tokens) FILTER (WHERE
             u.uncached_input_tokens_state = 'known'
             AND u.cache_read_input_tokens_state = 'known'
-            AND u.cache_write_5m_input_tokens_state <> 'unknown'
-            AND u.cache_write_1h_input_tokens_state <> 'unknown'
-            AND u.cache_write_30m_input_tokens_state <> 'unknown'
+            AND u.cache_creation_5m_input_tokens_state <> 'unknown'
+            AND u.cache_creation_1h_input_tokens_state <> 'unknown'
+            AND u.cache_creation_30m_input_tokens_state <> 'unknown'
             AND u.uncached_input_tokens + u.cache_read_input_tokens
-                + u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens + u.cache_write_30m_input_tokens > 0
+                + u.cache_creation_5m_input_tokens + u.cache_creation_1h_input_tokens + u.cache_creation_30m_input_tokens > 0
         ), 0)::bigint AS cache_uncached_input,
         COALESCE(SUM(u.cache_read_input_tokens) FILTER (WHERE
             u.uncached_input_tokens_state = 'known'
             AND u.cache_read_input_tokens_state = 'known'
-            AND u.cache_write_5m_input_tokens_state <> 'unknown'
-            AND u.cache_write_1h_input_tokens_state <> 'unknown'
-            AND u.cache_write_30m_input_tokens_state <> 'unknown'
+            AND u.cache_creation_5m_input_tokens_state <> 'unknown'
+            AND u.cache_creation_1h_input_tokens_state <> 'unknown'
+            AND u.cache_creation_30m_input_tokens_state <> 'unknown'
             AND u.uncached_input_tokens + u.cache_read_input_tokens
-                + u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens + u.cache_write_30m_input_tokens > 0
+                + u.cache_creation_5m_input_tokens + u.cache_creation_1h_input_tokens + u.cache_creation_30m_input_tokens > 0
         ), 0)::bigint AS cache_read_input,
-        COALESCE(SUM(u.cache_write_5m_input_tokens) FILTER (WHERE
+        COALESCE(SUM(u.cache_creation_5m_input_tokens) FILTER (WHERE
             u.uncached_input_tokens_state = 'known'
             AND u.cache_read_input_tokens_state = 'known'
-            AND u.cache_write_5m_input_tokens_state <> 'unknown'
-            AND u.cache_write_1h_input_tokens_state <> 'unknown'
-            AND u.cache_write_30m_input_tokens_state <> 'unknown'
+            AND u.cache_creation_5m_input_tokens_state <> 'unknown'
+            AND u.cache_creation_1h_input_tokens_state <> 'unknown'
+            AND u.cache_creation_30m_input_tokens_state <> 'unknown'
             AND u.uncached_input_tokens + u.cache_read_input_tokens
-                + u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens + u.cache_write_30m_input_tokens > 0
-        ), 0)::bigint AS cache_write_5m_input,
-        COALESCE(SUM(u.cache_write_1h_input_tokens) FILTER (WHERE
+                + u.cache_creation_5m_input_tokens + u.cache_creation_1h_input_tokens + u.cache_creation_30m_input_tokens > 0
+        ), 0)::bigint AS cache_creation_5m_input,
+        COALESCE(SUM(u.cache_creation_1h_input_tokens) FILTER (WHERE
             u.uncached_input_tokens_state = 'known'
             AND u.cache_read_input_tokens_state = 'known'
-            AND u.cache_write_5m_input_tokens_state <> 'unknown'
-            AND u.cache_write_1h_input_tokens_state <> 'unknown'
-            AND u.cache_write_30m_input_tokens_state <> 'unknown'
+            AND u.cache_creation_5m_input_tokens_state <> 'unknown'
+            AND u.cache_creation_1h_input_tokens_state <> 'unknown'
+            AND u.cache_creation_30m_input_tokens_state <> 'unknown'
             AND u.uncached_input_tokens + u.cache_read_input_tokens
-                + u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens + u.cache_write_30m_input_tokens > 0
-        ), 0)::bigint AS cache_write_1h_input,
-        COALESCE(SUM(u.cache_write_30m_input_tokens) FILTER (WHERE
+                + u.cache_creation_5m_input_tokens + u.cache_creation_1h_input_tokens + u.cache_creation_30m_input_tokens > 0
+        ), 0)::bigint AS cache_creation_1h_input,
+        COALESCE(SUM(u.cache_creation_30m_input_tokens) FILTER (WHERE
             u.uncached_input_tokens_state = 'known'
             AND u.cache_read_input_tokens_state = 'known'
-            AND u.cache_write_5m_input_tokens_state <> 'unknown'
-            AND u.cache_write_1h_input_tokens_state <> 'unknown'
-            AND u.cache_write_30m_input_tokens_state <> 'unknown'
+            AND u.cache_creation_5m_input_tokens_state <> 'unknown'
+            AND u.cache_creation_1h_input_tokens_state <> 'unknown'
+            AND u.cache_creation_30m_input_tokens_state <> 'unknown'
             AND u.uncached_input_tokens + u.cache_read_input_tokens
-                + u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens + u.cache_write_30m_input_tokens > 0
-        ), 0)::bigint AS cache_write_30m_input,
+                + u.cache_creation_5m_input_tokens + u.cache_creation_1h_input_tokens + u.cache_creation_30m_input_tokens > 0
+        ), 0)::bigint AS cache_creation_30m_input,
         COUNT(*) AS cache_usage_records,
         COUNT(*) FILTER (WHERE
             u.uncached_input_tokens_state = 'known'
             AND u.cache_read_input_tokens_state = 'known'
-            AND u.cache_write_5m_input_tokens_state <> 'unknown'
-            AND u.cache_write_1h_input_tokens_state <> 'unknown'
-            AND u.cache_write_30m_input_tokens_state <> 'unknown'
+            AND u.cache_creation_5m_input_tokens_state <> 'unknown'
+            AND u.cache_creation_1h_input_tokens_state <> 'unknown'
+            AND u.cache_creation_30m_input_tokens_state <> 'unknown'
             AND u.uncached_input_tokens + u.cache_read_input_tokens
-                + u.cache_write_5m_input_tokens + u.cache_write_1h_input_tokens + u.cache_write_30m_input_tokens > 0
+                + u.cache_creation_5m_input_tokens + u.cache_creation_1h_input_tokens + u.cache_creation_30m_input_tokens > 0
         ) AS cache_evaluable_records,
         COUNT(*) FILTER (WHERE u.cache_read_input_tokens_state = 'not_applicable') AS cache_read_not_applicable_records
     FROM request_records r
@@ -449,9 +449,9 @@ SELECT
              THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p99,
     COALESCE(cache.cache_uncached_input, 0)::bigint AS cache_uncached_input,
     COALESCE(cache.cache_read_input, 0)::bigint AS cache_read_input,
-    COALESCE(cache.cache_write_5m_input, 0)::bigint AS cache_write_5m_input,
-    COALESCE(cache.cache_write_1h_input, 0)::bigint AS cache_write_1h_input,
-    COALESCE(cache.cache_write_30m_input, 0)::bigint AS cache_write_30m_input,
+    COALESCE(cache.cache_creation_5m_input, 0)::bigint AS cache_creation_5m_input,
+    COALESCE(cache.cache_creation_1h_input, 0)::bigint AS cache_creation_1h_input,
+    COALESCE(cache.cache_creation_30m_input, 0)::bigint AS cache_creation_30m_input,
     COALESCE(cache.cache_usage_records, 0)::bigint AS cache_usage_records,
     COALESCE(cache.cache_evaluable_records, 0)::bigint AS cache_evaluable_records,
     COALESCE(cache.cache_read_not_applicable_records, 0)::bigint AS cache_read_not_applicable_records
@@ -464,8 +464,8 @@ LEFT JOIN request_attempts a
 LEFT JOIN cache ON cache.channel_id = c.id
 WHERE c.provider_id = sqlc.arg('provider_id')
 GROUP BY c.id, c.name, p.origin, c.status,
-    cache.cache_uncached_input, cache.cache_read_input, cache.cache_write_5m_input,
-    cache.cache_write_1h_input, cache.cache_write_30m_input, cache.cache_usage_records,
+    cache.cache_uncached_input, cache.cache_read_input, cache.cache_creation_5m_input,
+    cache.cache_creation_1h_input, cache.cache_creation_30m_input, cache.cache_usage_records,
     cache.cache_evaluable_records, cache.cache_read_not_applicable_records
 ORDER BY attempt_total DESC, c.id;
 

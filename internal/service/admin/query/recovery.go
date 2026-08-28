@@ -90,13 +90,13 @@ type RecoveryJobDetail struct {
 	PricingUnit          string
 
 	// token 用量事实（settlement 重放依据）。
-	UncachedInputTokens      int64
-	CacheReadInputTokens     int64
-	CacheWrite5mInputTokens  int64
-	CacheWrite1hInputTokens  int64
-	CacheWrite30mInputTokens int64
-	OutputTokensTotal        int64
-	ReasoningOutputTokens    int64
+	UncachedInputTokens         int64
+	CacheReadInputTokens        int64
+	CacheCreation5mInputTokens  int64
+	CacheCreation1hInputTokens  int64
+	CacheCreation30mInputTokens int64
+	OutputTokensTotal           int64
+	ReasoningOutputTokens       int64
 
 	// LastInternalErrorDetail 默认脱敏；仅 includeInternal=true 时回显（与 M6 请求详情同策）。
 	LastInternalErrorDetail *string
@@ -197,20 +197,20 @@ func (s *RecoveryService) Get(ctx context.Context, id int64, includeInternal boo
 			ReleasedAmount:     numericString(job.ReservationReleasedAmount),
 			OverageAmount:      numericString(job.OverageAmount),
 		},
-		UpstreamResponseID:       job.UpstreamResponseID,
-		UpstreamFinishReason:     job.UpstreamFinishReason,
-		UpstreamRequestID:        textPtr(job.UpstreamRequestID),
-		UsageSource:              job.UsageSource,
-		UsageMappingVersion:      job.UsageMappingVersion,
-		FormulaVersion:           job.FormulaVersion,
-		PricingUnit:              job.PricingUnit,
-		UncachedInputTokens:      job.UsageUncachedInputTokens,
-		CacheReadInputTokens:     job.UsageCacheReadInputTokens,
-		CacheWrite5mInputTokens:  job.UsageCacheWrite5mInputTokens,
-		CacheWrite1hInputTokens:  job.UsageCacheWrite1hInputTokens,
-		CacheWrite30mInputTokens: job.UsageCacheWrite30mInputTokens,
-		OutputTokensTotal:        job.UsageOutputTokensTotal,
-		ReasoningOutputTokens:    job.UsageReasoningOutputTokens,
+		UpstreamResponseID:          job.UpstreamResponseID,
+		UpstreamFinishReason:        job.UpstreamFinishReason,
+		UpstreamRequestID:           textPtr(job.UpstreamRequestID),
+		UsageSource:                 job.UsageSource,
+		UsageMappingVersion:         job.UsageMappingVersion,
+		FormulaVersion:              job.FormulaVersion,
+		PricingUnit:                 job.PricingUnit,
+		UncachedInputTokens:         job.UsageUncachedInputTokens,
+		CacheReadInputTokens:        job.UsageCacheReadInputTokens,
+		CacheCreation5mInputTokens:  job.UsageCacheCreation5mInputTokens,
+		CacheCreation1hInputTokens:  job.UsageCacheCreation1hInputTokens,
+		CacheCreation30mInputTokens: job.UsageCacheCreation30mInputTokens,
+		OutputTokensTotal:           job.UsageOutputTokensTotal,
+		ReasoningOutputTokens:       job.UsageReasoningOutputTokens,
 	}
 	if includeInternal {
 		detail.LastInternalErrorDetail = textPtr(job.LastInternalErrorDetail)

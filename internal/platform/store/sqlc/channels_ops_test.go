@@ -27,19 +27,19 @@ func TestChannelCacheStatsExcludeStickyCrossChannelTransitions(t *testing.T) {
 		status          string
 	}
 	type usageFixture struct {
-		name          string
-		uncached      int64
-		cacheRead     int64
-		cacheWrite5m  int64
-		cacheWrite1h  int64
-		cacheWrite30m int64
-		trace         *traceFixture
+		name             string
+		uncached         int64
+		cacheRead        int64
+		cacheCreation5m  int64
+		cacheCreation1h  int64
+		cacheCreation30m int64
+		trace            *traceFixture
 	}
 
 	fixtures := []usageFixture{
 		{name: "legacy without trace", uncached: 10, cacheRead: 90},
 		{
-			name: "first sticky bind", uncached: 50, cacheWrite30m: 50,
+			name: "first sticky bind", uncached: 50, cacheCreation30m: 50,
 			trace: &traceFixture{afterChannelID: &channelBID, action: "bind_if_absent"},
 		},
 		{
@@ -48,11 +48,11 @@ func TestChannelCacheStatsExcludeStickyCrossChannelTransitions(t *testing.T) {
 		},
 		{
 			name: "sticky rebind", uncached: 1000, cacheRead: 100,
-			cacheWrite5m: 200, cacheWrite1h: 300, cacheWrite30m: 400,
+			cacheCreation5m: 200, cacheCreation1h: 300, cacheCreation30m: 400,
 			trace: &traceFixture{beforeChannelID: &channelAID, afterChannelID: &channelBID, action: "bind_if_absent"},
 		},
 		{
-			name: "sticky temporary bypass", uncached: 2000, cacheWrite5m: 2000,
+			name: "sticky temporary bypass", uncached: 2000, cacheCreation5m: 2000,
 			trace: &traceFixture{
 				beforeChannelID: &channelAID, afterChannelID: &channelAID,
 				action: "preserve_on_temporary_bypass", status: "partial",
@@ -69,17 +69,17 @@ func TestChannelCacheStatsExcludeStickyCrossChannelTransitions(t *testing.T) {
 		usage := usageRecordParams(record.ID)
 		usage.UncachedInputTokens = fixture.uncached
 		usage.CacheReadInputTokens = fixture.cacheRead
-		usage.CacheWrite5mInputTokens = fixture.cacheWrite5m
-		usage.CacheWrite1hInputTokens = fixture.cacheWrite1h
-		usage.CacheWrite30mInputTokens = fixture.cacheWrite30m
-		if fixture.cacheWrite5m > 0 {
-			usage.CacheWrite5mInputTokensState = "known"
+		usage.CacheCreation5mInputTokens = fixture.cacheCreation5m
+		usage.CacheCreation1hInputTokens = fixture.cacheCreation1h
+		usage.CacheCreation30mInputTokens = fixture.cacheCreation30m
+		if fixture.cacheCreation5m > 0 {
+			usage.CacheCreation5mInputTokensState = "known"
 		}
-		if fixture.cacheWrite1h > 0 {
-			usage.CacheWrite1hInputTokensState = "known"
+		if fixture.cacheCreation1h > 0 {
+			usage.CacheCreation1hInputTokensState = "known"
 		}
-		if fixture.cacheWrite30m > 0 {
-			usage.CacheWrite30mInputTokensState = "known"
+		if fixture.cacheCreation30m > 0 {
+			usage.CacheCreation30mInputTokensState = "known"
 		}
 		if _, err := queries.CreateUsageRecord(ctx, usage); err != nil {
 			t.Fatalf("%s: create usage: %v", fixture.name, err)
@@ -147,7 +147,7 @@ func TestChannelCacheStatsExcludeStickyCrossChannelTransitions(t *testing.T) {
 		t.Fatalf("ChannelOpsDetail: %v", err)
 	}
 	assertChannelCacheAggregate(t, "ChannelOpsDetail", channelDetail.CacheUncachedInput, channelDetail.CacheReadInput,
-		channelDetail.CacheWrite5mInput, channelDetail.CacheWrite1hInput, channelDetail.CacheWrite30mInput,
+		channelDetail.CacheCreation5mInput, channelDetail.CacheCreation1hInput, channelDetail.CacheCreation30mInput,
 		channelDetail.CacheUsageRecords, channelDetail.CacheEvaluableRecords)
 
 	providerChannels, err := queries.ProviderOpsChannels(ctx, sqlc.ProviderOpsChannelsParams{ProviderID: providerID})
@@ -165,7 +165,7 @@ func TestChannelCacheStatsExcludeStickyCrossChannelTransitions(t *testing.T) {
 		t.Fatalf("ProviderOpsChannels missing channel %d: %+v", channelBID, providerChannels)
 	}
 	assertChannelCacheAggregate(t, "ProviderOpsChannels", channelRow.CacheUncachedInput, channelRow.CacheReadInput,
-		channelRow.CacheWrite5mInput, channelRow.CacheWrite1hInput, channelRow.CacheWrite30mInput,
+		channelRow.CacheCreation5mInput, channelRow.CacheCreation1hInput, channelRow.CacheCreation30mInput,
 		channelRow.CacheUsageRecords, channelRow.CacheEvaluableRecords)
 
 	providerDetail, err := queries.ProviderOpsDetail(ctx, sqlc.ProviderOpsDetailParams{ProviderID: providerID})
@@ -173,8 +173,8 @@ func TestChannelCacheStatsExcludeStickyCrossChannelTransitions(t *testing.T) {
 		t.Fatalf("ProviderOpsDetail: %v", err)
 	}
 	if providerDetail.CacheUncachedInput != 3080 || providerDetail.CacheReadInput != 270 ||
-		providerDetail.CacheWrite5mInput != 2200 || providerDetail.CacheWrite1hInput != 300 ||
-		providerDetail.CacheWrite30mInput != 450 ||
+		providerDetail.CacheCreation5mInput != 2200 || providerDetail.CacheCreation1hInput != 300 ||
+		providerDetail.CacheCreation30mInput != 450 ||
 		providerDetail.CacheUsageRecords != 5 || providerDetail.CacheEvaluableRecords != 5 {
 		t.Fatalf("ProviderOpsDetail must retain transition usage: %+v", providerDetail)
 	}
@@ -185,17 +185,17 @@ func assertChannelCacheAggregate(
 	name string,
 	uncached int64,
 	cacheRead int64,
-	cacheWrite5m int64,
-	cacheWrite1h int64,
-	cacheWrite30m int64,
+	cacheCreation5m int64,
+	cacheCreation1h int64,
+	cacheCreation30m int64,
 	usageRecords int64,
 	evaluableRecords int64,
 ) {
 	t.Helper()
 
-	if uncached != 80 || cacheRead != 170 || cacheWrite5m != 0 || cacheWrite1h != 0 || cacheWrite30m != 50 ||
+	if uncached != 80 || cacheRead != 170 || cacheCreation5m != 0 || cacheCreation1h != 0 || cacheCreation30m != 50 ||
 		usageRecords != 3 || evaluableRecords != 3 {
 		t.Fatalf("%s includes sticky cross-channel transition usage: uncached=%d read=%d write5m=%d write1h=%d write30m=%d usage=%d evaluable=%d",
-			name, uncached, cacheRead, cacheWrite5m, cacheWrite1h, cacheWrite30m, usageRecords, evaluableRecords)
+			name, uncached, cacheRead, cacheCreation5m, cacheCreation1h, cacheCreation30m, usageRecords, evaluableRecords)
 	}
 }

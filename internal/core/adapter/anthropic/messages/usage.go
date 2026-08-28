@@ -57,23 +57,23 @@ func (u MessageUsage) ToUsageFacts() usage.Facts {
 	facts := usage.Facts{
 		UncachedInputTokens:  usage.KnownTokens(int64(u.InputTokens)),
 		CacheReadInputTokens: optionalTokenCount(u.CacheReadInputTokens),
-		// Anthropic 只有 5m/1h 两档缓存写，无 OpenAI 式 30m 单档：30m 恒 not_applicable。
-		CacheWrite30mInputTokens: usage.NotApplicableTokens(),
-		OutputTokensTotal:        usage.KnownTokens(int64(u.OutputTokens)),
-		ReasoningOutputTokens:    optionalTokenCount(u.ThinkingOutputTokens),
+		// Anthropic 只有 5m/1h 两档缓存创建，无 OpenAI 式 30m 单档：30m 恒 not_applicable。
+		CacheCreation30mInputTokens: usage.NotApplicableTokens(),
+		OutputTokensTotal:           usage.KnownTokens(int64(u.OutputTokens)),
+		ReasoningOutputTokens:       optionalTokenCount(u.ThinkingOutputTokens),
 	}
 
 	switch {
 	case u.CacheCreation != nil:
-		facts.CacheWrite5mInputTokens = optionalTokenCount(u.CacheCreation.Ephemeral5mInputTokens)
-		facts.CacheWrite1hInputTokens = optionalTokenCount(u.CacheCreation.Ephemeral1hInputTokens)
+		facts.CacheCreation5mInputTokens = optionalTokenCount(u.CacheCreation.Ephemeral5mInputTokens)
+		facts.CacheCreation1hInputTokens = optionalTokenCount(u.CacheCreation.Ephemeral1hInputTokens)
 	case u.CacheCreationInputTokens != nil:
-		// 上游只给缓存写入总量（无 TTL 分级）：归入默认 5m 档，1h 不适用。
-		facts.CacheWrite5mInputTokens = usage.KnownTokens(int64(*u.CacheCreationInputTokens))
-		facts.CacheWrite1hInputTokens = usage.NotApplicableTokens()
+		// 上游只给缓存创建总量（无 TTL 分级）：归入默认 5m 档，1h 不适用。
+		facts.CacheCreation5mInputTokens = usage.KnownTokens(int64(*u.CacheCreationInputTokens))
+		facts.CacheCreation1hInputTokens = usage.NotApplicableTokens()
 	default:
-		facts.CacheWrite5mInputTokens = usage.NotApplicableTokens()
-		facts.CacheWrite1hInputTokens = usage.NotApplicableTokens()
+		facts.CacheCreation5mInputTokens = usage.NotApplicableTokens()
+		facts.CacheCreation1hInputTokens = usage.NotApplicableTokens()
 	}
 
 	facts.ServerToolUsage = serverToolMeteredItems(u.ServerToolUse)

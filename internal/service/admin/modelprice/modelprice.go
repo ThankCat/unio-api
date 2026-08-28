@@ -59,13 +59,13 @@ type Store interface {
 // （DB 侧由 ck_model_prices_sale_all_or_none / ck_model_price_tiers_sale_all_or_none 保证）。
 // 必填两项用 string，可选分项为空时计费回退到这两项。
 type SalePriceVector struct {
-	UncachedInputPrice      string
-	CacheReadInputPrice     *string
-	CacheWrite5mInputPrice  *string
-	CacheWrite1hInputPrice  *string
-	CacheWrite30mInputPrice *string
-	OutputPrice             string
-	ReasoningOutputPrice    *string
+	UncachedInputPrice         string
+	CacheReadInputPrice        *string
+	CacheCreation5mInputPrice  *string
+	CacheCreation1hInputPrice  *string
+	CacheCreation30mInputPrice *string
+	OutputPrice                string
+	ReasoningOutputPrice       *string
 }
 
 // ModelPrice 是 admin 视角的模型定价事实；金额以十进制字符串承载，可空项用 *string。
@@ -78,9 +78,9 @@ type ModelPrice struct {
 	PricingUnit                 string
 	UncachedInputPrice          string
 	CacheReadInputPrice         *string
-	CacheWrite5mInputPrice      *string
-	CacheWrite1hInputPrice      *string
-	CacheWrite30mInputPrice     *string
+	CacheCreation5mInputPrice   *string
+	CacheCreation1hInputPrice   *string
+	CacheCreation30mInputPrice  *string
 	OutputPrice                 string
 	ReasoningOutputPrice        *string
 	SalePriceRatio              *string
@@ -107,46 +107,46 @@ type ModelPrice struct {
 // Fast 与 Standard 绑在同一套售价实体上：走绝对售价时两边都必须有绝对售价；
 // 走倍率时两边都按各自基准价 × 模型倍率。不允许一档绝对、另一档倍率。
 type FastPrice struct {
-	ServiceTierID           int64
-	UncachedInputPrice      string
-	CacheReadInputPrice     *string
-	CacheWrite5mInputPrice  *string
-	CacheWrite1hInputPrice  *string
-	CacheWrite30mInputPrice *string
-	OutputPrice             string
-	ReasoningOutputPrice    *string
-	SalePrices              *SalePriceVector
-	ReferenceSource         *string
-	ReferenceCheckedAt      *time.Time
+	ServiceTierID              int64
+	UncachedInputPrice         string
+	CacheReadInputPrice        *string
+	CacheCreation5mInputPrice  *string
+	CacheCreation1hInputPrice  *string
+	CacheCreation30mInputPrice *string
+	OutputPrice                string
+	ReasoningOutputPrice       *string
+	SalePrices                 *SalePriceVector
+	ReferenceSource            *string
+	ReferenceCheckedAt         *time.Time
 }
 
 // FastPriceReference 是版本化的 OpenAI 官方参考价，只用于 Admin 填表，不参与运行时计费。
 type FastPriceReference struct {
-	Currency                string
-	PricingUnit             string
-	UncachedInputPrice      string
-	CacheReadInputPrice     *string
-	CacheWrite5mInputPrice  *string
-	CacheWrite1hInputPrice  *string
-	CacheWrite30mInputPrice *string
-	OutputPrice             string
-	ReasoningOutputPrice    *string
-	Source                  string
-	CheckedAt               time.Time
+	Currency                   string
+	PricingUnit                string
+	UncachedInputPrice         string
+	CacheReadInputPrice        *string
+	CacheCreation5mInputPrice  *string
+	CacheCreation1hInputPrice  *string
+	CacheCreation30mInputPrice *string
+	OutputPrice                string
+	ReasoningOutputPrice       *string
+	Source                     string
+	CheckedAt                  time.Time
 }
 
 // FastPriceInput 是新价格窗口可选的 Fast 精确售价。
 type FastPriceInput struct {
-	UncachedInputPrice      string
-	CacheReadInputPrice     *string
-	CacheWrite5mInputPrice  *string
-	CacheWrite1hInputPrice  *string
-	CacheWrite30mInputPrice *string
-	OutputPrice             string
-	ReasoningOutputPrice    *string
-	SalePrices              *SalePriceVector
-	ReferenceSource         *string
-	ReferenceCheckedAt      *time.Time
+	UncachedInputPrice         string
+	CacheReadInputPrice        *string
+	CacheCreation5mInputPrice  *string
+	CacheCreation1hInputPrice  *string
+	CacheCreation30mInputPrice *string
+	OutputPrice                string
+	ReasoningOutputPrice       *string
+	SalePrices                 *SalePriceVector
+	ReferenceSource            *string
+	ReferenceCheckedAt         *time.Time
 }
 
 // CreateInput 是创建模型价格窗口的入参。Intent 必填，决定哪一半由请求提供、哪一半从当前生效行复制。
@@ -157,9 +157,9 @@ type CreateInput struct {
 	PricingUnit                 string
 	UncachedInputPrice          string
 	CacheReadInputPrice         *string
-	CacheWrite5mInputPrice      *string
-	CacheWrite1hInputPrice      *string
-	CacheWrite30mInputPrice     *string
+	CacheCreation5mInputPrice   *string
+	CacheCreation1hInputPrice   *string
+	CacheCreation30mInputPrice  *string
 	OutputPrice                 string
 	ReasoningOutputPrice        *string
 	SalePriceRatio              *string
@@ -561,61 +561,61 @@ func createParams(
 	sale saleVectorAmounts,
 ) sqlc.CreateModelPriceParams {
 	return sqlc.CreateModelPriceParams{
-		ModelID:                         in.ModelID,
-		Currency:                        currency,
-		PricingUnit:                     pricingUnit,
-		UncachedInputPrice:              amounts.uncachedInputPrice,
-		CacheReadInputPrice:             amounts.cacheReadInputPrice,
-		CacheWrite5mInputPrice:          amounts.cacheWrite5mInputPrice,
-		CacheWrite1hInputPrice:          amounts.cacheWrite1hInputPrice,
-		CacheWrite30mInputPrice:         amounts.cacheWrite30mInputPrice,
-		OutputPrice:                     amounts.outputPrice,
-		ReasoningOutputPrice:            amounts.reasoningOutputPrice,
-		SalePriceRatio:                  saleRatio,
-		SaleUncachedInputPrice:          sale.uncachedInputPrice,
-		SaleCacheReadInputPrice:         sale.cacheReadInputPrice,
-		SaleCacheWrite5mInputPrice:      sale.cacheWrite5mInputPrice,
-		SaleCacheWrite1hInputPrice:      sale.cacheWrite1hInputPrice,
-		SaleCacheWrite30mInputPrice:     sale.cacheWrite30mInputPrice,
-		SaleOutputPrice:                 sale.outputPrice,
-		SaleReasoningOutputPrice:        sale.reasoningOutputPrice,
-		LongContextEnabled:              longContext.enabled,
-		LongContextThreshold:            longContext.threshold,
-		LongContextInputMultiplier:      longContext.inputMultiplier,
-		LongContextOutputMultiplier:     longContext.outputMultiplier,
-		FastUncachedInputPrice:          fastPrice.uncachedInputPrice,
-		FastCacheReadInputPrice:         fastPrice.cacheReadInputPrice,
-		FastCacheWrite5mInputPrice:      fastPrice.cacheWrite5mInputPrice,
-		FastCacheWrite1hInputPrice:      fastPrice.cacheWrite1hInputPrice,
-		FastCacheWrite30mInputPrice:     fastPrice.cacheWrite30mInputPrice,
-		FastOutputPrice:                 fastPrice.outputPrice,
-		FastReasoningOutputPrice:        fastPrice.reasoningOutputPrice,
-		FastSaleUncachedInputPrice:      fastPrice.sale.uncachedInputPrice,
-		FastSaleCacheReadInputPrice:     fastPrice.sale.cacheReadInputPrice,
-		FastSaleCacheWrite5mInputPrice:  fastPrice.sale.cacheWrite5mInputPrice,
-		FastSaleCacheWrite1hInputPrice:  fastPrice.sale.cacheWrite1hInputPrice,
-		FastSaleCacheWrite30mInputPrice: fastPrice.sale.cacheWrite30mInputPrice,
-		FastSaleOutputPrice:             fastPrice.sale.outputPrice,
-		FastSaleReasoningOutputPrice:    fastPrice.sale.reasoningOutputPrice,
-		FastReferenceSource:             fastPrice.referenceSource,
-		FastReferenceCheckedAt:          fastPrice.referenceCheckedAt,
-		FastConfigured:                  fastPrice.configured,
-		ReplaceOverlappingEnabled:       in.ReplaceOverlappingEnabled,
-		Status:                          in.Status,
-		EffectiveFrom:                   tsParam(&in.EffectiveFrom),
-		EffectiveTo:                     tsParam(in.EffectiveTo),
+		ModelID:                            in.ModelID,
+		Currency:                           currency,
+		PricingUnit:                        pricingUnit,
+		UncachedInputPrice:                 amounts.uncachedInputPrice,
+		CacheReadInputPrice:                amounts.cacheReadInputPrice,
+		CacheCreation5mInputPrice:          amounts.cacheCreation5mInputPrice,
+		CacheCreation1hInputPrice:          amounts.cacheCreation1hInputPrice,
+		CacheCreation30mInputPrice:         amounts.cacheCreation30mInputPrice,
+		OutputPrice:                        amounts.outputPrice,
+		ReasoningOutputPrice:               amounts.reasoningOutputPrice,
+		SalePriceRatio:                     saleRatio,
+		SaleUncachedInputPrice:             sale.uncachedInputPrice,
+		SaleCacheReadInputPrice:            sale.cacheReadInputPrice,
+		SaleCacheCreation5mInputPrice:      sale.cacheCreation5mInputPrice,
+		SaleCacheCreation1hInputPrice:      sale.cacheCreation1hInputPrice,
+		SaleCacheCreation30mInputPrice:     sale.cacheCreation30mInputPrice,
+		SaleOutputPrice:                    sale.outputPrice,
+		SaleReasoningOutputPrice:           sale.reasoningOutputPrice,
+		LongContextEnabled:                 longContext.enabled,
+		LongContextThreshold:               longContext.threshold,
+		LongContextInputMultiplier:         longContext.inputMultiplier,
+		LongContextOutputMultiplier:        longContext.outputMultiplier,
+		FastUncachedInputPrice:             fastPrice.uncachedInputPrice,
+		FastCacheReadInputPrice:            fastPrice.cacheReadInputPrice,
+		FastCacheCreation5mInputPrice:      fastPrice.cacheCreation5mInputPrice,
+		FastCacheCreation1hInputPrice:      fastPrice.cacheCreation1hInputPrice,
+		FastCacheCreation30mInputPrice:     fastPrice.cacheCreation30mInputPrice,
+		FastOutputPrice:                    fastPrice.outputPrice,
+		FastReasoningOutputPrice:           fastPrice.reasoningOutputPrice,
+		FastSaleUncachedInputPrice:         fastPrice.sale.uncachedInputPrice,
+		FastSaleCacheReadInputPrice:        fastPrice.sale.cacheReadInputPrice,
+		FastSaleCacheCreation5mInputPrice:  fastPrice.sale.cacheCreation5mInputPrice,
+		FastSaleCacheCreation1hInputPrice:  fastPrice.sale.cacheCreation1hInputPrice,
+		FastSaleCacheCreation30mInputPrice: fastPrice.sale.cacheCreation30mInputPrice,
+		FastSaleOutputPrice:                fastPrice.sale.outputPrice,
+		FastSaleReasoningOutputPrice:       fastPrice.sale.reasoningOutputPrice,
+		FastReferenceSource:                fastPrice.referenceSource,
+		FastReferenceCheckedAt:             fastPrice.referenceCheckedAt,
+		FastConfigured:                     fastPrice.configured,
+		ReplaceOverlappingEnabled:          in.ReplaceOverlappingEnabled,
+		Status:                             in.Status,
+		EffectiveFrom:                      tsParam(&in.EffectiveFrom),
+		EffectiveTo:                        tsParam(in.EffectiveTo),
 	}
 }
 
 func amountsFromRow(row sqlc.ListModelPricesByModelRow) modelPriceAmounts {
 	return modelPriceAmounts{
-		uncachedInputPrice:      row.UncachedInputPrice,
-		cacheReadInputPrice:     row.CacheReadInputPrice,
-		cacheWrite5mInputPrice:  row.CacheWrite5mInputPrice,
-		cacheWrite1hInputPrice:  row.CacheWrite1hInputPrice,
-		cacheWrite30mInputPrice: row.CacheWrite30mInputPrice,
-		outputPrice:             row.OutputPrice,
-		reasoningOutputPrice:    row.ReasoningOutputPrice,
+		uncachedInputPrice:         row.UncachedInputPrice,
+		cacheReadInputPrice:        row.CacheReadInputPrice,
+		cacheCreation5mInputPrice:  row.CacheCreation5mInputPrice,
+		cacheCreation1hInputPrice:  row.CacheCreation1hInputPrice,
+		cacheCreation30mInputPrice: row.CacheCreation30mInputPrice,
+		outputPrice:                row.OutputPrice,
+		reasoningOutputPrice:       row.ReasoningOutputPrice,
 	}
 }
 
@@ -630,27 +630,27 @@ func longContextFromRow(row sqlc.ListModelPricesByModelRow) longContextConfig {
 
 func saleVectorFromRow(row sqlc.ListModelPricesByModelRow) saleVectorAmounts {
 	return saleVectorAmounts{
-		configured:              row.SaleUncachedInputPrice.Valid && row.SaleOutputPrice.Valid,
-		uncachedInputPrice:      row.SaleUncachedInputPrice,
-		cacheReadInputPrice:     row.SaleCacheReadInputPrice,
-		cacheWrite5mInputPrice:  row.SaleCacheWrite5mInputPrice,
-		cacheWrite1hInputPrice:  row.SaleCacheWrite1hInputPrice,
-		cacheWrite30mInputPrice: row.SaleCacheWrite30mInputPrice,
-		outputPrice:             row.SaleOutputPrice,
-		reasoningOutputPrice:    row.SaleReasoningOutputPrice,
+		configured:                 row.SaleUncachedInputPrice.Valid && row.SaleOutputPrice.Valid,
+		uncachedInputPrice:         row.SaleUncachedInputPrice,
+		cacheReadInputPrice:        row.SaleCacheReadInputPrice,
+		cacheCreation5mInputPrice:  row.SaleCacheCreation5mInputPrice,
+		cacheCreation1hInputPrice:  row.SaleCacheCreation1hInputPrice,
+		cacheCreation30mInputPrice: row.SaleCacheCreation30mInputPrice,
+		outputPrice:                row.SaleOutputPrice,
+		reasoningOutputPrice:       row.SaleReasoningOutputPrice,
 	}
 }
 
 func fastSaleVectorFromRow(row sqlc.ListModelPricesByModelRow) saleVectorAmounts {
 	return saleVectorAmounts{
-		configured:              row.FastSaleUncachedInputPrice.Valid && row.FastSaleOutputPrice.Valid,
-		uncachedInputPrice:      row.FastSaleUncachedInputPrice,
-		cacheReadInputPrice:     row.FastSaleCacheReadInputPrice,
-		cacheWrite5mInputPrice:  row.FastSaleCacheWrite5mInputPrice,
-		cacheWrite1hInputPrice:  row.FastSaleCacheWrite1hInputPrice,
-		cacheWrite30mInputPrice: row.FastSaleCacheWrite30mInputPrice,
-		outputPrice:             row.FastSaleOutputPrice,
-		reasoningOutputPrice:    row.FastSaleReasoningOutputPrice,
+		configured:                 row.FastSaleUncachedInputPrice.Valid && row.FastSaleOutputPrice.Valid,
+		uncachedInputPrice:         row.FastSaleUncachedInputPrice,
+		cacheReadInputPrice:        row.FastSaleCacheReadInputPrice,
+		cacheCreation5mInputPrice:  row.FastSaleCacheCreation5mInputPrice,
+		cacheCreation1hInputPrice:  row.FastSaleCacheCreation1hInputPrice,
+		cacheCreation30mInputPrice: row.FastSaleCacheCreation30mInputPrice,
+		outputPrice:                row.FastSaleOutputPrice,
+		reasoningOutputPrice:       row.FastSaleReasoningOutputPrice,
 	}
 }
 
@@ -659,16 +659,16 @@ func fastBaseFromRow(row sqlc.ListModelPricesByModelRow) fastPriceConfig {
 		return fastPriceConfig{}
 	}
 	return fastPriceConfig{
-		configured:              true,
-		uncachedInputPrice:      row.FastUncachedInputPrice,
-		cacheReadInputPrice:     row.FastCacheReadInputPrice,
-		cacheWrite5mInputPrice:  row.FastCacheWrite5mInputPrice,
-		cacheWrite1hInputPrice:  row.FastCacheWrite1hInputPrice,
-		cacheWrite30mInputPrice: row.FastCacheWrite30mInputPrice,
-		outputPrice:             row.FastOutputPrice,
-		reasoningOutputPrice:    row.FastReasoningOutputPrice,
-		referenceSource:         row.FastReferenceSource,
-		referenceCheckedAt:      row.FastReferenceCheckedAt,
+		configured:                 true,
+		uncachedInputPrice:         row.FastUncachedInputPrice,
+		cacheReadInputPrice:        row.FastCacheReadInputPrice,
+		cacheCreation5mInputPrice:  row.FastCacheCreation5mInputPrice,
+		cacheCreation1hInputPrice:  row.FastCacheCreation1hInputPrice,
+		cacheCreation30mInputPrice: row.FastCacheCreation30mInputPrice,
+		outputPrice:                row.FastOutputPrice,
+		reasoningOutputPrice:       row.FastReasoningOutputPrice,
+		referenceSource:            row.FastReferenceSource,
+		referenceCheckedAt:         row.FastReferenceCheckedAt,
 	}
 }
 
@@ -852,25 +852,25 @@ func windowsOverlap(aFrom time.Time, aTo *time.Time, bFrom time.Time, bTo *time.
 
 // modelPriceAmounts 持有解析后的 NUMERIC 基准售价。
 type modelPriceAmounts struct {
-	uncachedInputPrice      pgtype.Numeric
-	cacheReadInputPrice     pgtype.Numeric
-	cacheWrite5mInputPrice  pgtype.Numeric
-	cacheWrite1hInputPrice  pgtype.Numeric
-	cacheWrite30mInputPrice pgtype.Numeric
-	outputPrice             pgtype.Numeric
-	reasoningOutputPrice    pgtype.Numeric
+	uncachedInputPrice         pgtype.Numeric
+	cacheReadInputPrice        pgtype.Numeric
+	cacheCreation5mInputPrice  pgtype.Numeric
+	cacheCreation1hInputPrice  pgtype.Numeric
+	cacheCreation30mInputPrice pgtype.Numeric
+	outputPrice                pgtype.Numeric
+	reasoningOutputPrice       pgtype.Numeric
 }
 
 // saleVectorAmounts 持有解析后的 NUMERIC 绝对售价；未配置时全部为 SQL NULL。
 type saleVectorAmounts struct {
-	configured              bool
-	uncachedInputPrice      pgtype.Numeric
-	cacheReadInputPrice     pgtype.Numeric
-	cacheWrite5mInputPrice  pgtype.Numeric
-	cacheWrite1hInputPrice  pgtype.Numeric
-	cacheWrite30mInputPrice pgtype.Numeric
-	outputPrice             pgtype.Numeric
-	reasoningOutputPrice    pgtype.Numeric
+	configured                 bool
+	uncachedInputPrice         pgtype.Numeric
+	cacheReadInputPrice        pgtype.Numeric
+	cacheCreation5mInputPrice  pgtype.Numeric
+	cacheCreation1hInputPrice  pgtype.Numeric
+	cacheCreation30mInputPrice pgtype.Numeric
+	outputPrice                pgtype.Numeric
+	reasoningOutputPrice       pgtype.Numeric
 }
 
 // parseSaleVector 解析一组绝对售价；nil 表示不配（整组 NULL）。
@@ -890,13 +890,13 @@ func parseSaleVector(prefix string, in *SalePriceVector) (saleVectorAmounts, err
 	if out.cacheReadInputPrice, err = parseOptionalMoney(prefix+".cache_read_input_price", in.CacheReadInputPrice); err != nil {
 		return saleVectorAmounts{}, err
 	}
-	if out.cacheWrite5mInputPrice, err = parseOptionalMoney(prefix+".cache_write_5m_input_price", in.CacheWrite5mInputPrice); err != nil {
+	if out.cacheCreation5mInputPrice, err = parseOptionalMoney(prefix+".cache_creation_5m_input_price", in.CacheCreation5mInputPrice); err != nil {
 		return saleVectorAmounts{}, err
 	}
-	if out.cacheWrite1hInputPrice, err = parseOptionalMoney(prefix+".cache_write_1h_input_price", in.CacheWrite1hInputPrice); err != nil {
+	if out.cacheCreation1hInputPrice, err = parseOptionalMoney(prefix+".cache_creation_1h_input_price", in.CacheCreation1hInputPrice); err != nil {
 		return saleVectorAmounts{}, err
 	}
-	if out.cacheWrite30mInputPrice, err = parseOptionalMoney(prefix+".cache_write_30m_input_price", in.CacheWrite30mInputPrice); err != nil {
+	if out.cacheCreation30mInputPrice, err = parseOptionalMoney(prefix+".cache_creation_30m_input_price", in.CacheCreation30mInputPrice); err != nil {
 		return saleVectorAmounts{}, err
 	}
 	if out.reasoningOutputPrice, err = parseOptionalMoney(prefix+".reasoning_output_price", in.ReasoningOutputPrice); err != nil {
@@ -907,34 +907,34 @@ func parseSaleVector(prefix string, in *SalePriceVector) (saleVectorAmounts, err
 
 // saleVectorFromValues 把库里读出的一组 sale_* 还原为向量；未配置（必填两项缺任一）时返回 nil。
 func saleVectorFromValues(
-	uncached, cacheRead, cacheWrite5m, cacheWrite1h, cacheWrite30m, output, reasoning pgtype.Numeric,
+	uncached, cacheRead, cacheCreation5m, cacheCreation1h, cacheCreation30m, output, reasoning pgtype.Numeric,
 ) *SalePriceVector {
 	if !uncached.Valid || !output.Valid {
 		return nil
 	}
 	return &SalePriceVector{
-		UncachedInputPrice:      numericString(uncached),
-		CacheReadInputPrice:     numericPtr(cacheRead),
-		CacheWrite5mInputPrice:  numericPtr(cacheWrite5m),
-		CacheWrite1hInputPrice:  numericPtr(cacheWrite1h),
-		CacheWrite30mInputPrice: numericPtr(cacheWrite30m),
-		OutputPrice:             numericString(output),
-		ReasoningOutputPrice:    numericPtr(reasoning),
+		UncachedInputPrice:         numericString(uncached),
+		CacheReadInputPrice:        numericPtr(cacheRead),
+		CacheCreation5mInputPrice:  numericPtr(cacheCreation5m),
+		CacheCreation1hInputPrice:  numericPtr(cacheCreation1h),
+		CacheCreation30mInputPrice: numericPtr(cacheCreation30m),
+		OutputPrice:                numericString(output),
+		ReasoningOutputPrice:       numericPtr(reasoning),
 	}
 }
 
 type fastPriceConfig struct {
-	configured              bool
-	uncachedInputPrice      pgtype.Numeric
-	cacheReadInputPrice     pgtype.Numeric
-	cacheWrite5mInputPrice  pgtype.Numeric
-	cacheWrite1hInputPrice  pgtype.Numeric
-	cacheWrite30mInputPrice pgtype.Numeric
-	outputPrice             pgtype.Numeric
-	reasoningOutputPrice    pgtype.Numeric
-	sale                    saleVectorAmounts
-	referenceSource         pgtype.Text
-	referenceCheckedAt      pgtype.Date
+	configured                 bool
+	uncachedInputPrice         pgtype.Numeric
+	cacheReadInputPrice        pgtype.Numeric
+	cacheCreation5mInputPrice  pgtype.Numeric
+	cacheCreation1hInputPrice  pgtype.Numeric
+	cacheCreation30mInputPrice pgtype.Numeric
+	outputPrice                pgtype.Numeric
+	reasoningOutputPrice       pgtype.Numeric
+	sale                       saleVectorAmounts
+	referenceSource            pgtype.Text
+	referenceCheckedAt         pgtype.Date
 }
 
 func parseFastPriceConfig(in *FastPriceInput) (fastPriceConfig, error) {
@@ -953,13 +953,13 @@ func parseFastPriceConfig(in *FastPriceInput) (fastPriceConfig, error) {
 	if out.cacheReadInputPrice, err = parseOptionalMoney("fast_prices.cache_read_input_price", in.CacheReadInputPrice); err != nil {
 		return fastPriceConfig{}, err
 	}
-	if out.cacheWrite5mInputPrice, err = parseOptionalMoney("fast_prices.cache_write_5m_input_price", in.CacheWrite5mInputPrice); err != nil {
+	if out.cacheCreation5mInputPrice, err = parseOptionalMoney("fast_prices.cache_creation_5m_input_price", in.CacheCreation5mInputPrice); err != nil {
 		return fastPriceConfig{}, err
 	}
-	if out.cacheWrite1hInputPrice, err = parseOptionalMoney("fast_prices.cache_write_1h_input_price", in.CacheWrite1hInputPrice); err != nil {
+	if out.cacheCreation1hInputPrice, err = parseOptionalMoney("fast_prices.cache_creation_1h_input_price", in.CacheCreation1hInputPrice); err != nil {
 		return fastPriceConfig{}, err
 	}
-	if out.cacheWrite30mInputPrice, err = parseOptionalMoney("fast_prices.cache_write_30m_input_price", in.CacheWrite30mInputPrice); err != nil {
+	if out.cacheCreation30mInputPrice, err = parseOptionalMoney("fast_prices.cache_creation_30m_input_price", in.CacheCreation30mInputPrice); err != nil {
 		return fastPriceConfig{}, err
 	}
 	if out.reasoningOutputPrice, err = parseOptionalMoney("fast_prices.reasoning_output_price", in.ReasoningOutputPrice); err != nil {
@@ -998,13 +998,13 @@ func parseModelPriceAmounts(in CreateInput) (modelPriceAmounts, error) {
 	if out.cacheReadInputPrice, err = parseOptionalMoney("cache_read_input_price", in.CacheReadInputPrice); err != nil {
 		return modelPriceAmounts{}, err
 	}
-	if out.cacheWrite5mInputPrice, err = parseOptionalMoney("cache_write_5m_input_price", in.CacheWrite5mInputPrice); err != nil {
+	if out.cacheCreation5mInputPrice, err = parseOptionalMoney("cache_creation_5m_input_price", in.CacheCreation5mInputPrice); err != nil {
 		return modelPriceAmounts{}, err
 	}
-	if out.cacheWrite1hInputPrice, err = parseOptionalMoney("cache_write_1h_input_price", in.CacheWrite1hInputPrice); err != nil {
+	if out.cacheCreation1hInputPrice, err = parseOptionalMoney("cache_creation_1h_input_price", in.CacheCreation1hInputPrice); err != nil {
 		return modelPriceAmounts{}, err
 	}
-	if out.cacheWrite30mInputPrice, err = parseOptionalMoney("cache_write_30m_input_price", in.CacheWrite30mInputPrice); err != nil {
+	if out.cacheCreation30mInputPrice, err = parseOptionalMoney("cache_creation_30m_input_price", in.CacheCreation30mInputPrice); err != nil {
 		return modelPriceAmounts{}, err
 	}
 	if out.reasoningOutputPrice, err = parseOptionalMoney("reasoning_output_price", in.ReasoningOutputPrice); err != nil {
@@ -1021,24 +1021,24 @@ func markSaleConfigured(p ModelPrice) ModelPrice {
 
 func toModelPrice(c sqlc.ModelPrice) ModelPrice {
 	return markSaleConfigured(ModelPrice{
-		ID:                      c.ID,
-		ModelID:                 c.ModelID,
-		Currency:                c.Currency,
-		PricingUnit:             c.PricingUnit,
-		UncachedInputPrice:      numericString(c.UncachedInputPrice),
-		CacheReadInputPrice:     numericPtr(c.CacheReadInputPrice),
-		CacheWrite5mInputPrice:  numericPtr(c.CacheWrite5mInputPrice),
-		CacheWrite1hInputPrice:  numericPtr(c.CacheWrite1hInputPrice),
-		CacheWrite30mInputPrice: numericPtr(c.CacheWrite30mInputPrice),
-		OutputPrice:             numericString(c.OutputPrice),
-		ReasoningOutputPrice:    numericPtr(c.ReasoningOutputPrice),
-		SalePriceRatio:          numericPtr(c.SalePriceRatio),
+		ID:                         c.ID,
+		ModelID:                    c.ModelID,
+		Currency:                   c.Currency,
+		PricingUnit:                c.PricingUnit,
+		UncachedInputPrice:         numericString(c.UncachedInputPrice),
+		CacheReadInputPrice:        numericPtr(c.CacheReadInputPrice),
+		CacheCreation5mInputPrice:  numericPtr(c.CacheCreation5mInputPrice),
+		CacheCreation1hInputPrice:  numericPtr(c.CacheCreation1hInputPrice),
+		CacheCreation30mInputPrice: numericPtr(c.CacheCreation30mInputPrice),
+		OutputPrice:                numericString(c.OutputPrice),
+		ReasoningOutputPrice:       numericPtr(c.ReasoningOutputPrice),
+		SalePriceRatio:             numericPtr(c.SalePriceRatio),
 		SalePrices: saleVectorFromValues(
 			c.SaleUncachedInputPrice,
 			c.SaleCacheReadInputPrice,
-			c.SaleCacheWrite5mInputPrice,
-			c.SaleCacheWrite1hInputPrice,
-			c.SaleCacheWrite30mInputPrice,
+			c.SaleCacheCreation5mInputPrice,
+			c.SaleCacheCreation1hInputPrice,
+			c.SaleCacheCreation30mInputPrice,
 			c.SaleOutputPrice,
 			c.SaleReasoningOutputPrice,
 		),
@@ -1057,24 +1057,24 @@ func toModelPrice(c sqlc.ModelPrice) ModelPrice {
 
 func toModelPriceFromCreateRow(c sqlc.CreateModelPriceRow) ModelPrice {
 	result := ModelPrice{
-		ID:                      c.ID,
-		ModelID:                 c.ModelID,
-		Currency:                c.Currency,
-		PricingUnit:             c.PricingUnit,
-		UncachedInputPrice:      numericString(c.UncachedInputPrice),
-		CacheReadInputPrice:     numericPtr(c.CacheReadInputPrice),
-		CacheWrite5mInputPrice:  numericPtr(c.CacheWrite5mInputPrice),
-		CacheWrite1hInputPrice:  numericPtr(c.CacheWrite1hInputPrice),
-		CacheWrite30mInputPrice: numericPtr(c.CacheWrite30mInputPrice),
-		OutputPrice:             numericString(c.OutputPrice),
-		ReasoningOutputPrice:    numericPtr(c.ReasoningOutputPrice),
-		SalePriceRatio:          numericPtr(c.SalePriceRatio),
+		ID:                         c.ID,
+		ModelID:                    c.ModelID,
+		Currency:                   c.Currency,
+		PricingUnit:                c.PricingUnit,
+		UncachedInputPrice:         numericString(c.UncachedInputPrice),
+		CacheReadInputPrice:        numericPtr(c.CacheReadInputPrice),
+		CacheCreation5mInputPrice:  numericPtr(c.CacheCreation5mInputPrice),
+		CacheCreation1hInputPrice:  numericPtr(c.CacheCreation1hInputPrice),
+		CacheCreation30mInputPrice: numericPtr(c.CacheCreation30mInputPrice),
+		OutputPrice:                numericString(c.OutputPrice),
+		ReasoningOutputPrice:       numericPtr(c.ReasoningOutputPrice),
+		SalePriceRatio:             numericPtr(c.SalePriceRatio),
 		SalePrices: saleVectorFromValues(
 			c.SaleUncachedInputPrice,
 			c.SaleCacheReadInputPrice,
-			c.SaleCacheWrite5mInputPrice,
-			c.SaleCacheWrite1hInputPrice,
-			c.SaleCacheWrite30mInputPrice,
+			c.SaleCacheCreation5mInputPrice,
+			c.SaleCacheCreation1hInputPrice,
+			c.SaleCacheCreation30mInputPrice,
 			c.SaleOutputPrice,
 			c.SaleReasoningOutputPrice,
 		),
@@ -1093,17 +1093,17 @@ func toModelPriceFromCreateRow(c sqlc.CreateModelPriceRow) ModelPrice {
 		c.FastServiceTierID,
 		c.FastUncachedInputPrice,
 		c.FastCacheReadInputPrice,
-		c.FastCacheWrite5mInputPrice,
-		c.FastCacheWrite1hInputPrice,
-		c.FastCacheWrite30mInputPrice,
+		c.FastCacheCreation5mInputPrice,
+		c.FastCacheCreation1hInputPrice,
+		c.FastCacheCreation30mInputPrice,
 		c.FastOutputPrice,
 		c.FastReasoningOutputPrice,
 		saleVectorFromValues(
 			c.FastSaleUncachedInputPrice,
 			c.FastSaleCacheReadInputPrice,
-			c.FastSaleCacheWrite5mInputPrice,
-			c.FastSaleCacheWrite1hInputPrice,
-			c.FastSaleCacheWrite30mInputPrice,
+			c.FastSaleCacheCreation5mInputPrice,
+			c.FastSaleCacheCreation1hInputPrice,
+			c.FastSaleCacheCreation30mInputPrice,
 			c.FastSaleOutputPrice,
 			c.FastSaleReasoningOutputPrice,
 		),
@@ -1115,26 +1115,26 @@ func toModelPriceFromCreateRow(c sqlc.CreateModelPriceRow) ModelPrice {
 
 func toModelPriceFromRow(c sqlc.ListModelPricesByModelRow) ModelPrice {
 	result := ModelPrice{
-		ID:                      c.ID,
-		ModelID:                 c.ModelID,
-		ModelExternalID:         c.ModelExternalID,
-		ModelDisplayName:        c.ModelDisplayName,
-		Currency:                c.Currency,
-		PricingUnit:             c.PricingUnit,
-		UncachedInputPrice:      numericString(c.UncachedInputPrice),
-		CacheReadInputPrice:     numericPtr(c.CacheReadInputPrice),
-		CacheWrite5mInputPrice:  numericPtr(c.CacheWrite5mInputPrice),
-		CacheWrite1hInputPrice:  numericPtr(c.CacheWrite1hInputPrice),
-		CacheWrite30mInputPrice: numericPtr(c.CacheWrite30mInputPrice),
-		OutputPrice:             numericString(c.OutputPrice),
-		ReasoningOutputPrice:    numericPtr(c.ReasoningOutputPrice),
-		SalePriceRatio:          numericPtr(c.SalePriceRatio),
+		ID:                         c.ID,
+		ModelID:                    c.ModelID,
+		ModelExternalID:            c.ModelExternalID,
+		ModelDisplayName:           c.ModelDisplayName,
+		Currency:                   c.Currency,
+		PricingUnit:                c.PricingUnit,
+		UncachedInputPrice:         numericString(c.UncachedInputPrice),
+		CacheReadInputPrice:        numericPtr(c.CacheReadInputPrice),
+		CacheCreation5mInputPrice:  numericPtr(c.CacheCreation5mInputPrice),
+		CacheCreation1hInputPrice:  numericPtr(c.CacheCreation1hInputPrice),
+		CacheCreation30mInputPrice: numericPtr(c.CacheCreation30mInputPrice),
+		OutputPrice:                numericString(c.OutputPrice),
+		ReasoningOutputPrice:       numericPtr(c.ReasoningOutputPrice),
+		SalePriceRatio:             numericPtr(c.SalePriceRatio),
 		SalePrices: saleVectorFromValues(
 			c.SaleUncachedInputPrice,
 			c.SaleCacheReadInputPrice,
-			c.SaleCacheWrite5mInputPrice,
-			c.SaleCacheWrite1hInputPrice,
-			c.SaleCacheWrite30mInputPrice,
+			c.SaleCacheCreation5mInputPrice,
+			c.SaleCacheCreation1hInputPrice,
+			c.SaleCacheCreation30mInputPrice,
 			c.SaleOutputPrice,
 			c.SaleReasoningOutputPrice,
 		),
@@ -1154,17 +1154,17 @@ func toModelPriceFromRow(c sqlc.ListModelPricesByModelRow) ModelPrice {
 		c.FastServiceTierID,
 		c.FastUncachedInputPrice,
 		c.FastCacheReadInputPrice,
-		c.FastCacheWrite5mInputPrice,
-		c.FastCacheWrite1hInputPrice,
-		c.FastCacheWrite30mInputPrice,
+		c.FastCacheCreation5mInputPrice,
+		c.FastCacheCreation1hInputPrice,
+		c.FastCacheCreation30mInputPrice,
 		c.FastOutputPrice,
 		c.FastReasoningOutputPrice,
 		saleVectorFromValues(
 			c.FastSaleUncachedInputPrice,
 			c.FastSaleCacheReadInputPrice,
-			c.FastSaleCacheWrite5mInputPrice,
-			c.FastSaleCacheWrite1hInputPrice,
-			c.FastSaleCacheWrite30mInputPrice,
+			c.FastSaleCacheCreation5mInputPrice,
+			c.FastSaleCacheCreation1hInputPrice,
+			c.FastSaleCacheCreation30mInputPrice,
 			c.FastSaleOutputPrice,
 			c.FastSaleReasoningOutputPrice,
 		),
@@ -1183,7 +1183,7 @@ func fastPriceStatus(serviceTierID int64) string {
 
 func fastPriceFromValues(
 	serviceTierID int64,
-	uncached, cacheRead, cacheWrite5m, cacheWrite1h, cacheWrite30m, output, reasoning pgtype.Numeric,
+	uncached, cacheRead, cacheCreation5m, cacheCreation1h, cacheCreation30m, output, reasoning pgtype.Numeric,
 	sale *SalePriceVector,
 	referenceSource pgtype.Text,
 	referenceCheckedAt pgtype.Date,
@@ -1192,17 +1192,17 @@ func fastPriceFromValues(
 		return nil
 	}
 	return &FastPrice{
-		ServiceTierID:           serviceTierID,
-		UncachedInputPrice:      numericString(uncached),
-		CacheReadInputPrice:     numericPtr(cacheRead),
-		CacheWrite5mInputPrice:  numericPtr(cacheWrite5m),
-		CacheWrite1hInputPrice:  numericPtr(cacheWrite1h),
-		CacheWrite30mInputPrice: numericPtr(cacheWrite30m),
-		OutputPrice:             numericString(output),
-		ReasoningOutputPrice:    numericPtr(reasoning),
-		SalePrices:              sale,
-		ReferenceSource:         textValuePtr(referenceSource),
-		ReferenceCheckedAt:      dateValuePtr(referenceCheckedAt),
+		ServiceTierID:              serviceTierID,
+		UncachedInputPrice:         numericString(uncached),
+		CacheReadInputPrice:        numericPtr(cacheRead),
+		CacheCreation5mInputPrice:  numericPtr(cacheCreation5m),
+		CacheCreation1hInputPrice:  numericPtr(cacheCreation1h),
+		CacheCreation30mInputPrice: numericPtr(cacheCreation30m),
+		OutputPrice:                numericString(output),
+		ReasoningOutputPrice:       numericPtr(reasoning),
+		SalePrices:                 sale,
+		ReferenceSource:            textValuePtr(referenceSource),
+		ReferenceCheckedAt:         dateValuePtr(referenceCheckedAt),
 	}
 }
 

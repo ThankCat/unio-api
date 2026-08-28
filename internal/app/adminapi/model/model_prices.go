@@ -34,9 +34,9 @@ type modelPriceDTO struct {
 	PricingUnit                 string                 `json:"pricing_unit"`
 	UncachedInputPrice          string                 `json:"uncached_input_price"`
 	CacheReadInputPrice         *string                `json:"cache_read_input_price"`
-	CacheWrite5mInputPrice      *string                `json:"cache_write_5m_input_price"`
-	CacheWrite1hInputPrice      *string                `json:"cache_write_1h_input_price"`
-	CacheWrite30mInputPrice     *string                `json:"cache_write_30m_input_price"`
+	CacheCreation5mInputPrice   *string                `json:"cache_creation_5m_input_price"`
+	CacheCreation1hInputPrice   *string                `json:"cache_creation_1h_input_price"`
+	CacheCreation30mInputPrice  *string                `json:"cache_creation_30m_input_price"`
 	OutputPrice                 string                 `json:"output_price"`
 	ReasoningOutputPrice        *string                `json:"reasoning_output_price"`
 	SalePriceRatio              *string                `json:"sale_price_ratio"`
@@ -60,54 +60,54 @@ type modelPriceDTO struct {
 
 // salePriceVectorDTO 是一组对外绝对售价：整组给齐或整组留空，非空时优先于售价倍率。
 type salePriceVectorDTO struct {
-	UncachedInputPrice      string  `json:"uncached_input_price"`
-	CacheReadInputPrice     *string `json:"cache_read_input_price"`
-	CacheWrite5mInputPrice  *string `json:"cache_write_5m_input_price"`
-	CacheWrite1hInputPrice  *string `json:"cache_write_1h_input_price"`
-	CacheWrite30mInputPrice *string `json:"cache_write_30m_input_price"`
-	OutputPrice             string  `json:"output_price"`
-	ReasoningOutputPrice    *string `json:"reasoning_output_price"`
+	UncachedInputPrice         string  `json:"uncached_input_price"`
+	CacheReadInputPrice        *string `json:"cache_read_input_price"`
+	CacheCreation5mInputPrice  *string `json:"cache_creation_5m_input_price"`
+	CacheCreation1hInputPrice  *string `json:"cache_creation_1h_input_price"`
+	CacheCreation30mInputPrice *string `json:"cache_creation_30m_input_price"`
+	OutputPrice                string  `json:"output_price"`
+	ReasoningOutputPrice       *string `json:"reasoning_output_price"`
 }
 
 type fastPriceDTO struct {
-	ServiceTierID           int64               `json:"service_tier_id"`
-	UncachedInputPrice      string              `json:"uncached_input_price"`
-	CacheReadInputPrice     *string             `json:"cache_read_input_price"`
-	CacheWrite5mInputPrice  *string             `json:"cache_write_5m_input_price"`
-	CacheWrite1hInputPrice  *string             `json:"cache_write_1h_input_price"`
-	CacheWrite30mInputPrice *string             `json:"cache_write_30m_input_price"`
-	OutputPrice             string              `json:"output_price"`
-	ReasoningOutputPrice    *string             `json:"reasoning_output_price"`
-	SalePrices              *salePriceVectorDTO `json:"sale_prices"`
-	ReferenceSource         *string             `json:"reference_source"`
-	ReferenceCheckedAt      *string             `json:"reference_checked_at"`
+	ServiceTierID              int64               `json:"service_tier_id"`
+	UncachedInputPrice         string              `json:"uncached_input_price"`
+	CacheReadInputPrice        *string             `json:"cache_read_input_price"`
+	CacheCreation5mInputPrice  *string             `json:"cache_creation_5m_input_price"`
+	CacheCreation1hInputPrice  *string             `json:"cache_creation_1h_input_price"`
+	CacheCreation30mInputPrice *string             `json:"cache_creation_30m_input_price"`
+	OutputPrice                string              `json:"output_price"`
+	ReasoningOutputPrice       *string             `json:"reasoning_output_price"`
+	SalePrices                 *salePriceVectorDTO `json:"sale_prices"`
+	ReferenceSource            *string             `json:"reference_source"`
+	ReferenceCheckedAt         *string             `json:"reference_checked_at"`
 }
 
 type fastPriceReferenceDTO struct {
-	Currency                string  `json:"currency"`
-	PricingUnit             string  `json:"pricing_unit"`
-	UncachedInputPrice      string  `json:"uncached_input_price"`
-	CacheReadInputPrice     *string `json:"cache_read_input_price"`
-	CacheWrite5mInputPrice  *string `json:"cache_write_5m_input_price"`
-	CacheWrite1hInputPrice  *string `json:"cache_write_1h_input_price"`
-	CacheWrite30mInputPrice *string `json:"cache_write_30m_input_price"`
-	OutputPrice             string  `json:"output_price"`
-	ReasoningOutputPrice    *string `json:"reasoning_output_price"`
-	Source                  string  `json:"source"`
-	CheckedAt               string  `json:"checked_at"`
+	Currency                   string  `json:"currency"`
+	PricingUnit                string  `json:"pricing_unit"`
+	UncachedInputPrice         string  `json:"uncached_input_price"`
+	CacheReadInputPrice        *string `json:"cache_read_input_price"`
+	CacheCreation5mInputPrice  *string `json:"cache_creation_5m_input_price"`
+	CacheCreation1hInputPrice  *string `json:"cache_creation_1h_input_price"`
+	CacheCreation30mInputPrice *string `json:"cache_creation_30m_input_price"`
+	OutputPrice                string  `json:"output_price"`
+	ReasoningOutputPrice       *string `json:"reasoning_output_price"`
+	Source                     string  `json:"source"`
+	CheckedAt                  string  `json:"checked_at"`
 }
 
 type fastPriceRequest struct {
-	UncachedInputPrice      string              `json:"uncached_input_price"`
-	CacheReadInputPrice     *string             `json:"cache_read_input_price"`
-	CacheWrite5mInputPrice  *string             `json:"cache_write_5m_input_price"`
-	CacheWrite1hInputPrice  *string             `json:"cache_write_1h_input_price"`
-	CacheWrite30mInputPrice *string             `json:"cache_write_30m_input_price"`
-	OutputPrice             string              `json:"output_price"`
-	ReasoningOutputPrice    *string             `json:"reasoning_output_price"`
-	SalePrices              *salePriceVectorDTO `json:"sale_prices"`
-	ReferenceSource         *string             `json:"reference_source"`
-	ReferenceCheckedAt      *string             `json:"reference_checked_at"`
+	UncachedInputPrice         string              `json:"uncached_input_price"`
+	CacheReadInputPrice        *string             `json:"cache_read_input_price"`
+	CacheCreation5mInputPrice  *string             `json:"cache_creation_5m_input_price"`
+	CacheCreation1hInputPrice  *string             `json:"cache_creation_1h_input_price"`
+	CacheCreation30mInputPrice *string             `json:"cache_creation_30m_input_price"`
+	OutputPrice                string              `json:"output_price"`
+	ReasoningOutputPrice       *string             `json:"reasoning_output_price"`
+	SalePrices                 *salePriceVectorDTO `json:"sale_prices"`
+	ReferenceSource            *string             `json:"reference_source"`
+	ReferenceCheckedAt         *string             `json:"reference_checked_at"`
 }
 
 // createModelPriceRequest 必须带 intent：base / sale_ratio / sale_absolute。
@@ -118,9 +118,9 @@ type createModelPriceRequest struct {
 	PricingUnit                 string              `json:"pricing_unit"`
 	UncachedInputPrice          string              `json:"uncached_input_price"`
 	CacheReadInputPrice         *string             `json:"cache_read_input_price"`
-	CacheWrite5mInputPrice      *string             `json:"cache_write_5m_input_price"`
-	CacheWrite1hInputPrice      *string             `json:"cache_write_1h_input_price"`
-	CacheWrite30mInputPrice     *string             `json:"cache_write_30m_input_price"`
+	CacheCreation5mInputPrice   *string             `json:"cache_creation_5m_input_price"`
+	CacheCreation1hInputPrice   *string             `json:"cache_creation_1h_input_price"`
+	CacheCreation30mInputPrice  *string             `json:"cache_creation_30m_input_price"`
 	OutputPrice                 string              `json:"output_price"`
 	ReasoningOutputPrice        *string             `json:"reasoning_output_price"`
 	SalePriceRatio              *string             `json:"sale_price_ratio"`
@@ -209,9 +209,9 @@ func (h *modelPricesHandler) create(w http.ResponseWriter, r *http.Request) {
 		PricingUnit:                 req.PricingUnit,
 		UncachedInputPrice:          req.UncachedInputPrice,
 		CacheReadInputPrice:         req.CacheReadInputPrice,
-		CacheWrite5mInputPrice:      req.CacheWrite5mInputPrice,
-		CacheWrite1hInputPrice:      req.CacheWrite1hInputPrice,
-		CacheWrite30mInputPrice:     req.CacheWrite30mInputPrice,
+		CacheCreation5mInputPrice:   req.CacheCreation5mInputPrice,
+		CacheCreation1hInputPrice:   req.CacheCreation1hInputPrice,
+		CacheCreation30mInputPrice:  req.CacheCreation30mInputPrice,
 		OutputPrice:                 req.OutputPrice,
 		ReasoningOutputPrice:        req.ReasoningOutputPrice,
 		SalePriceRatio:              req.SalePriceRatio,
@@ -284,9 +284,9 @@ func toModelPriceDTO(p modelprice.ModelPrice) modelPriceDTO {
 		PricingUnit:                 p.PricingUnit,
 		UncachedInputPrice:          p.UncachedInputPrice,
 		CacheReadInputPrice:         p.CacheReadInputPrice,
-		CacheWrite5mInputPrice:      p.CacheWrite5mInputPrice,
-		CacheWrite1hInputPrice:      p.CacheWrite1hInputPrice,
-		CacheWrite30mInputPrice:     p.CacheWrite30mInputPrice,
+		CacheCreation5mInputPrice:   p.CacheCreation5mInputPrice,
+		CacheCreation1hInputPrice:   p.CacheCreation1hInputPrice,
+		CacheCreation30mInputPrice:  p.CacheCreation30mInputPrice,
 		OutputPrice:                 p.OutputPrice,
 		ReasoningOutputPrice:        p.ReasoningOutputPrice,
 		SalePriceRatio:              p.SalePriceRatio,
@@ -305,16 +305,16 @@ func toModelPriceDTO(p modelprice.ModelPrice) modelPriceDTO {
 	}
 	if p.FastPrices != nil {
 		fast := fastPriceDTO{
-			ServiceTierID:           p.FastPrices.ServiceTierID,
-			UncachedInputPrice:      p.FastPrices.UncachedInputPrice,
-			CacheReadInputPrice:     p.FastPrices.CacheReadInputPrice,
-			CacheWrite5mInputPrice:  p.FastPrices.CacheWrite5mInputPrice,
-			CacheWrite1hInputPrice:  p.FastPrices.CacheWrite1hInputPrice,
-			CacheWrite30mInputPrice: p.FastPrices.CacheWrite30mInputPrice,
-			OutputPrice:             p.FastPrices.OutputPrice,
-			ReasoningOutputPrice:    p.FastPrices.ReasoningOutputPrice,
-			SalePrices:              saleVectorDTO(p.FastPrices.SalePrices),
-			ReferenceSource:         p.FastPrices.ReferenceSource,
+			ServiceTierID:              p.FastPrices.ServiceTierID,
+			UncachedInputPrice:         p.FastPrices.UncachedInputPrice,
+			CacheReadInputPrice:        p.FastPrices.CacheReadInputPrice,
+			CacheCreation5mInputPrice:  p.FastPrices.CacheCreation5mInputPrice,
+			CacheCreation1hInputPrice:  p.FastPrices.CacheCreation1hInputPrice,
+			CacheCreation30mInputPrice: p.FastPrices.CacheCreation30mInputPrice,
+			OutputPrice:                p.FastPrices.OutputPrice,
+			ReasoningOutputPrice:       p.FastPrices.ReasoningOutputPrice,
+			SalePrices:                 saleVectorDTO(p.FastPrices.SalePrices),
+			ReferenceSource:            p.FastPrices.ReferenceSource,
 		}
 		if p.FastPrices.ReferenceCheckedAt != nil {
 			value := p.FastPrices.ReferenceCheckedAt.UTC().Format(time.DateOnly)
@@ -324,17 +324,17 @@ func toModelPriceDTO(p modelprice.ModelPrice) modelPriceDTO {
 	}
 	if p.FastPriceReference != nil {
 		dto.FastPriceReference = &fastPriceReferenceDTO{
-			Currency:                p.FastPriceReference.Currency,
-			PricingUnit:             p.FastPriceReference.PricingUnit,
-			UncachedInputPrice:      p.FastPriceReference.UncachedInputPrice,
-			CacheReadInputPrice:     p.FastPriceReference.CacheReadInputPrice,
-			CacheWrite5mInputPrice:  p.FastPriceReference.CacheWrite5mInputPrice,
-			CacheWrite1hInputPrice:  p.FastPriceReference.CacheWrite1hInputPrice,
-			CacheWrite30mInputPrice: p.FastPriceReference.CacheWrite30mInputPrice,
-			OutputPrice:             p.FastPriceReference.OutputPrice,
-			ReasoningOutputPrice:    p.FastPriceReference.ReasoningOutputPrice,
-			Source:                  p.FastPriceReference.Source,
-			CheckedAt:               p.FastPriceReference.CheckedAt.UTC().Format(time.DateOnly),
+			Currency:                   p.FastPriceReference.Currency,
+			PricingUnit:                p.FastPriceReference.PricingUnit,
+			UncachedInputPrice:         p.FastPriceReference.UncachedInputPrice,
+			CacheReadInputPrice:        p.FastPriceReference.CacheReadInputPrice,
+			CacheCreation5mInputPrice:  p.FastPriceReference.CacheCreation5mInputPrice,
+			CacheCreation1hInputPrice:  p.FastPriceReference.CacheCreation1hInputPrice,
+			CacheCreation30mInputPrice: p.FastPriceReference.CacheCreation30mInputPrice,
+			OutputPrice:                p.FastPriceReference.OutputPrice,
+			ReasoningOutputPrice:       p.FastPriceReference.ReasoningOutputPrice,
+			Source:                     p.FastPriceReference.Source,
+			CheckedAt:                  p.FastPriceReference.CheckedAt.UTC().Format(time.DateOnly),
 		}
 	}
 	if p.EffectiveTo != nil {
@@ -361,16 +361,16 @@ func parseFastPriceRequest(req *fastPriceRequest) (*modelprice.FastPriceInput, e
 		checkedAt = &parsed
 	}
 	return &modelprice.FastPriceInput{
-		UncachedInputPrice:      req.UncachedInputPrice,
-		CacheReadInputPrice:     req.CacheReadInputPrice,
-		CacheWrite5mInputPrice:  req.CacheWrite5mInputPrice,
-		CacheWrite1hInputPrice:  req.CacheWrite1hInputPrice,
-		CacheWrite30mInputPrice: req.CacheWrite30mInputPrice,
-		OutputPrice:             req.OutputPrice,
-		ReasoningOutputPrice:    req.ReasoningOutputPrice,
-		SalePrices:              saleVectorInput(req.SalePrices),
-		ReferenceSource:         req.ReferenceSource,
-		ReferenceCheckedAt:      checkedAt,
+		UncachedInputPrice:         req.UncachedInputPrice,
+		CacheReadInputPrice:        req.CacheReadInputPrice,
+		CacheCreation5mInputPrice:  req.CacheCreation5mInputPrice,
+		CacheCreation1hInputPrice:  req.CacheCreation1hInputPrice,
+		CacheCreation30mInputPrice: req.CacheCreation30mInputPrice,
+		OutputPrice:                req.OutputPrice,
+		ReasoningOutputPrice:       req.ReasoningOutputPrice,
+		SalePrices:                 saleVectorInput(req.SalePrices),
+		ReferenceSource:            req.ReferenceSource,
+		ReferenceCheckedAt:         checkedAt,
 	}, nil
 }
 
@@ -379,13 +379,13 @@ func saleVectorInput(in *salePriceVectorDTO) *modelprice.SalePriceVector {
 		return nil
 	}
 	return &modelprice.SalePriceVector{
-		UncachedInputPrice:      in.UncachedInputPrice,
-		CacheReadInputPrice:     in.CacheReadInputPrice,
-		CacheWrite5mInputPrice:  in.CacheWrite5mInputPrice,
-		CacheWrite1hInputPrice:  in.CacheWrite1hInputPrice,
-		CacheWrite30mInputPrice: in.CacheWrite30mInputPrice,
-		OutputPrice:             in.OutputPrice,
-		ReasoningOutputPrice:    in.ReasoningOutputPrice,
+		UncachedInputPrice:         in.UncachedInputPrice,
+		CacheReadInputPrice:        in.CacheReadInputPrice,
+		CacheCreation5mInputPrice:  in.CacheCreation5mInputPrice,
+		CacheCreation1hInputPrice:  in.CacheCreation1hInputPrice,
+		CacheCreation30mInputPrice: in.CacheCreation30mInputPrice,
+		OutputPrice:                in.OutputPrice,
+		ReasoningOutputPrice:       in.ReasoningOutputPrice,
 	}
 }
 
@@ -394,12 +394,12 @@ func saleVectorDTO(in *modelprice.SalePriceVector) *salePriceVectorDTO {
 		return nil
 	}
 	return &salePriceVectorDTO{
-		UncachedInputPrice:      in.UncachedInputPrice,
-		CacheReadInputPrice:     in.CacheReadInputPrice,
-		CacheWrite5mInputPrice:  in.CacheWrite5mInputPrice,
-		CacheWrite1hInputPrice:  in.CacheWrite1hInputPrice,
-		CacheWrite30mInputPrice: in.CacheWrite30mInputPrice,
-		OutputPrice:             in.OutputPrice,
-		ReasoningOutputPrice:    in.ReasoningOutputPrice,
+		UncachedInputPrice:         in.UncachedInputPrice,
+		CacheReadInputPrice:        in.CacheReadInputPrice,
+		CacheCreation5mInputPrice:  in.CacheCreation5mInputPrice,
+		CacheCreation1hInputPrice:  in.CacheCreation1hInputPrice,
+		CacheCreation30mInputPrice: in.CacheCreation30mInputPrice,
+		OutputPrice:                in.OutputPrice,
+		ReasoningOutputPrice:       in.ReasoningOutputPrice,
 	}
 }

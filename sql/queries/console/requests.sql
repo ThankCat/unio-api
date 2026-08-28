@@ -82,17 +82,17 @@ WITH filtered_page AS (
       CASE WHEN sqlc.narg(sort_field)::text = 'tokens' AND COALESCE(sqlc.narg(sort_desc)::bool, false) THEN (
         COALESCE(ur.uncached_input_tokens, 0)
         + COALESCE(ur.cache_read_input_tokens, 0)
-        + COALESCE(ur.cache_write_5m_input_tokens, 0)
-        + COALESCE(ur.cache_write_1h_input_tokens, 0)
-        + COALESCE(ur.cache_write_30m_input_tokens, 0)
+        + COALESCE(ur.cache_creation_5m_input_tokens, 0)
+        + COALESCE(ur.cache_creation_1h_input_tokens, 0)
+        + COALESCE(ur.cache_creation_30m_input_tokens, 0)
         + COALESCE(ur.output_tokens_total, 0)
       ) END DESC NULLS LAST,
       CASE WHEN sqlc.narg(sort_field)::text = 'tokens' AND NOT COALESCE(sqlc.narg(sort_desc)::bool, false) THEN (
         COALESCE(ur.uncached_input_tokens, 0)
         + COALESCE(ur.cache_read_input_tokens, 0)
-        + COALESCE(ur.cache_write_5m_input_tokens, 0)
-        + COALESCE(ur.cache_write_1h_input_tokens, 0)
-        + COALESCE(ur.cache_write_30m_input_tokens, 0)
+        + COALESCE(ur.cache_creation_5m_input_tokens, 0)
+        + COALESCE(ur.cache_creation_1h_input_tokens, 0)
+        + COALESCE(ur.cache_creation_30m_input_tokens, 0)
         + COALESCE(ur.output_tokens_total, 0)
       ) END ASC NULLS LAST,
       r.id DESC
@@ -115,23 +115,23 @@ SELECT
     ps.uncached_input_price AS input_price_per_1m,
     ps.output_price AS output_price_per_1m,
     ps.cache_read_input_price AS cache_read_price_per_1m,
-    ps.cache_write_5m_input_price AS cache_write_5m_price_per_1m,
-    ps.cache_write_1h_input_price AS cache_write_1h_price_per_1m,
-    ps.cache_write_30m_input_price AS cache_write_30m_price_per_1m,
+    ps.cache_creation_5m_input_price AS cache_creation_5m_price_per_1m,
+    ps.cache_creation_1h_input_price AS cache_creation_1h_price_per_1m,
+    ps.cache_creation_30m_input_price AS cache_creation_30m_price_per_1m,
     ps.reasoning_output_price AS reasoning_output_price_per_1m,
     ps.service_tier AS price_service_tier,
     r.reasoning_effort,
     COALESCE(ur.uncached_input_tokens, 0)::bigint AS uncached_input_tokens,
     COALESCE(ur.cache_read_input_tokens, 0)::bigint AS cache_read_input_tokens,
-    COALESCE(ur.cache_write_5m_input_tokens, 0)::bigint AS cache_write_5m_input_tokens,
-    COALESCE(ur.cache_write_1h_input_tokens, 0)::bigint AS cache_write_1h_input_tokens,
-    COALESCE(ur.cache_write_30m_input_tokens, 0)::bigint AS cache_write_30m_input_tokens,
+    COALESCE(ur.cache_creation_5m_input_tokens, 0)::bigint AS cache_creation_5m_input_tokens,
+    COALESCE(ur.cache_creation_1h_input_tokens, 0)::bigint AS cache_creation_1h_input_tokens,
+    COALESCE(ur.cache_creation_30m_input_tokens, 0)::bigint AS cache_creation_30m_input_tokens,
     (
         COALESCE(ur.uncached_input_tokens, 0)
         + COALESCE(ur.cache_read_input_tokens, 0)
-        + COALESCE(ur.cache_write_5m_input_tokens, 0)
-        + COALESCE(ur.cache_write_1h_input_tokens, 0)
-        + COALESCE(ur.cache_write_30m_input_tokens, 0)
+        + COALESCE(ur.cache_creation_5m_input_tokens, 0)
+        + COALESCE(ur.cache_creation_1h_input_tokens, 0)
+        + COALESCE(ur.cache_creation_30m_input_tokens, 0)
     )::bigint AS input_tokens,
     COALESCE(ur.output_tokens_total, 0)::bigint AS output_tokens,
     COALESCE(ur.reasoning_output_tokens, 0)::bigint AS reasoning_output_tokens,
@@ -191,17 +191,17 @@ ORDER BY
   CASE WHEN sqlc.narg(sort_field)::text = 'tokens' AND COALESCE(sqlc.narg(sort_desc)::bool, false) THEN (
     COALESCE(ur.uncached_input_tokens, 0)
     + COALESCE(ur.cache_read_input_tokens, 0)
-    + COALESCE(ur.cache_write_5m_input_tokens, 0)
-    + COALESCE(ur.cache_write_1h_input_tokens, 0)
-    + COALESCE(ur.cache_write_30m_input_tokens, 0)
+    + COALESCE(ur.cache_creation_5m_input_tokens, 0)
+    + COALESCE(ur.cache_creation_1h_input_tokens, 0)
+    + COALESCE(ur.cache_creation_30m_input_tokens, 0)
     + COALESCE(ur.output_tokens_total, 0)
   ) END DESC NULLS LAST,
   CASE WHEN sqlc.narg(sort_field)::text = 'tokens' AND NOT COALESCE(sqlc.narg(sort_desc)::bool, false) THEN (
     COALESCE(ur.uncached_input_tokens, 0)
     + COALESCE(ur.cache_read_input_tokens, 0)
-    + COALESCE(ur.cache_write_5m_input_tokens, 0)
-    + COALESCE(ur.cache_write_1h_input_tokens, 0)
-    + COALESCE(ur.cache_write_30m_input_tokens, 0)
+    + COALESCE(ur.cache_creation_5m_input_tokens, 0)
+    + COALESCE(ur.cache_creation_1h_input_tokens, 0)
+    + COALESCE(ur.cache_creation_30m_input_tokens, 0)
     + COALESCE(ur.output_tokens_total, 0)
   ) END ASC NULLS LAST,
   r.id DESC;
@@ -292,26 +292,26 @@ SELECT
     COALESCE(SUM(
         COALESCE(ur.uncached_input_tokens, 0)
         + COALESCE(ur.cache_read_input_tokens, 0)
-        + COALESCE(ur.cache_write_5m_input_tokens, 0)
-        + COALESCE(ur.cache_write_1h_input_tokens, 0)
-        + COALESCE(ur.cache_write_30m_input_tokens, 0)
+        + COALESCE(ur.cache_creation_5m_input_tokens, 0)
+        + COALESCE(ur.cache_creation_1h_input_tokens, 0)
+        + COALESCE(ur.cache_creation_30m_input_tokens, 0)
         + COALESCE(ur.output_tokens_total, 0)
     ), 0)::bigint AS token_count,
     COALESCE(SUM(
         COALESCE(ur.uncached_input_tokens, 0)
         + COALESCE(ur.cache_read_input_tokens, 0)
-        + COALESCE(ur.cache_write_5m_input_tokens, 0)
-        + COALESCE(ur.cache_write_1h_input_tokens, 0)
-        + COALESCE(ur.cache_write_30m_input_tokens, 0)
+        + COALESCE(ur.cache_creation_5m_input_tokens, 0)
+        + COALESCE(ur.cache_creation_1h_input_tokens, 0)
+        + COALESCE(ur.cache_creation_30m_input_tokens, 0)
     ), 0)::bigint AS input_token_count,
     COALESCE(SUM(COALESCE(ur.output_tokens_total, 0)), 0)::bigint AS output_token_count,
     COALESCE(SUM(COALESCE(ur.uncached_input_tokens, 0)), 0)::bigint AS uncached_input_token_count,
     COALESCE(SUM(COALESCE(ur.cache_read_input_tokens, 0)), 0)::bigint AS cache_read_token_count,
     COALESCE(SUM(
-        COALESCE(ur.cache_write_5m_input_tokens, 0)
-        + COALESCE(ur.cache_write_1h_input_tokens, 0)
-        + COALESCE(ur.cache_write_30m_input_tokens, 0)
-    ), 0)::bigint AS cache_write_token_count,
+        COALESCE(ur.cache_creation_5m_input_tokens, 0)
+        + COALESCE(ur.cache_creation_1h_input_tokens, 0)
+        + COALESCE(ur.cache_creation_30m_input_tokens, 0)
+    ), 0)::bigint AS cache_creation_token_count,
     COALESCE(SUM(c.charge_usd), 0)::numeric AS charge_usd,
     COALESCE(SUM(
         COALESCE(ur.uncached_input_tokens, 0)::numeric
@@ -333,16 +333,16 @@ SELECT
         / 1000000
     ), 0)::numeric AS cache_read_charge_usd,
     COALESCE(SUM(
-        COALESCE(ur.cache_write_5m_input_tokens, 0)::numeric
-            * COALESCE(ps.cache_write_5m_input_price, ps.uncached_input_price, 0)
+        COALESCE(ur.cache_creation_5m_input_tokens, 0)::numeric
+            * COALESCE(ps.cache_creation_5m_input_price, ps.uncached_input_price, 0)
             / 1000000
-        + COALESCE(ur.cache_write_1h_input_tokens, 0)::numeric
-            * COALESCE(ps.cache_write_1h_input_price, ps.uncached_input_price, 0)
+        + COALESCE(ur.cache_creation_1h_input_tokens, 0)::numeric
+            * COALESCE(ps.cache_creation_1h_input_price, ps.uncached_input_price, 0)
             / 1000000
-        + COALESCE(ur.cache_write_30m_input_tokens, 0)::numeric
-            * COALESCE(ps.cache_write_30m_input_price, ps.uncached_input_price, 0)
+        + COALESCE(ur.cache_creation_30m_input_tokens, 0)::numeric
+            * COALESCE(ps.cache_creation_30m_input_price, ps.uncached_input_price, 0)
             / 1000000
-    ), 0)::numeric AS cache_write_charge_usd,
+    ), 0)::numeric AS cache_creation_charge_usd,
     COALESCE(SUM(
         (
             COALESCE(ur.uncached_input_tokens, 0)::numeric
@@ -355,12 +355,12 @@ SELECT
                 * COALESCE(ps.reasoning_output_price, ps.output_price, 0)
             + COALESCE(ur.cache_read_input_tokens, 0)::numeric
                 * COALESCE(ps.cache_read_input_price, ps.uncached_input_price, 0)
-            + COALESCE(ur.cache_write_5m_input_tokens, 0)::numeric
-                * COALESCE(ps.cache_write_5m_input_price, ps.uncached_input_price, 0)
-            + COALESCE(ur.cache_write_1h_input_tokens, 0)::numeric
-                * COALESCE(ps.cache_write_1h_input_price, ps.uncached_input_price, 0)
-            + COALESCE(ur.cache_write_30m_input_tokens, 0)::numeric
-                * COALESCE(ps.cache_write_30m_input_price, ps.uncached_input_price, 0)
+            + COALESCE(ur.cache_creation_5m_input_tokens, 0)::numeric
+                * COALESCE(ps.cache_creation_5m_input_price, ps.uncached_input_price, 0)
+            + COALESCE(ur.cache_creation_1h_input_tokens, 0)::numeric
+                * COALESCE(ps.cache_creation_1h_input_price, ps.uncached_input_price, 0)
+            + COALESCE(ur.cache_creation_30m_input_tokens, 0)::numeric
+                * COALESCE(ps.cache_creation_30m_input_price, ps.uncached_input_price, 0)
         ) / 1000000
         / COALESCE(NULLIF(ps.price_ratio, 0), 1)
     ), 0)::numeric AS list_charge_usd,
@@ -522,10 +522,11 @@ LEFT JOIN latest l ON l.requested_model_id = t.requested_model_id
 ORDER BY t.request_count DESC, t.requested_model_id ASC;
 
 -- name: ListConsoleFilterAPIKeys :many
--- 密钥筛选项来自当前用户的 API Key 目录，不按请求历史聚合。
+-- 密钥筛选项来自当前用户的 API Key 目录，不按请求历史聚合；已软删除的密钥不进筛选。
 SELECT ak.id, ak.name
 FROM api_keys ak
 WHERE ak.user_id = sqlc.arg(user_id)
+  AND ak.deleted_at IS NULL
 ORDER BY ak.name, ak.id;
 
 -- name: ListConsoleBilledRequestEndpoints :many

@@ -122,7 +122,7 @@ func TestRadarAggregates(t *testing.T) {
 		},
 		throughput: sqlc.DashboardRadarThroughputRow{OutputTokens: 5000, GenerationSeconds: 100},
 		radarTokens: sqlc.DashboardRadarTokensRow{
-			UncachedInput: 600, CacheReadInput: 300, CacheWriteInput: 100, OutputTokens: 5000,
+			UncachedInput: 600, CacheReadInput: 300, CacheCreationInput: 100, OutputTokens: 5000,
 			CacheMetricUncachedInput: 600, CacheMetricReadInput: 300, CacheMetricWrite5mInput: 100,
 			CacheUsageRecords: 10, CacheEvaluableRecords: 10,
 		},
@@ -154,8 +154,8 @@ func TestRadarAggregates(t *testing.T) {
 	if out.Cache.ReadRate == nil || *out.Cache.ReadRate < 0.29 || *out.Cache.ReadRate > 0.31 { // 300/1000
 		t.Fatalf("cache rate = %v, want ~0.3", out.Cache.ReadRate)
 	}
-	if out.Cache.WriteRate == nil || *out.Cache.WriteRate < 0.09 || *out.Cache.WriteRate > 0.11 { // 100/1000
-		t.Fatalf("cache write rate = %v, want ~0.1", out.Cache.WriteRate)
+	if out.Cache.CreationRate == nil || *out.Cache.CreationRate < 0.09 || *out.Cache.CreationRate > 0.11 { // 100/1000
+		t.Fatalf("cache creation rate = %v, want ~0.1", out.Cache.CreationRate)
 	}
 	if out.Latency.Sample != 96 {
 		t.Fatalf("latency sample = %d, want 96", out.Latency.Sample)

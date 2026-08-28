@@ -461,15 +461,15 @@ func usageLogFields(facts usage.Facts, source usage.Source) []zap.Field {
 			fields = append(fields, zap.Int64(key, count.Value))
 		}
 	}
-	if facts.UncachedInputTokens.IsKnown() || facts.CacheReadInputTokens.IsKnown() || facts.CacheWrite5mInputTokens.IsKnown() || facts.CacheWrite1hInputTokens.IsKnown() || facts.CacheWrite30mInputTokens.IsKnown() {
+	if facts.UncachedInputTokens.IsKnown() || facts.CacheReadInputTokens.IsKnown() || facts.CacheCreation5mInputTokens.IsKnown() || facts.CacheCreation1hInputTokens.IsKnown() || facts.CacheCreation30mInputTokens.IsKnown() {
 		fields = append(fields, zap.Int64("input_tokens",
 			knownTokenValue(facts.UncachedInputTokens)+knownTokenValue(facts.CacheReadInputTokens)+
-				knownTokenValue(facts.CacheWrite5mInputTokens)+knownTokenValue(facts.CacheWrite1hInputTokens)+knownTokenValue(facts.CacheWrite30mInputTokens)))
+				knownTokenValue(facts.CacheCreation5mInputTokens)+knownTokenValue(facts.CacheCreation1hInputTokens)+knownTokenValue(facts.CacheCreation30mInputTokens)))
 	}
 	appendKnown("cache_read_input_tokens", facts.CacheReadInputTokens)
-	if facts.CacheWrite5mInputTokens.IsKnown() || facts.CacheWrite1hInputTokens.IsKnown() || facts.CacheWrite30mInputTokens.IsKnown() {
-		fields = append(fields, zap.Int64("cache_write_input_tokens",
-			knownTokenValue(facts.CacheWrite5mInputTokens)+knownTokenValue(facts.CacheWrite1hInputTokens)+knownTokenValue(facts.CacheWrite30mInputTokens)))
+	if facts.CacheCreation5mInputTokens.IsKnown() || facts.CacheCreation1hInputTokens.IsKnown() || facts.CacheCreation30mInputTokens.IsKnown() {
+		fields = append(fields, zap.Int64("cache_creation_input_tokens",
+			knownTokenValue(facts.CacheCreation5mInputTokens)+knownTokenValue(facts.CacheCreation1hInputTokens)+knownTokenValue(facts.CacheCreation30mInputTokens)))
 	}
 	appendKnown("output_tokens", facts.OutputTokensTotal)
 	appendKnown("reasoning_tokens", facts.ReasoningOutputTokens)

@@ -673,17 +673,17 @@ WITH filtered_page AS (
       CASE WHEN $1::text = 'tokens' AND COALESCE($2::bool, false) THEN (
         COALESCE(ur.uncached_input_tokens, 0)
         + COALESCE(ur.cache_read_input_tokens, 0)
-        + COALESCE(ur.cache_write_5m_input_tokens, 0)
-        + COALESCE(ur.cache_write_1h_input_tokens, 0)
-        + COALESCE(ur.cache_write_30m_input_tokens, 0)
+        + COALESCE(ur.cache_creation_5m_input_tokens, 0)
+        + COALESCE(ur.cache_creation_1h_input_tokens, 0)
+        + COALESCE(ur.cache_creation_30m_input_tokens, 0)
         + COALESCE(ur.output_tokens_total, 0)
       ) END DESC NULLS LAST,
       CASE WHEN $1::text = 'tokens' AND NOT COALESCE($2::bool, false) THEN (
         COALESCE(ur.uncached_input_tokens, 0)
         + COALESCE(ur.cache_read_input_tokens, 0)
-        + COALESCE(ur.cache_write_5m_input_tokens, 0)
-        + COALESCE(ur.cache_write_1h_input_tokens, 0)
-        + COALESCE(ur.cache_write_30m_input_tokens, 0)
+        + COALESCE(ur.cache_creation_5m_input_tokens, 0)
+        + COALESCE(ur.cache_creation_1h_input_tokens, 0)
+        + COALESCE(ur.cache_creation_30m_input_tokens, 0)
         + COALESCE(ur.output_tokens_total, 0)
       ) END ASC NULLS LAST,
       r.id DESC
@@ -706,23 +706,23 @@ SELECT
     ps.uncached_input_price AS input_price_per_1m,
     ps.output_price AS output_price_per_1m,
     ps.cache_read_input_price AS cache_read_price_per_1m,
-    ps.cache_write_5m_input_price AS cache_write_5m_price_per_1m,
-    ps.cache_write_1h_input_price AS cache_write_1h_price_per_1m,
-    ps.cache_write_30m_input_price AS cache_write_30m_price_per_1m,
+    ps.cache_creation_5m_input_price AS cache_creation_5m_price_per_1m,
+    ps.cache_creation_1h_input_price AS cache_creation_1h_price_per_1m,
+    ps.cache_creation_30m_input_price AS cache_creation_30m_price_per_1m,
     ps.reasoning_output_price AS reasoning_output_price_per_1m,
     ps.service_tier AS price_service_tier,
     r.reasoning_effort,
     COALESCE(ur.uncached_input_tokens, 0)::bigint AS uncached_input_tokens,
     COALESCE(ur.cache_read_input_tokens, 0)::bigint AS cache_read_input_tokens,
-    COALESCE(ur.cache_write_5m_input_tokens, 0)::bigint AS cache_write_5m_input_tokens,
-    COALESCE(ur.cache_write_1h_input_tokens, 0)::bigint AS cache_write_1h_input_tokens,
-    COALESCE(ur.cache_write_30m_input_tokens, 0)::bigint AS cache_write_30m_input_tokens,
+    COALESCE(ur.cache_creation_5m_input_tokens, 0)::bigint AS cache_creation_5m_input_tokens,
+    COALESCE(ur.cache_creation_1h_input_tokens, 0)::bigint AS cache_creation_1h_input_tokens,
+    COALESCE(ur.cache_creation_30m_input_tokens, 0)::bigint AS cache_creation_30m_input_tokens,
     (
         COALESCE(ur.uncached_input_tokens, 0)
         + COALESCE(ur.cache_read_input_tokens, 0)
-        + COALESCE(ur.cache_write_5m_input_tokens, 0)
-        + COALESCE(ur.cache_write_1h_input_tokens, 0)
-        + COALESCE(ur.cache_write_30m_input_tokens, 0)
+        + COALESCE(ur.cache_creation_5m_input_tokens, 0)
+        + COALESCE(ur.cache_creation_1h_input_tokens, 0)
+        + COALESCE(ur.cache_creation_30m_input_tokens, 0)
     )::bigint AS input_tokens,
     COALESCE(ur.output_tokens_total, 0)::bigint AS output_tokens,
     COALESCE(ur.reasoning_output_tokens, 0)::bigint AS reasoning_output_tokens,
@@ -782,17 +782,17 @@ ORDER BY
   CASE WHEN $1::text = 'tokens' AND COALESCE($2::bool, false) THEN (
     COALESCE(ur.uncached_input_tokens, 0)
     + COALESCE(ur.cache_read_input_tokens, 0)
-    + COALESCE(ur.cache_write_5m_input_tokens, 0)
-    + COALESCE(ur.cache_write_1h_input_tokens, 0)
-    + COALESCE(ur.cache_write_30m_input_tokens, 0)
+    + COALESCE(ur.cache_creation_5m_input_tokens, 0)
+    + COALESCE(ur.cache_creation_1h_input_tokens, 0)
+    + COALESCE(ur.cache_creation_30m_input_tokens, 0)
     + COALESCE(ur.output_tokens_total, 0)
   ) END DESC NULLS LAST,
   CASE WHEN $1::text = 'tokens' AND NOT COALESCE($2::bool, false) THEN (
     COALESCE(ur.uncached_input_tokens, 0)
     + COALESCE(ur.cache_read_input_tokens, 0)
-    + COALESCE(ur.cache_write_5m_input_tokens, 0)
-    + COALESCE(ur.cache_write_1h_input_tokens, 0)
-    + COALESCE(ur.cache_write_30m_input_tokens, 0)
+    + COALESCE(ur.cache_creation_5m_input_tokens, 0)
+    + COALESCE(ur.cache_creation_1h_input_tokens, 0)
+    + COALESCE(ur.cache_creation_30m_input_tokens, 0)
     + COALESCE(ur.output_tokens_total, 0)
   ) END ASC NULLS LAST,
   r.id DESC
@@ -813,40 +813,40 @@ type ListConsoleBilledRequestsParams struct {
 }
 
 type ListConsoleBilledRequestsRow struct {
-	TotalCount                int64
-	ID                        int64
-	RequestID                 string
-	CreatedAt                 pgtype.Timestamptz
-	ClientIp                  pgtype.Text
-	ApiKeyID                  int64
-	ApiKeyName                pgtype.Text
-	ApiKeyPrefix              pgtype.Text
-	Endpoint                  string
-	Stream                    bool
-	RequestedModelID          string
-	ModelDisplayName          pgtype.Text
-	IngressProtocol           string
-	InputPricePer1m           pgtype.Numeric
-	OutputPricePer1m          pgtype.Numeric
-	CacheReadPricePer1m       pgtype.Numeric
-	CacheWrite5mPricePer1m    pgtype.Numeric
-	CacheWrite1hPricePer1m    pgtype.Numeric
-	CacheWrite30mPricePer1m   pgtype.Numeric
-	ReasoningOutputPricePer1m pgtype.Numeric
-	PriceServiceTier          pgtype.Text
-	ReasoningEffort           pgtype.Text
-	UncachedInputTokens       int64
-	CacheReadInputTokens      int64
-	CacheWrite5mInputTokens   int64
-	CacheWrite1hInputTokens   int64
-	CacheWrite30mInputTokens  int64
-	InputTokens               int64
-	OutputTokens              int64
-	ReasoningOutputTokens     int64
-	StartedAt                 pgtype.Timestamptz
-	CompletedAt               pgtype.Timestamptz
-	GatewayFirstTokenAt       pgtype.Timestamptz
-	UserChargeUsd             pgtype.Numeric
+	TotalCount                  int64
+	ID                          int64
+	RequestID                   string
+	CreatedAt                   pgtype.Timestamptz
+	ClientIp                    pgtype.Text
+	ApiKeyID                    int64
+	ApiKeyName                  pgtype.Text
+	ApiKeyPrefix                pgtype.Text
+	Endpoint                    string
+	Stream                      bool
+	RequestedModelID            string
+	ModelDisplayName            pgtype.Text
+	IngressProtocol             string
+	InputPricePer1m             pgtype.Numeric
+	OutputPricePer1m            pgtype.Numeric
+	CacheReadPricePer1m         pgtype.Numeric
+	CacheCreation5mPricePer1m   pgtype.Numeric
+	CacheCreation1hPricePer1m   pgtype.Numeric
+	CacheCreation30mPricePer1m  pgtype.Numeric
+	ReasoningOutputPricePer1m   pgtype.Numeric
+	PriceServiceTier            pgtype.Text
+	ReasoningEffort             pgtype.Text
+	UncachedInputTokens         int64
+	CacheReadInputTokens        int64
+	CacheCreation5mInputTokens  int64
+	CacheCreation1hInputTokens  int64
+	CacheCreation30mInputTokens int64
+	InputTokens                 int64
+	OutputTokens                int64
+	ReasoningOutputTokens       int64
+	StartedAt                   pgtype.Timestamptz
+	CompletedAt                 pgtype.Timestamptz
+	GatewayFirstTokenAt         pgtype.Timestamptz
+	UserChargeUsd               pgtype.Numeric
 }
 
 // Console 客户请求日志：只查当前用户、且账本 USD 净扣费大于 0 的请求。
@@ -890,17 +890,17 @@ func (q *Queries) ListConsoleBilledRequests(ctx context.Context, arg ListConsole
 			&i.InputPricePer1m,
 			&i.OutputPricePer1m,
 			&i.CacheReadPricePer1m,
-			&i.CacheWrite5mPricePer1m,
-			&i.CacheWrite1hPricePer1m,
-			&i.CacheWrite30mPricePer1m,
+			&i.CacheCreation5mPricePer1m,
+			&i.CacheCreation1hPricePer1m,
+			&i.CacheCreation30mPricePer1m,
 			&i.ReasoningOutputPricePer1m,
 			&i.PriceServiceTier,
 			&i.ReasoningEffort,
 			&i.UncachedInputTokens,
 			&i.CacheReadInputTokens,
-			&i.CacheWrite5mInputTokens,
-			&i.CacheWrite1hInputTokens,
-			&i.CacheWrite30mInputTokens,
+			&i.CacheCreation5mInputTokens,
+			&i.CacheCreation1hInputTokens,
+			&i.CacheCreation30mInputTokens,
 			&i.InputTokens,
 			&i.OutputTokens,
 			&i.ReasoningOutputTokens,
@@ -923,6 +923,7 @@ const listConsoleFilterAPIKeys = `-- name: ListConsoleFilterAPIKeys :many
 SELECT ak.id, ak.name
 FROM api_keys ak
 WHERE ak.user_id = $1
+  AND ak.deleted_at IS NULL
 ORDER BY ak.name, ak.id
 `
 
@@ -931,7 +932,7 @@ type ListConsoleFilterAPIKeysRow struct {
 	Name string
 }
 
-// 密钥筛选项来自当前用户的 API Key 目录，不按请求历史聚合。
+// 密钥筛选项来自当前用户的 API Key 目录，不按请求历史聚合；已软删除的密钥不进筛选。
 func (q *Queries) ListConsoleFilterAPIKeys(ctx context.Context, userID int64) ([]ListConsoleFilterAPIKeysRow, error) {
 	rows, err := q.db.Query(ctx, listConsoleFilterAPIKeys, userID)
 	if err != nil {
@@ -1028,33 +1029,33 @@ SELECT
     ak.key_prefix AS api_key_prefix,
     COALESCE(ur.uncached_input_tokens, 0)::bigint AS uncached_input_tokens,
     COALESCE(ur.cache_read_input_tokens, 0)::bigint AS cache_read_input_tokens,
-    COALESCE(ur.cache_write_5m_input_tokens, 0)::bigint AS cache_write_5m_input_tokens,
-    COALESCE(ur.cache_write_1h_input_tokens, 0)::bigint AS cache_write_1h_input_tokens,
-    COALESCE(ur.cache_write_30m_input_tokens, 0)::bigint AS cache_write_30m_input_tokens,
+    COALESCE(ur.cache_creation_5m_input_tokens, 0)::bigint AS cache_creation_5m_input_tokens,
+    COALESCE(ur.cache_creation_1h_input_tokens, 0)::bigint AS cache_creation_1h_input_tokens,
+    COALESCE(ur.cache_creation_30m_input_tokens, 0)::bigint AS cache_creation_30m_input_tokens,
     COALESCE(ur.output_tokens_total, 0)::bigint AS output_tokens_total,
     COALESCE(ur.reasoning_output_tokens, 0)::bigint AS reasoning_output_tokens,
     cs.total_cost_amount,
     cs.uncached_input_cost_amount,
     cs.cache_read_input_cost_amount,
-    cs.cache_write_5m_input_cost_amount,
-    cs.cache_write_1h_input_cost_amount,
-    cs.cache_write_30m_input_cost_amount,
+    cs.cache_creation_5m_input_cost_amount,
+    cs.cache_creation_1h_input_cost_amount,
+    cs.cache_creation_30m_input_cost_amount,
     cs.output_cost_amount,
     cs.reasoning_output_cost_amount,
     cs.uncached_input_cost,
     cs.cache_read_input_cost,
-    cs.cache_write_5m_input_cost,
-    cs.cache_write_1h_input_cost,
-    cs.cache_write_30m_input_cost,
+    cs.cache_creation_5m_input_cost,
+    cs.cache_creation_1h_input_cost,
+    cs.cache_creation_30m_input_cost,
     cs.output_cost,
     cs.reasoning_output_cost,
     cs.cost_multiplier AS channel_cost_multiplier,
     cs.recharge_factor,
     ps.uncached_input_price,
     ps.cache_read_input_price,
-    ps.cache_write_5m_input_price,
-    ps.cache_write_1h_input_price,
-    ps.cache_write_30m_input_price,
+    ps.cache_creation_5m_input_price,
+    ps.cache_creation_1h_input_price,
+    ps.cache_creation_30m_input_price,
     ps.output_price,
     ps.reasoning_output_price,
     ps.service_tier AS price_service_tier,
@@ -1183,94 +1184,94 @@ type ListRequestRecordsPageParams struct {
 }
 
 type ListRequestRecordsPageRow struct {
-	TotalCount                   int64
-	ID                           int64
-	RequestID                    string
-	UserID                       int64
-	ApiKeyID                     int64
-	RequestedModelID             string
-	IngressProtocol              string
-	Endpoint                     string
-	ResponseModelID              pgtype.Text
-	ResponseProtocol             pgtype.Text
-	ResponseID                   pgtype.Text
-	Stream                       bool
-	Status                       string
-	FinalProviderID              pgtype.Int8
-	FinalChannelID               pgtype.Int8
-	ErrorCode                    pgtype.Text
-	ErrorMessage                 pgtype.Text
-	DeliveryStatus               string
-	GatewayFirstTokenAt          pgtype.Timestamptz
-	ResponseCompletedAt          pgtype.Timestamptz
-	StartedAt                    pgtype.Timestamptz
-	CompletedAt                  pgtype.Timestamptz
-	CreatedAt                    pgtype.Timestamptz
-	UpdatedAt                    pgtype.Timestamptz
-	RequestedServiceTier         pgtype.Text
-	ActualServiceTier            pgtype.Text
-	SettledServiceTier           pgtype.Text
-	ServiceTierResolution        pgtype.Text
-	ApiKeyName                   pgtype.Text
-	ApiKeyPrefix                 pgtype.Text
-	UncachedInputTokens          int64
-	CacheReadInputTokens         int64
-	CacheWrite5mInputTokens      int64
-	CacheWrite1hInputTokens      int64
-	CacheWrite30mInputTokens     int64
-	OutputTokensTotal            int64
-	ReasoningOutputTokens        int64
-	TotalCostAmount              pgtype.Numeric
-	UncachedInputCostAmount      pgtype.Numeric
-	CacheReadInputCostAmount     pgtype.Numeric
-	CacheWrite5mInputCostAmount  pgtype.Numeric
-	CacheWrite1hInputCostAmount  pgtype.Numeric
-	CacheWrite30mInputCostAmount pgtype.Numeric
-	OutputCostAmount             pgtype.Numeric
-	ReasoningOutputCostAmount    pgtype.Numeric
-	UncachedInputCost            pgtype.Numeric
-	CacheReadInputCost           pgtype.Numeric
-	CacheWrite5mInputCost        pgtype.Numeric
-	CacheWrite1hInputCost        pgtype.Numeric
-	CacheWrite30mInputCost       pgtype.Numeric
-	OutputCost                   pgtype.Numeric
-	ReasoningOutputCost          pgtype.Numeric
-	ChannelCostMultiplier        pgtype.Numeric
-	RechargeFactor               pgtype.Numeric
-	UncachedInputPrice           pgtype.Numeric
-	CacheReadInputPrice          pgtype.Numeric
-	CacheWrite5mInputPrice       pgtype.Numeric
-	CacheWrite1hInputPrice       pgtype.Numeric
-	CacheWrite30mInputPrice      pgtype.Numeric
-	OutputPrice                  pgtype.Numeric
-	ReasoningOutputPrice         pgtype.Numeric
-	PriceServiceTier             pgtype.Text
-	CostServiceTier              pgtype.Text
-	ModelPriceServiceTierID      pgtype.Int8
-	ChannelPriceServiceTierID    pgtype.Int8
-	TierCostSource               pgtype.Text
-	UserChargeAmount             pgtype.Numeric
-	ReasoningEffort              pgtype.Text
-	ReasoningBudgetTokens        pgtype.Int4
-	ClientIp                     pgtype.Text
-	SalePriceRatio               pgtype.Numeric
-	LongContextApplied           bool
-	ModelDisplayName             pgtype.Text
-	ModelOwnedBy                 pgtype.Text
-	FinalChannelName             pgtype.Text
-	ChannelChain                 string
-	ScoringAttemptID             int64
-	ScoringDimensions            []string
-	ScoringErrorFailure          bool
-	StickyKeyPresent             pgtype.Bool
-	StickyAction                 pgtype.Text
-	StickyReason                 pgtype.Text
-	StickyBeforeChannelID        pgtype.Int8
-	StickyAfterChannelID         pgtype.Int8
-	StickyPinned                 string
-	StickyPinnedNonPreferred     string
-	StickyBeforeChannelName      pgtype.Text
-	StickyAfterChannelName       pgtype.Text
+	TotalCount                      int64
+	ID                              int64
+	RequestID                       string
+	UserID                          int64
+	ApiKeyID                        int64
+	RequestedModelID                string
+	IngressProtocol                 string
+	Endpoint                        string
+	ResponseModelID                 pgtype.Text
+	ResponseProtocol                pgtype.Text
+	ResponseID                      pgtype.Text
+	Stream                          bool
+	Status                          string
+	FinalProviderID                 pgtype.Int8
+	FinalChannelID                  pgtype.Int8
+	ErrorCode                       pgtype.Text
+	ErrorMessage                    pgtype.Text
+	DeliveryStatus                  string
+	GatewayFirstTokenAt             pgtype.Timestamptz
+	ResponseCompletedAt             pgtype.Timestamptz
+	StartedAt                       pgtype.Timestamptz
+	CompletedAt                     pgtype.Timestamptz
+	CreatedAt                       pgtype.Timestamptz
+	UpdatedAt                       pgtype.Timestamptz
+	RequestedServiceTier            pgtype.Text
+	ActualServiceTier               pgtype.Text
+	SettledServiceTier              pgtype.Text
+	ServiceTierResolution           pgtype.Text
+	ApiKeyName                      pgtype.Text
+	ApiKeyPrefix                    pgtype.Text
+	UncachedInputTokens             int64
+	CacheReadInputTokens            int64
+	CacheCreation5mInputTokens      int64
+	CacheCreation1hInputTokens      int64
+	CacheCreation30mInputTokens     int64
+	OutputTokensTotal               int64
+	ReasoningOutputTokens           int64
+	TotalCostAmount                 pgtype.Numeric
+	UncachedInputCostAmount         pgtype.Numeric
+	CacheReadInputCostAmount        pgtype.Numeric
+	CacheCreation5mInputCostAmount  pgtype.Numeric
+	CacheCreation1hInputCostAmount  pgtype.Numeric
+	CacheCreation30mInputCostAmount pgtype.Numeric
+	OutputCostAmount                pgtype.Numeric
+	ReasoningOutputCostAmount       pgtype.Numeric
+	UncachedInputCost               pgtype.Numeric
+	CacheReadInputCost              pgtype.Numeric
+	CacheCreation5mInputCost        pgtype.Numeric
+	CacheCreation1hInputCost        pgtype.Numeric
+	CacheCreation30mInputCost       pgtype.Numeric
+	OutputCost                      pgtype.Numeric
+	ReasoningOutputCost             pgtype.Numeric
+	ChannelCostMultiplier           pgtype.Numeric
+	RechargeFactor                  pgtype.Numeric
+	UncachedInputPrice              pgtype.Numeric
+	CacheReadInputPrice             pgtype.Numeric
+	CacheCreation5mInputPrice       pgtype.Numeric
+	CacheCreation1hInputPrice       pgtype.Numeric
+	CacheCreation30mInputPrice      pgtype.Numeric
+	OutputPrice                     pgtype.Numeric
+	ReasoningOutputPrice            pgtype.Numeric
+	PriceServiceTier                pgtype.Text
+	CostServiceTier                 pgtype.Text
+	ModelPriceServiceTierID         pgtype.Int8
+	ChannelPriceServiceTierID       pgtype.Int8
+	TierCostSource                  pgtype.Text
+	UserChargeAmount                pgtype.Numeric
+	ReasoningEffort                 pgtype.Text
+	ReasoningBudgetTokens           pgtype.Int4
+	ClientIp                        pgtype.Text
+	SalePriceRatio                  pgtype.Numeric
+	LongContextApplied              bool
+	ModelDisplayName                pgtype.Text
+	ModelOwnedBy                    pgtype.Text
+	FinalChannelName                pgtype.Text
+	ChannelChain                    string
+	ScoringAttemptID                int64
+	ScoringDimensions               []string
+	ScoringErrorFailure             bool
+	StickyKeyPresent                pgtype.Bool
+	StickyAction                    pgtype.Text
+	StickyReason                    pgtype.Text
+	StickyBeforeChannelID           pgtype.Int8
+	StickyAfterChannelID            pgtype.Int8
+	StickyPinned                    string
+	StickyPinnedNonPreferred        string
+	StickyBeforeChannelName         pgtype.Text
+	StickyAfterChannelName          pgtype.Text
 }
 
 // ListRequestRecordsPage 供 admin 请求记录列表（富化版）按过滤条件分页倒序列出。
@@ -1339,33 +1340,33 @@ func (q *Queries) ListRequestRecordsPage(ctx context.Context, arg ListRequestRec
 			&i.ApiKeyPrefix,
 			&i.UncachedInputTokens,
 			&i.CacheReadInputTokens,
-			&i.CacheWrite5mInputTokens,
-			&i.CacheWrite1hInputTokens,
-			&i.CacheWrite30mInputTokens,
+			&i.CacheCreation5mInputTokens,
+			&i.CacheCreation1hInputTokens,
+			&i.CacheCreation30mInputTokens,
 			&i.OutputTokensTotal,
 			&i.ReasoningOutputTokens,
 			&i.TotalCostAmount,
 			&i.UncachedInputCostAmount,
 			&i.CacheReadInputCostAmount,
-			&i.CacheWrite5mInputCostAmount,
-			&i.CacheWrite1hInputCostAmount,
-			&i.CacheWrite30mInputCostAmount,
+			&i.CacheCreation5mInputCostAmount,
+			&i.CacheCreation1hInputCostAmount,
+			&i.CacheCreation30mInputCostAmount,
 			&i.OutputCostAmount,
 			&i.ReasoningOutputCostAmount,
 			&i.UncachedInputCost,
 			&i.CacheReadInputCost,
-			&i.CacheWrite5mInputCost,
-			&i.CacheWrite1hInputCost,
-			&i.CacheWrite30mInputCost,
+			&i.CacheCreation5mInputCost,
+			&i.CacheCreation1hInputCost,
+			&i.CacheCreation30mInputCost,
 			&i.OutputCost,
 			&i.ReasoningOutputCost,
 			&i.ChannelCostMultiplier,
 			&i.RechargeFactor,
 			&i.UncachedInputPrice,
 			&i.CacheReadInputPrice,
-			&i.CacheWrite5mInputPrice,
-			&i.CacheWrite1hInputPrice,
-			&i.CacheWrite30mInputPrice,
+			&i.CacheCreation5mInputPrice,
+			&i.CacheCreation1hInputPrice,
+			&i.CacheCreation30mInputPrice,
 			&i.OutputPrice,
 			&i.ReasoningOutputPrice,
 			&i.PriceServiceTier,
@@ -1446,26 +1447,26 @@ SELECT
     COALESCE(SUM(
         COALESCE(ur.uncached_input_tokens, 0)
         + COALESCE(ur.cache_read_input_tokens, 0)
-        + COALESCE(ur.cache_write_5m_input_tokens, 0)
-        + COALESCE(ur.cache_write_1h_input_tokens, 0)
-        + COALESCE(ur.cache_write_30m_input_tokens, 0)
+        + COALESCE(ur.cache_creation_5m_input_tokens, 0)
+        + COALESCE(ur.cache_creation_1h_input_tokens, 0)
+        + COALESCE(ur.cache_creation_30m_input_tokens, 0)
         + COALESCE(ur.output_tokens_total, 0)
     ), 0)::bigint AS token_count,
     COALESCE(SUM(
         COALESCE(ur.uncached_input_tokens, 0)
         + COALESCE(ur.cache_read_input_tokens, 0)
-        + COALESCE(ur.cache_write_5m_input_tokens, 0)
-        + COALESCE(ur.cache_write_1h_input_tokens, 0)
-        + COALESCE(ur.cache_write_30m_input_tokens, 0)
+        + COALESCE(ur.cache_creation_5m_input_tokens, 0)
+        + COALESCE(ur.cache_creation_1h_input_tokens, 0)
+        + COALESCE(ur.cache_creation_30m_input_tokens, 0)
     ), 0)::bigint AS input_token_count,
     COALESCE(SUM(COALESCE(ur.output_tokens_total, 0)), 0)::bigint AS output_token_count,
     COALESCE(SUM(COALESCE(ur.uncached_input_tokens, 0)), 0)::bigint AS uncached_input_token_count,
     COALESCE(SUM(COALESCE(ur.cache_read_input_tokens, 0)), 0)::bigint AS cache_read_token_count,
     COALESCE(SUM(
-        COALESCE(ur.cache_write_5m_input_tokens, 0)
-        + COALESCE(ur.cache_write_1h_input_tokens, 0)
-        + COALESCE(ur.cache_write_30m_input_tokens, 0)
-    ), 0)::bigint AS cache_write_token_count,
+        COALESCE(ur.cache_creation_5m_input_tokens, 0)
+        + COALESCE(ur.cache_creation_1h_input_tokens, 0)
+        + COALESCE(ur.cache_creation_30m_input_tokens, 0)
+    ), 0)::bigint AS cache_creation_token_count,
     COALESCE(SUM(c.charge_usd), 0)::numeric AS charge_usd,
     COALESCE(SUM(
         COALESCE(ur.uncached_input_tokens, 0)::numeric
@@ -1487,16 +1488,16 @@ SELECT
         / 1000000
     ), 0)::numeric AS cache_read_charge_usd,
     COALESCE(SUM(
-        COALESCE(ur.cache_write_5m_input_tokens, 0)::numeric
-            * COALESCE(ps.cache_write_5m_input_price, ps.uncached_input_price, 0)
+        COALESCE(ur.cache_creation_5m_input_tokens, 0)::numeric
+            * COALESCE(ps.cache_creation_5m_input_price, ps.uncached_input_price, 0)
             / 1000000
-        + COALESCE(ur.cache_write_1h_input_tokens, 0)::numeric
-            * COALESCE(ps.cache_write_1h_input_price, ps.uncached_input_price, 0)
+        + COALESCE(ur.cache_creation_1h_input_tokens, 0)::numeric
+            * COALESCE(ps.cache_creation_1h_input_price, ps.uncached_input_price, 0)
             / 1000000
-        + COALESCE(ur.cache_write_30m_input_tokens, 0)::numeric
-            * COALESCE(ps.cache_write_30m_input_price, ps.uncached_input_price, 0)
+        + COALESCE(ur.cache_creation_30m_input_tokens, 0)::numeric
+            * COALESCE(ps.cache_creation_30m_input_price, ps.uncached_input_price, 0)
             / 1000000
-    ), 0)::numeric AS cache_write_charge_usd,
+    ), 0)::numeric AS cache_creation_charge_usd,
     COALESCE(SUM(
         (
             COALESCE(ur.uncached_input_tokens, 0)::numeric
@@ -1509,12 +1510,12 @@ SELECT
                 * COALESCE(ps.reasoning_output_price, ps.output_price, 0)
             + COALESCE(ur.cache_read_input_tokens, 0)::numeric
                 * COALESCE(ps.cache_read_input_price, ps.uncached_input_price, 0)
-            + COALESCE(ur.cache_write_5m_input_tokens, 0)::numeric
-                * COALESCE(ps.cache_write_5m_input_price, ps.uncached_input_price, 0)
-            + COALESCE(ur.cache_write_1h_input_tokens, 0)::numeric
-                * COALESCE(ps.cache_write_1h_input_price, ps.uncached_input_price, 0)
-            + COALESCE(ur.cache_write_30m_input_tokens, 0)::numeric
-                * COALESCE(ps.cache_write_30m_input_price, ps.uncached_input_price, 0)
+            + COALESCE(ur.cache_creation_5m_input_tokens, 0)::numeric
+                * COALESCE(ps.cache_creation_5m_input_price, ps.uncached_input_price, 0)
+            + COALESCE(ur.cache_creation_1h_input_tokens, 0)::numeric
+                * COALESCE(ps.cache_creation_1h_input_price, ps.uncached_input_price, 0)
+            + COALESCE(ur.cache_creation_30m_input_tokens, 0)::numeric
+                * COALESCE(ps.cache_creation_30m_input_price, ps.uncached_input_price, 0)
         ) / 1000000
         / COALESCE(NULLIF(ps.price_ratio, 0), 1)
     ), 0)::numeric AS list_charge_usd,
@@ -1598,12 +1599,12 @@ type SummarizeConsoleBilledRequestsRow struct {
 	OutputTokenCount        int64
 	UncachedInputTokenCount int64
 	CacheReadTokenCount     int64
-	CacheWriteTokenCount    int64
+	CacheCreationTokenCount int64
 	ChargeUsd               pgtype.Numeric
 	UncachedInputChargeUsd  pgtype.Numeric
 	OutputChargeUsd         pgtype.Numeric
 	CacheReadChargeUsd      pgtype.Numeric
-	CacheWriteChargeUsd     pgtype.Numeric
+	CacheCreationChargeUsd  pgtype.Numeric
 	ListChargeUsd           pgtype.Numeric
 	AverageLatencyMs        float64
 	AverageFirstTokenMs     float64
@@ -1634,12 +1635,12 @@ func (q *Queries) SummarizeConsoleBilledRequests(ctx context.Context, arg Summar
 		&i.OutputTokenCount,
 		&i.UncachedInputTokenCount,
 		&i.CacheReadTokenCount,
-		&i.CacheWriteTokenCount,
+		&i.CacheCreationTokenCount,
 		&i.ChargeUsd,
 		&i.UncachedInputChargeUsd,
 		&i.OutputChargeUsd,
 		&i.CacheReadChargeUsd,
-		&i.CacheWriteChargeUsd,
+		&i.CacheCreationChargeUsd,
 		&i.ListChargeUsd,
 		&i.AverageLatencyMs,
 		&i.AverageFirstTokenMs,

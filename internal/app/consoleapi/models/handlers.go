@@ -11,13 +11,13 @@ import (
 
 // priceVectorDTO 是一组按分项展开的单价（十进制字符串）；null 表示该分项未定价。
 type priceVectorDTO struct {
-	UncachedInput   *string `json:"uncached_input"`
-	CacheRead       *string `json:"cache_read"`
-	CacheWrite5m    *string `json:"cache_write_5m"`
-	CacheWrite1h    *string `json:"cache_write_1h"`
-	CacheWrite30m   *string `json:"cache_write_30m"`
-	Output          *string `json:"output"`
-	ReasoningOutput *string `json:"reasoning_output"`
+	UncachedInput    *string `json:"uncached_input"`
+	CacheRead        *string `json:"cache_read"`
+	CacheCreation5m  *string `json:"cache_creation_5m"`
+	CacheCreation1h  *string `json:"cache_creation_1h"`
+	CacheCreation30m *string `json:"cache_creation_30m"`
+	Output           *string `json:"output"`
+	ReasoningOutput  *string `json:"reasoning_output"`
 }
 
 // priceGroupDTO 是某个服务档位的「官方牌价 + 对客售价」对照。
@@ -123,12 +123,12 @@ func toPriceGroupDTO(g publicmodels.PriceGroup) priceGroupDTO {
 
 func toPriceVectorDTO(v publicmodels.PriceVector) priceVectorDTO {
 	return priceVectorDTO{
-		UncachedInput:   v.UncachedInput,
-		CacheRead:       v.CacheRead,
-		CacheWrite5m:    v.CacheWrite5m,
-		CacheWrite1h:    v.CacheWrite1h,
-		CacheWrite30m:   v.CacheWrite30m,
-		Output:          v.Output,
-		ReasoningOutput: v.ReasoningOutput,
+		UncachedInput:    v.UncachedInput,
+		CacheRead:        v.CacheRead,
+		CacheCreation5m:  v.CacheCreation5m,
+		CacheCreation1h:  v.CacheCreation1h,
+		CacheCreation30m: v.CacheCreation30m,
+		Output:           v.Output,
+		ReasoningOutput:  v.ReasoningOutput,
 	}
 }

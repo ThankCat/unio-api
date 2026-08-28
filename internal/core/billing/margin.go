@@ -56,9 +56,9 @@ func normalizedSaleCostPairs(sale CustomerPriceSnapshot, cost ProviderCostSnapsh
 	return []normalizedRatePair{
 		{"uncached_input", saleRates.UncachedInputRate, costRates.UncachedInputRate},
 		{"cache_read_input", saleRates.CacheReadInputRate, costRates.CacheReadInputRate},
-		{"cache_write_5m_input", saleRates.CacheWrite5mInputRate, costRates.CacheWrite5mInputRate},
-		{"cache_write_1h_input", saleRates.CacheWrite1hInputRate, costRates.CacheWrite1hInputRate},
-		{"cache_write_30m_input", saleRates.CacheWrite30mInputRate, costRates.CacheWrite30mInputRate},
+		{"cache_creation_5m_input", saleRates.CacheCreation5mInputRate, costRates.CacheCreation5mInputRate},
+		{"cache_creation_1h_input", saleRates.CacheCreation1hInputRate, costRates.CacheCreation1hInputRate},
+		{"cache_creation_30m_input", saleRates.CacheCreation30mInputRate, costRates.CacheCreation30mInputRate},
 		{"output", saleRates.OutputRate, costRates.OutputRate},
 		{"reasoning_output", saleRates.ReasoningOutputRate, costRates.ReasoningOutputRate},
 	}, nil

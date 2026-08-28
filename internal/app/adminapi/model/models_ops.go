@@ -43,43 +43,43 @@ type modelOpsRowDTO struct {
 	HasPrice                  bool    `json:"has_price"`
 	SupplyAvailable           bool    `json:"supply_available"`
 	// 基准售价（DEC-026 model_prices，每 1M tokens；无基准价时为 null）。
-	BaseCurrency                *string `json:"base_currency"`
-	BaseUncachedInputPrice      *string `json:"base_uncached_input_price"`
-	BaseCacheReadInputPrice     *string `json:"base_cache_read_input_price"`
-	BaseCacheWrite5mInputPrice  *string `json:"base_cache_write_5m_input_price"`
-	BaseCacheWrite1hInputPrice  *string `json:"base_cache_write_1h_input_price"`
-	BaseCacheWrite30mInputPrice *string `json:"base_cache_write_30m_input_price"`
-	BaseOutputPrice             *string `json:"base_output_price"`
-	BaseReasoningOutputPrice    *string `json:"base_reasoning_output_price"`
+	BaseCurrency                   *string `json:"base_currency"`
+	BaseUncachedInputPrice         *string `json:"base_uncached_input_price"`
+	BaseCacheReadInputPrice        *string `json:"base_cache_read_input_price"`
+	BaseCacheCreation5mInputPrice  *string `json:"base_cache_creation_5m_input_price"`
+	BaseCacheCreation1hInputPrice  *string `json:"base_cache_creation_1h_input_price"`
+	BaseCacheCreation30mInputPrice *string `json:"base_cache_creation_30m_input_price"`
+	BaseOutputPrice                *string `json:"base_output_price"`
+	BaseReasoningOutputPrice       *string `json:"base_reasoning_output_price"`
 	// 售价：绝对售价整组非空时整组覆盖，否则基准价 × 倍率。两套实体可共存，不能混算。
-	BaseSalePriceRatio              *string `json:"base_sale_price_ratio"`
-	BaseSaleUncachedInputPrice      *string `json:"base_sale_uncached_input_price"`
-	BaseSaleCacheReadInputPrice     *string `json:"base_sale_cache_read_input_price"`
-	BaseSaleCacheWrite5mInputPrice  *string `json:"base_sale_cache_write_5m_input_price"`
-	BaseSaleCacheWrite1hInputPrice  *string `json:"base_sale_cache_write_1h_input_price"`
-	BaseSaleCacheWrite30mInputPrice *string `json:"base_sale_cache_write_30m_input_price"`
-	BaseSaleOutputPrice             *string `json:"base_sale_output_price"`
-	BaseSaleReasoningOutputPrice    *string `json:"base_sale_reasoning_output_price"`
+	BaseSalePriceRatio                 *string `json:"base_sale_price_ratio"`
+	BaseSaleUncachedInputPrice         *string `json:"base_sale_uncached_input_price"`
+	BaseSaleCacheReadInputPrice        *string `json:"base_sale_cache_read_input_price"`
+	BaseSaleCacheCreation5mInputPrice  *string `json:"base_sale_cache_creation_5m_input_price"`
+	BaseSaleCacheCreation1hInputPrice  *string `json:"base_sale_cache_creation_1h_input_price"`
+	BaseSaleCacheCreation30mInputPrice *string `json:"base_sale_cache_creation_30m_input_price"`
+	BaseSaleOutputPrice                *string `json:"base_sale_output_price"`
+	BaseSaleReasoningOutputPrice       *string `json:"base_sale_reasoning_output_price"`
 	// 当前生效基准价的长上下文阶梯；无基准价或未启用时 enabled=false。
-	BaseLongContextEnabled              bool    `json:"base_long_context_enabled"`
-	BaseLongContextThreshold            *int64  `json:"base_long_context_threshold"`
-	BaseLongContextInputMultiplier      *string `json:"base_long_context_input_multiplier"`
-	BaseLongContextOutputMultiplier     *string `json:"base_long_context_output_multiplier"`
-	BaseFastPriceConfigured             bool    `json:"base_fast_price_configured"`
-	BaseFastUncachedInputPrice          *string `json:"base_fast_uncached_input_price"`
-	BaseFastCacheReadInputPrice         *string `json:"base_fast_cache_read_input_price"`
-	BaseFastCacheWrite5mInputPrice      *string `json:"base_fast_cache_write_5m_input_price"`
-	BaseFastCacheWrite1hInputPrice      *string `json:"base_fast_cache_write_1h_input_price"`
-	BaseFastCacheWrite30mInputPrice     *string `json:"base_fast_cache_write_30m_input_price"`
-	BaseFastOutputPrice                 *string `json:"base_fast_output_price"`
-	BaseFastReasoningOutputPrice        *string `json:"base_fast_reasoning_output_price"`
-	BaseFastSaleUncachedInputPrice      *string `json:"base_fast_sale_uncached_input_price"`
-	BaseFastSaleCacheReadInputPrice     *string `json:"base_fast_sale_cache_read_input_price"`
-	BaseFastSaleCacheWrite5mInputPrice  *string `json:"base_fast_sale_cache_write_5m_input_price"`
-	BaseFastSaleCacheWrite1hInputPrice  *string `json:"base_fast_sale_cache_write_1h_input_price"`
-	BaseFastSaleCacheWrite30mInputPrice *string `json:"base_fast_sale_cache_write_30m_input_price"`
-	BaseFastSaleOutputPrice             *string `json:"base_fast_sale_output_price"`
-	BaseFastSaleReasoningOutputPrice    *string `json:"base_fast_sale_reasoning_output_price"`
+	BaseLongContextEnabled                 bool    `json:"base_long_context_enabled"`
+	BaseLongContextThreshold               *int64  `json:"base_long_context_threshold"`
+	BaseLongContextInputMultiplier         *string `json:"base_long_context_input_multiplier"`
+	BaseLongContextOutputMultiplier        *string `json:"base_long_context_output_multiplier"`
+	BaseFastPriceConfigured                bool    `json:"base_fast_price_configured"`
+	BaseFastUncachedInputPrice             *string `json:"base_fast_uncached_input_price"`
+	BaseFastCacheReadInputPrice            *string `json:"base_fast_cache_read_input_price"`
+	BaseFastCacheCreation5mInputPrice      *string `json:"base_fast_cache_creation_5m_input_price"`
+	BaseFastCacheCreation1hInputPrice      *string `json:"base_fast_cache_creation_1h_input_price"`
+	BaseFastCacheCreation30mInputPrice     *string `json:"base_fast_cache_creation_30m_input_price"`
+	BaseFastOutputPrice                    *string `json:"base_fast_output_price"`
+	BaseFastReasoningOutputPrice           *string `json:"base_fast_reasoning_output_price"`
+	BaseFastSaleUncachedInputPrice         *string `json:"base_fast_sale_uncached_input_price"`
+	BaseFastSaleCacheReadInputPrice        *string `json:"base_fast_sale_cache_read_input_price"`
+	BaseFastSaleCacheCreation5mInputPrice  *string `json:"base_fast_sale_cache_creation_5m_input_price"`
+	BaseFastSaleCacheCreation1hInputPrice  *string `json:"base_fast_sale_cache_creation_1h_input_price"`
+	BaseFastSaleCacheCreation30mInputPrice *string `json:"base_fast_sale_cache_creation_30m_input_price"`
+	BaseFastSaleOutputPrice                *string `json:"base_fast_sale_output_price"`
+	BaseFastSaleReasoningOutputPrice       *string `json:"base_fast_sale_reasoning_output_price"`
 }
 
 type modelOpsDetailDTO struct {
@@ -191,58 +191,58 @@ func (h *modelOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 	out := make([]modelOpsRowDTO, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, modelOpsRowDTO{
-			ID:                                  row.ID,
-			ModelID:                             row.ModelID,
-			DisplayName:                         row.DisplayName,
-			OwnedBy:                             row.OwnedBy,
-			Family:                              row.Family,
-			Description:                         row.Description,
-			KnowledgeCutoff:                     row.KnowledgeCutoff,
-			DisabledReason:                      row.DisabledReason,
-			Status:                              row.Status,
-			CreatedAt:                           adminhttp.RFC3339(row.CreatedAt),
-			MaxOutputTokens:                     row.MaxOutputTokens,
-			ContextWindowTokens:                 row.ContextWindowTokens,
-			BindingsTotal:                       row.BindingsTotal,
-			BindingsAvailable:                   row.BindingsAvailable,
-			CapabilitiesDeclaredCount:           row.CapabilitiesDeclaredCount,
-			HasPrice:                            row.HasPrice,
-			SupplyAvailable:                     row.SupplyAvailable,
-			BaseCurrency:                        row.BaseCurrency,
-			BaseUncachedInputPrice:              row.BaseUncachedInputPrice,
-			BaseCacheReadInputPrice:             row.BaseCacheReadInputPrice,
-			BaseCacheWrite5mInputPrice:          row.BaseCacheWrite5mInputPrice,
-			BaseCacheWrite1hInputPrice:          row.BaseCacheWrite1hInputPrice,
-			BaseCacheWrite30mInputPrice:         row.BaseCacheWrite30mInputPrice,
-			BaseOutputPrice:                     row.BaseOutputPrice,
-			BaseReasoningOutputPrice:            row.BaseReasoningOutputPrice,
-			BaseSalePriceRatio:                  row.BaseSalePriceRatio,
-			BaseSaleUncachedInputPrice:          row.BaseSaleUncachedInputPrice,
-			BaseSaleCacheReadInputPrice:         row.BaseSaleCacheReadInputPrice,
-			BaseSaleCacheWrite5mInputPrice:      row.BaseSaleCacheWrite5mInputPrice,
-			BaseSaleCacheWrite1hInputPrice:      row.BaseSaleCacheWrite1hInputPrice,
-			BaseSaleCacheWrite30mInputPrice:     row.BaseSaleCacheWrite30mInputPrice,
-			BaseSaleOutputPrice:                 row.BaseSaleOutputPrice,
-			BaseSaleReasoningOutputPrice:        row.BaseSaleReasoningOutputPrice,
-			BaseLongContextEnabled:              row.BaseLongContextEnabled,
-			BaseLongContextThreshold:            row.BaseLongContextThreshold,
-			BaseLongContextInputMultiplier:      row.BaseLongContextInputMultiplier,
-			BaseLongContextOutputMultiplier:     row.BaseLongContextOutputMultiplier,
-			BaseFastPriceConfigured:             row.BaseFastPriceConfigured,
-			BaseFastUncachedInputPrice:          row.BaseFastUncachedInputPrice,
-			BaseFastCacheReadInputPrice:         row.BaseFastCacheReadInputPrice,
-			BaseFastCacheWrite5mInputPrice:      row.BaseFastCacheWrite5mInputPrice,
-			BaseFastCacheWrite1hInputPrice:      row.BaseFastCacheWrite1hInputPrice,
-			BaseFastCacheWrite30mInputPrice:     row.BaseFastCacheWrite30mInputPrice,
-			BaseFastOutputPrice:                 row.BaseFastOutputPrice,
-			BaseFastReasoningOutputPrice:        row.BaseFastReasoningOutputPrice,
-			BaseFastSaleUncachedInputPrice:      row.BaseFastSaleUncachedInputPrice,
-			BaseFastSaleCacheReadInputPrice:     row.BaseFastSaleCacheReadInputPrice,
-			BaseFastSaleCacheWrite5mInputPrice:  row.BaseFastSaleCacheWrite5mInputPrice,
-			BaseFastSaleCacheWrite1hInputPrice:  row.BaseFastSaleCacheWrite1hInputPrice,
-			BaseFastSaleCacheWrite30mInputPrice: row.BaseFastSaleCacheWrite30mInputPrice,
-			BaseFastSaleOutputPrice:             row.BaseFastSaleOutputPrice,
-			BaseFastSaleReasoningOutputPrice:    row.BaseFastSaleReasoningOutputPrice,
+			ID:                                     row.ID,
+			ModelID:                                row.ModelID,
+			DisplayName:                            row.DisplayName,
+			OwnedBy:                                row.OwnedBy,
+			Family:                                 row.Family,
+			Description:                            row.Description,
+			KnowledgeCutoff:                        row.KnowledgeCutoff,
+			DisabledReason:                         row.DisabledReason,
+			Status:                                 row.Status,
+			CreatedAt:                              adminhttp.RFC3339(row.CreatedAt),
+			MaxOutputTokens:                        row.MaxOutputTokens,
+			ContextWindowTokens:                    row.ContextWindowTokens,
+			BindingsTotal:                          row.BindingsTotal,
+			BindingsAvailable:                      row.BindingsAvailable,
+			CapabilitiesDeclaredCount:              row.CapabilitiesDeclaredCount,
+			HasPrice:                               row.HasPrice,
+			SupplyAvailable:                        row.SupplyAvailable,
+			BaseCurrency:                           row.BaseCurrency,
+			BaseUncachedInputPrice:                 row.BaseUncachedInputPrice,
+			BaseCacheReadInputPrice:                row.BaseCacheReadInputPrice,
+			BaseCacheCreation5mInputPrice:          row.BaseCacheCreation5mInputPrice,
+			BaseCacheCreation1hInputPrice:          row.BaseCacheCreation1hInputPrice,
+			BaseCacheCreation30mInputPrice:         row.BaseCacheCreation30mInputPrice,
+			BaseOutputPrice:                        row.BaseOutputPrice,
+			BaseReasoningOutputPrice:               row.BaseReasoningOutputPrice,
+			BaseSalePriceRatio:                     row.BaseSalePriceRatio,
+			BaseSaleUncachedInputPrice:             row.BaseSaleUncachedInputPrice,
+			BaseSaleCacheReadInputPrice:            row.BaseSaleCacheReadInputPrice,
+			BaseSaleCacheCreation5mInputPrice:      row.BaseSaleCacheCreation5mInputPrice,
+			BaseSaleCacheCreation1hInputPrice:      row.BaseSaleCacheCreation1hInputPrice,
+			BaseSaleCacheCreation30mInputPrice:     row.BaseSaleCacheCreation30mInputPrice,
+			BaseSaleOutputPrice:                    row.BaseSaleOutputPrice,
+			BaseSaleReasoningOutputPrice:           row.BaseSaleReasoningOutputPrice,
+			BaseLongContextEnabled:                 row.BaseLongContextEnabled,
+			BaseLongContextThreshold:               row.BaseLongContextThreshold,
+			BaseLongContextInputMultiplier:         row.BaseLongContextInputMultiplier,
+			BaseLongContextOutputMultiplier:        row.BaseLongContextOutputMultiplier,
+			BaseFastPriceConfigured:                row.BaseFastPriceConfigured,
+			BaseFastUncachedInputPrice:             row.BaseFastUncachedInputPrice,
+			BaseFastCacheReadInputPrice:            row.BaseFastCacheReadInputPrice,
+			BaseFastCacheCreation5mInputPrice:      row.BaseFastCacheCreation5mInputPrice,
+			BaseFastCacheCreation1hInputPrice:      row.BaseFastCacheCreation1hInputPrice,
+			BaseFastCacheCreation30mInputPrice:     row.BaseFastCacheCreation30mInputPrice,
+			BaseFastOutputPrice:                    row.BaseFastOutputPrice,
+			BaseFastReasoningOutputPrice:           row.BaseFastReasoningOutputPrice,
+			BaseFastSaleUncachedInputPrice:         row.BaseFastSaleUncachedInputPrice,
+			BaseFastSaleCacheReadInputPrice:        row.BaseFastSaleCacheReadInputPrice,
+			BaseFastSaleCacheCreation5mInputPrice:  row.BaseFastSaleCacheCreation5mInputPrice,
+			BaseFastSaleCacheCreation1hInputPrice:  row.BaseFastSaleCacheCreation1hInputPrice,
+			BaseFastSaleCacheCreation30mInputPrice: row.BaseFastSaleCacheCreation30mInputPrice,
+			BaseFastSaleOutputPrice:                row.BaseFastSaleOutputPrice,
+			BaseFastSaleReasoningOutputPrice:       row.BaseFastSaleReasoningOutputPrice,
 		})
 	}
 	adminhttp.WriteList(w, http.StatusOK, out, page, total)

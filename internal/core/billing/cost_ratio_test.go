@@ -14,9 +14,9 @@ func TestProviderCostToSaleRatioSelectsMaximumAcrossAllComponents(t *testing.T) 
 	}{
 		{"uncached_input", func(cost *ProviderCostSnapshot) { cost.UncachedInputCost = numeric(9, 0) }},
 		{"cache_read_input", func(cost *ProviderCostSnapshot) { cost.CacheReadInputCost = numeric(9, 0) }},
-		{"cache_write_5m_input", func(cost *ProviderCostSnapshot) { cost.CacheWrite5mInputCost = numeric(9, 0) }},
-		{"cache_write_1h_input", func(cost *ProviderCostSnapshot) { cost.CacheWrite1hInputCost = numeric(9, 0) }},
-		{"cache_write_30m_input", func(cost *ProviderCostSnapshot) { cost.CacheWrite30mInputCost = numeric(9, 0) }},
+		{"cache_creation_5m_input", func(cost *ProviderCostSnapshot) { cost.CacheCreation5mInputCost = numeric(9, 0) }},
+		{"cache_creation_1h_input", func(cost *ProviderCostSnapshot) { cost.CacheCreation1hInputCost = numeric(9, 0) }},
+		{"cache_creation_30m_input", func(cost *ProviderCostSnapshot) { cost.CacheCreation30mInputCost = numeric(9, 0) }},
 		{"output", func(cost *ProviderCostSnapshot) { cost.OutputCost = numeric(9, 0) }},
 		{"reasoning_output", func(cost *ProviderCostSnapshot) { cost.ReasoningOutputCost = numeric(9, 0) }},
 	}
@@ -77,7 +77,7 @@ func TestProviderCostToSaleRatioTreatsZeroOverZeroAsZero(t *testing.T) {
 func TestProviderCostToSaleRatioRejectsPositiveCostOverZeroSale(t *testing.T) {
 	sale := allComponentSalePrice(0)
 	cost := allComponentProviderCost(0)
-	cost.CacheWrite30mInputCost = numeric(1, 0)
+	cost.CacheCreation30mInputCost = numeric(1, 0)
 	if _, err := ProviderCostToSaleRatio(sale, cost); err == nil {
 		t.Fatal("positive cost over zero sale must fail closed")
 	}
@@ -132,30 +132,30 @@ func TestProviderCostToSaleRatioRejectsInvalidNumeric(t *testing.T) {
 
 func allComponentSalePrice(value int64) CustomerPriceSnapshot {
 	return CustomerPriceSnapshot{
-		Currency:                "USD",
-		PricingUnit:             PricingUnitPer1MTokens,
-		UncachedInputPrice:      numeric(value, 0),
-		CacheReadInputPrice:     numeric(value, 0),
-		CacheWrite5mInputPrice:  numeric(value, 0),
-		CacheWrite1hInputPrice:  numeric(value, 0),
-		CacheWrite30mInputPrice: numeric(value, 0),
-		OutputPrice:             numeric(value, 0),
-		ReasoningOutputPrice:    numeric(value, 0),
-		FormulaVersion:          FormulaVersionV1,
+		Currency:                   "USD",
+		PricingUnit:                PricingUnitPer1MTokens,
+		UncachedInputPrice:         numeric(value, 0),
+		CacheReadInputPrice:        numeric(value, 0),
+		CacheCreation5mInputPrice:  numeric(value, 0),
+		CacheCreation1hInputPrice:  numeric(value, 0),
+		CacheCreation30mInputPrice: numeric(value, 0),
+		OutputPrice:                numeric(value, 0),
+		ReasoningOutputPrice:       numeric(value, 0),
+		FormulaVersion:             FormulaVersionV1,
 	}
 }
 
 func allComponentProviderCost(value int64) ProviderCostSnapshot {
 	return ProviderCostSnapshot{
-		Currency:               "USD",
-		PricingUnit:            PricingUnitPer1MTokens,
-		UncachedInputCost:      numeric(value, 0),
-		CacheReadInputCost:     numeric(value, 0),
-		CacheWrite5mInputCost:  numeric(value, 0),
-		CacheWrite1hInputCost:  numeric(value, 0),
-		CacheWrite30mInputCost: numeric(value, 0),
-		OutputCost:             numeric(value, 0),
-		ReasoningOutputCost:    numeric(value, 0),
-		FormulaVersion:         FormulaVersionV1,
+		Currency:                  "USD",
+		PricingUnit:               PricingUnitPer1MTokens,
+		UncachedInputCost:         numeric(value, 0),
+		CacheReadInputCost:        numeric(value, 0),
+		CacheCreation5mInputCost:  numeric(value, 0),
+		CacheCreation1hInputCost:  numeric(value, 0),
+		CacheCreation30mInputCost: numeric(value, 0),
+		OutputCost:                numeric(value, 0),
+		ReasoningOutputCost:       numeric(value, 0),
+		FormulaVersion:            FormulaVersionV1,
 	}
 }

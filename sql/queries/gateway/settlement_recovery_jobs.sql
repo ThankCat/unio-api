@@ -36,12 +36,12 @@ INSERT INTO settlement_recovery_jobs (
     usage_uncached_input_tokens_state,
     usage_cache_read_input_tokens,
     usage_cache_read_input_tokens_state,
-    usage_cache_write_5m_input_tokens,
-    usage_cache_write_5m_input_tokens_state,
-    usage_cache_write_1h_input_tokens,
-    usage_cache_write_1h_input_tokens_state,
-    usage_cache_write_30m_input_tokens,
-    usage_cache_write_30m_input_tokens_state,
+    usage_cache_creation_5m_input_tokens,
+    usage_cache_creation_5m_input_tokens_state,
+    usage_cache_creation_1h_input_tokens,
+    usage_cache_creation_1h_input_tokens_state,
+    usage_cache_creation_30m_input_tokens,
+    usage_cache_creation_30m_input_tokens_state,
     usage_output_tokens_total,
     usage_output_tokens_total_state,
     usage_reasoning_output_tokens,
@@ -58,9 +58,9 @@ INSERT INTO settlement_recovery_jobs (
     pricing_unit,
     uncached_input_price,
     cache_read_input_price,
-    cache_write_5m_input_price,
-    cache_write_1h_input_price,
-    cache_write_30m_input_price,
+    cache_creation_5m_input_price,
+    cache_creation_1h_input_price,
+    cache_creation_30m_input_price,
     output_price,
     reasoning_output_price,
     formula_version,
@@ -109,12 +109,12 @@ SELECT
            sqlc.arg(usage_uncached_input_tokens_state),
            sqlc.arg(usage_cache_read_input_tokens),
            sqlc.arg(usage_cache_read_input_tokens_state),
-           sqlc.arg(usage_cache_write_5m_input_tokens),
-           sqlc.arg(usage_cache_write_5m_input_tokens_state),
-           sqlc.arg(usage_cache_write_1h_input_tokens),
-           sqlc.arg(usage_cache_write_1h_input_tokens_state),
-           sqlc.arg(usage_cache_write_30m_input_tokens),
-           sqlc.arg(usage_cache_write_30m_input_tokens_state),
+           sqlc.arg(usage_cache_creation_5m_input_tokens),
+           sqlc.arg(usage_cache_creation_5m_input_tokens_state),
+           sqlc.arg(usage_cache_creation_1h_input_tokens),
+           sqlc.arg(usage_cache_creation_1h_input_tokens_state),
+           sqlc.arg(usage_cache_creation_30m_input_tokens),
+           sqlc.arg(usage_cache_creation_30m_input_tokens_state),
            sqlc.arg(usage_output_tokens_total),
            sqlc.arg(usage_output_tokens_total_state),
            sqlc.arg(usage_reasoning_output_tokens),
@@ -131,9 +131,9 @@ SELECT
            sqlc.arg(pricing_unit),
            sqlc.arg(uncached_input_price),
            sqlc.arg(cache_read_input_price),
-           sqlc.arg(cache_write_5m_input_price),
-           sqlc.arg(cache_write_1h_input_price),
-           sqlc.arg(cache_write_30m_input_price),
+           sqlc.arg(cache_creation_5m_input_price),
+           sqlc.arg(cache_creation_1h_input_price),
+           sqlc.arg(cache_creation_30m_input_price),
            sqlc.arg(output_price),
            sqlc.arg(reasoning_output_price),
            sqlc.arg(formula_version),
@@ -182,12 +182,12 @@ WHERE settlement_recovery_jobs.user_id = EXCLUDED.user_id
   AND settlement_recovery_jobs.usage_uncached_input_tokens_state = EXCLUDED.usage_uncached_input_tokens_state
   AND settlement_recovery_jobs.usage_cache_read_input_tokens = EXCLUDED.usage_cache_read_input_tokens
   AND settlement_recovery_jobs.usage_cache_read_input_tokens_state = EXCLUDED.usage_cache_read_input_tokens_state
-  AND settlement_recovery_jobs.usage_cache_write_5m_input_tokens = EXCLUDED.usage_cache_write_5m_input_tokens
-  AND settlement_recovery_jobs.usage_cache_write_5m_input_tokens_state = EXCLUDED.usage_cache_write_5m_input_tokens_state
-  AND settlement_recovery_jobs.usage_cache_write_1h_input_tokens = EXCLUDED.usage_cache_write_1h_input_tokens
-  AND settlement_recovery_jobs.usage_cache_write_1h_input_tokens_state = EXCLUDED.usage_cache_write_1h_input_tokens_state
-  AND settlement_recovery_jobs.usage_cache_write_30m_input_tokens = EXCLUDED.usage_cache_write_30m_input_tokens
-  AND settlement_recovery_jobs.usage_cache_write_30m_input_tokens_state = EXCLUDED.usage_cache_write_30m_input_tokens_state
+  AND settlement_recovery_jobs.usage_cache_creation_5m_input_tokens = EXCLUDED.usage_cache_creation_5m_input_tokens
+  AND settlement_recovery_jobs.usage_cache_creation_5m_input_tokens_state = EXCLUDED.usage_cache_creation_5m_input_tokens_state
+  AND settlement_recovery_jobs.usage_cache_creation_1h_input_tokens = EXCLUDED.usage_cache_creation_1h_input_tokens
+  AND settlement_recovery_jobs.usage_cache_creation_1h_input_tokens_state = EXCLUDED.usage_cache_creation_1h_input_tokens_state
+  AND settlement_recovery_jobs.usage_cache_creation_30m_input_tokens = EXCLUDED.usage_cache_creation_30m_input_tokens
+  AND settlement_recovery_jobs.usage_cache_creation_30m_input_tokens_state = EXCLUDED.usage_cache_creation_30m_input_tokens_state
   AND settlement_recovery_jobs.usage_output_tokens_total = EXCLUDED.usage_output_tokens_total
   AND settlement_recovery_jobs.usage_output_tokens_total_state = EXCLUDED.usage_output_tokens_total_state
   AND settlement_recovery_jobs.usage_reasoning_output_tokens = EXCLUDED.usage_reasoning_output_tokens
@@ -204,9 +204,9 @@ WHERE settlement_recovery_jobs.user_id = EXCLUDED.user_id
   AND settlement_recovery_jobs.pricing_unit = EXCLUDED.pricing_unit
   AND settlement_recovery_jobs.uncached_input_price = EXCLUDED.uncached_input_price
   AND settlement_recovery_jobs.cache_read_input_price IS NOT DISTINCT FROM EXCLUDED.cache_read_input_price
-  AND settlement_recovery_jobs.cache_write_5m_input_price IS NOT DISTINCT FROM EXCLUDED.cache_write_5m_input_price
-  AND settlement_recovery_jobs.cache_write_1h_input_price IS NOT DISTINCT FROM EXCLUDED.cache_write_1h_input_price
-  AND settlement_recovery_jobs.cache_write_30m_input_price IS NOT DISTINCT FROM EXCLUDED.cache_write_30m_input_price
+  AND settlement_recovery_jobs.cache_creation_5m_input_price IS NOT DISTINCT FROM EXCLUDED.cache_creation_5m_input_price
+  AND settlement_recovery_jobs.cache_creation_1h_input_price IS NOT DISTINCT FROM EXCLUDED.cache_creation_1h_input_price
+  AND settlement_recovery_jobs.cache_creation_30m_input_price IS NOT DISTINCT FROM EXCLUDED.cache_creation_30m_input_price
   AND settlement_recovery_jobs.output_price = EXCLUDED.output_price
   AND settlement_recovery_jobs.reasoning_output_price IS NOT DISTINCT FROM EXCLUDED.reasoning_output_price
   AND settlement_recovery_jobs.formula_version = EXCLUDED.formula_version

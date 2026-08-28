@@ -12,7 +12,7 @@ import (
 )
 
 const findActiveModelPrice = `-- name: FindActiveModelPrice :one
-SELECT id, model_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_write_5m_input_price, cache_write_1h_input_price, output_price, reasoning_output_price, status, effective_from, effective_to, created_at, updated_at, cache_write_30m_input_price, long_context_enabled, long_context_threshold, long_context_input_multiplier, long_context_output_multiplier, sale_uncached_input_price, sale_cache_read_input_price, sale_cache_write_5m_input_price, sale_cache_write_1h_input_price, sale_cache_write_30m_input_price, sale_output_price, sale_reasoning_output_price, sale_price_ratio
+SELECT id, model_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_creation_5m_input_price, cache_creation_1h_input_price, output_price, reasoning_output_price, status, effective_from, effective_to, created_at, updated_at, cache_creation_30m_input_price, long_context_enabled, long_context_threshold, long_context_input_multiplier, long_context_output_multiplier, sale_uncached_input_price, sale_cache_read_input_price, sale_cache_creation_5m_input_price, sale_cache_creation_1h_input_price, sale_cache_creation_30m_input_price, sale_output_price, sale_reasoning_output_price, sale_price_ratio
 FROM model_prices
 WHERE model_id = $1
     AND status = 'enabled'
@@ -41,8 +41,8 @@ func (q *Queries) FindActiveModelPrice(ctx context.Context, arg FindActiveModelP
 		&i.PricingUnit,
 		&i.UncachedInputPrice,
 		&i.CacheReadInputPrice,
-		&i.CacheWrite5mInputPrice,
-		&i.CacheWrite1hInputPrice,
+		&i.CacheCreation5mInputPrice,
+		&i.CacheCreation1hInputPrice,
 		&i.OutputPrice,
 		&i.ReasoningOutputPrice,
 		&i.Status,
@@ -50,16 +50,16 @@ func (q *Queries) FindActiveModelPrice(ctx context.Context, arg FindActiveModelP
 		&i.EffectiveTo,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.CacheWrite30mInputPrice,
+		&i.CacheCreation30mInputPrice,
 		&i.LongContextEnabled,
 		&i.LongContextThreshold,
 		&i.LongContextInputMultiplier,
 		&i.LongContextOutputMultiplier,
 		&i.SaleUncachedInputPrice,
 		&i.SaleCacheReadInputPrice,
-		&i.SaleCacheWrite5mInputPrice,
-		&i.SaleCacheWrite1hInputPrice,
-		&i.SaleCacheWrite30mInputPrice,
+		&i.SaleCacheCreation5mInputPrice,
+		&i.SaleCacheCreation1hInputPrice,
+		&i.SaleCacheCreation30mInputPrice,
 		&i.SaleOutputPrice,
 		&i.SaleReasoningOutputPrice,
 		&i.SalePriceRatio,

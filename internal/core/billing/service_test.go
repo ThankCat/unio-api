@@ -30,13 +30,13 @@ type testUsage struct {
 // testUsageFacts 把旧 OpenAI 形状的测试输入映射成协议无关 facts，便于验证金额兼容性。
 func testUsageFacts(u testUsage) coreusage.Facts {
 	return coreusage.Facts{
-		UncachedInputTokens:      coreusage.KnownTokens(u.PromptTokens - u.CachedTokens),
-		CacheReadInputTokens:     coreusage.KnownTokens(u.CachedTokens),
-		CacheWrite5mInputTokens:  coreusage.NotApplicableTokens(),
-		CacheWrite1hInputTokens:  coreusage.NotApplicableTokens(),
-		CacheWrite30mInputTokens: coreusage.NotApplicableTokens(),
-		OutputTokensTotal:        coreusage.KnownTokens(u.CompletionTokens),
-		ReasoningOutputTokens:    coreusage.KnownTokens(u.ReasoningTokens),
+		UncachedInputTokens:         coreusage.KnownTokens(u.PromptTokens - u.CachedTokens),
+		CacheReadInputTokens:        coreusage.KnownTokens(u.CachedTokens),
+		CacheCreation5mInputTokens:  coreusage.NotApplicableTokens(),
+		CacheCreation1hInputTokens:  coreusage.NotApplicableTokens(),
+		CacheCreation30mInputTokens: coreusage.NotApplicableTokens(),
+		OutputTokensTotal:           coreusage.KnownTokens(u.CompletionTokens),
+		ReasoningOutputTokens:       coreusage.KnownTokens(u.ReasoningTokens),
 	}
 }
 
@@ -147,21 +147,21 @@ func TestCalculateCustomerChargeChargesTokenClassesSeparately(t *testing.T) {
 	assertNumeric(t, settlement.Amount, 61_000000, -10)
 }
 
-// TestCalculateCustomerChargeChargesCacheWrite30m 验证 OpenAI GPT-5.6 的 30m 缓存写维度按独立单价计费，
+// TestCalculateCustomerChargeChargesCacheCreation30m 验证 OpenAI GPT-5.6 的 30m 缓存创建维度按独立单价计费，
 // 与 5m/1h（此处 not_applicable）互不影响。
-func TestCalculateCustomerChargeChargesCacheWrite30m(t *testing.T) {
+func TestCalculateCustomerChargeChargesCacheCreation30m(t *testing.T) {
 	price := defaultCustomerPriceSnapshot()
-	// 30m 缓存写单价 = 未缓存输入价 1.25x = 2.5 / 1M。
-	price.CacheWrite30mInputPrice = numeric(2_5000000000, -10)
+	// 30m 缓存创建单价 = 未缓存输入价 1.25x = 2.5 / 1M。
+	price.CacheCreation30mInputPrice = numeric(2_5000000000, -10)
 
 	facts := coreusage.Facts{
-		UncachedInputTokens:      coreusage.KnownTokens(500),
-		CacheReadInputTokens:     coreusage.KnownTokens(200),
-		CacheWrite5mInputTokens:  coreusage.NotApplicableTokens(),
-		CacheWrite1hInputTokens:  coreusage.NotApplicableTokens(),
-		CacheWrite30mInputTokens: coreusage.KnownTokens(300),
-		OutputTokensTotal:        coreusage.KnownTokens(400),
-		ReasoningOutputTokens:    coreusage.KnownTokens(0),
+		UncachedInputTokens:         coreusage.KnownTokens(500),
+		CacheReadInputTokens:        coreusage.KnownTokens(200),
+		CacheCreation5mInputTokens:  coreusage.NotApplicableTokens(),
+		CacheCreation1hInputTokens:  coreusage.NotApplicableTokens(),
+		CacheCreation30mInputTokens: coreusage.KnownTokens(300),
+		OutputTokensTotal:           coreusage.KnownTokens(400),
+		ReasoningOutputTokens:       coreusage.KnownTokens(0),
 	}
 
 	settlement, err := (Service{}).CalculateCustomerCharge(facts, price)

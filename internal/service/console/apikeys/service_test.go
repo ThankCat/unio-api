@@ -27,11 +27,11 @@ func testWindow() Window {
 
 // fakeStore 记录每次调用的参数，测试据此断言 user_id 是否被带到了 SQL 层。
 type fakeStore struct {
-	listArg    sqlc.ListConsoleAPIKeysParams
-	countArg   sqlc.CountConsoleAPIKeysParams
-	getArg     sqlc.GetConsoleAPIKeyParams
-	dailyArg   sqlc.ListConsoleAPIKeyDailyChargeParams
-	modelsArg  sqlc.ListConsoleAPIKeyTopModelsParams
+	listArg      sqlc.ListConsoleAPIKeysParams
+	countArg     sqlc.CountConsoleAPIKeysParams
+	getArg       sqlc.GetConsoleAPIKeyParams
+	dailyArg     sqlc.ListConsoleAPIKeyDailyChargeParams
+	modelsArg    sqlc.ListConsoleAPIKeyTopModelsParams
 	createArg    sqlc.CreateConsoleAPIKeyParams
 	updateArg    sqlc.UpdateConsoleAPIKeyParams
 	revokeArg    sqlc.RevokeConsoleAPIKeyParams

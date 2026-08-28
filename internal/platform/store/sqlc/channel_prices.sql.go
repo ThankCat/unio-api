@@ -12,7 +12,7 @@ import (
 )
 
 const findActiveChannelPrice = `-- name: FindActiveChannelPrice :one
-SELECT id, channel_id, model_id, currency, pricing_unit, uncached_input_cost, cache_read_input_cost, cache_write_5m_input_cost, cache_write_1h_input_cost, output_cost, reasoning_output_cost, status, effective_from, effective_to, created_at, updated_at, cache_write_30m_input_cost
+SELECT id, channel_id, model_id, currency, pricing_unit, uncached_input_cost, cache_read_input_cost, cache_creation_5m_input_cost, cache_creation_1h_input_cost, output_cost, reasoning_output_cost, status, effective_from, effective_to, created_at, updated_at, cache_creation_30m_input_cost
 FROM channel_prices
 WHERE channel_id = $1
     AND model_id = $2
@@ -44,8 +44,8 @@ func (q *Queries) FindActiveChannelPrice(ctx context.Context, arg FindActiveChan
 		&i.PricingUnit,
 		&i.UncachedInputCost,
 		&i.CacheReadInputCost,
-		&i.CacheWrite5mInputCost,
-		&i.CacheWrite1hInputCost,
+		&i.CacheCreation5mInputCost,
+		&i.CacheCreation1hInputCost,
 		&i.OutputCost,
 		&i.ReasoningOutputCost,
 		&i.Status,
@@ -53,13 +53,13 @@ func (q *Queries) FindActiveChannelPrice(ctx context.Context, arg FindActiveChan
 		&i.EffectiveTo,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.CacheWrite30mInputCost,
+		&i.CacheCreation30mInputCost,
 	)
 	return i, err
 }
 
 const getChannelPrice = `-- name: GetChannelPrice :one
-SELECT id, channel_id, model_id, currency, pricing_unit, uncached_input_cost, cache_read_input_cost, cache_write_5m_input_cost, cache_write_1h_input_cost, output_cost, reasoning_output_cost, status, effective_from, effective_to, created_at, updated_at, cache_write_30m_input_cost FROM channel_prices WHERE id = $1 LIMIT 1
+SELECT id, channel_id, model_id, currency, pricing_unit, uncached_input_cost, cache_read_input_cost, cache_creation_5m_input_cost, cache_creation_1h_input_cost, output_cost, reasoning_output_cost, status, effective_from, effective_to, created_at, updated_at, cache_creation_30m_input_cost FROM channel_prices WHERE id = $1 LIMIT 1
 `
 
 // GetChannelPrice 按主键读取单条渠道-模型价。
@@ -74,8 +74,8 @@ func (q *Queries) GetChannelPrice(ctx context.Context, id int64) (ChannelPrice, 
 		&i.PricingUnit,
 		&i.UncachedInputCost,
 		&i.CacheReadInputCost,
-		&i.CacheWrite5mInputCost,
-		&i.CacheWrite1hInputCost,
+		&i.CacheCreation5mInputCost,
+		&i.CacheCreation1hInputCost,
 		&i.OutputCost,
 		&i.ReasoningOutputCost,
 		&i.Status,
@@ -83,7 +83,7 @@ func (q *Queries) GetChannelPrice(ctx context.Context, id int64) (ChannelPrice, 
 		&i.EffectiveTo,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.CacheWrite30mInputCost,
+		&i.CacheCreation30mInputCost,
 	)
 	return i, err
 }

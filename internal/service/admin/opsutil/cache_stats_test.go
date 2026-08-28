@@ -4,24 +4,24 @@ import "testing"
 
 func TestCacheStatsFrom(t *testing.T) {
 	tests := []struct {
-		name          string
-		aggregate     CacheAggregate
-		wantStatus    CacheStatus
-		wantReadRate  *float64
-		wantWriteRate *float64
+		name             string
+		aggregate        CacheAggregate
+		wantStatus       CacheStatus
+		wantReadRate     *float64
+		wantCreationRate *float64
 	}{
 		{
 			name: "available keeps read and write separate",
 			aggregate: CacheAggregate{
-				UncachedInput:      380,
-				CacheReadInput:     100,
-				CacheWrite30mInput: 20,
-				UsageRecords:       3,
-				EvaluableRecords:   3,
+				UncachedInput:         380,
+				CacheReadInput:        100,
+				CacheCreation30mInput: 20,
+				UsageRecords:          3,
+				EvaluableRecords:      3,
 			},
-			wantStatus:    CacheStatusAvailable,
-			wantReadRate:  float64Ptr(0.2),
-			wantWriteRate: float64Ptr(0.04),
+			wantStatus:       CacheStatusAvailable,
+			wantReadRate:     float64Ptr(0.2),
+			wantCreationRate: float64Ptr(0.04),
 		},
 		{
 			name:       "no usage is no data",
@@ -52,7 +52,7 @@ func TestCacheStatsFrom(t *testing.T) {
 				t.Fatalf("status = %q, want %q", got.Status, tt.wantStatus)
 			}
 			assertOptionalRate(t, "read", got.ReadRate, tt.wantReadRate)
-			assertOptionalRate(t, "write", got.WriteRate, tt.wantWriteRate)
+			assertOptionalRate(t, "write", got.CreationRate, tt.wantCreationRate)
 		})
 	}
 }

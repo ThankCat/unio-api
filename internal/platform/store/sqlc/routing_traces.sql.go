@@ -573,9 +573,9 @@ SELECT
     COALESCE(base.pricing_unit, '')::text AS base_pricing_unit,
     base.uncached_input_price,
     base.cache_read_input_price,
-    base.cache_write_5m_input_price,
-    base.cache_write_1h_input_price,
-    base.cache_write_30m_input_price,
+    base.cache_creation_5m_input_price,
+    base.cache_creation_1h_input_price,
+    base.cache_creation_30m_input_price,
     base.output_price,
     base.reasoning_output_price,
     COALESCE(cost.id, 0)::bigint AS channel_price_id,
@@ -583,9 +583,9 @@ SELECT
     COALESCE(cost.pricing_unit, '')::text AS cost_pricing_unit,
     cost.uncached_input_cost,
     cost.cache_read_input_cost,
-    cost.cache_write_5m_input_cost,
-    cost.cache_write_1h_input_cost,
-    cost.cache_write_30m_input_cost,
+    cost.cache_creation_5m_input_cost,
+    cost.cache_creation_1h_input_cost,
+    cost.cache_creation_30m_input_cost,
     cost.output_cost,
     cost.reasoning_output_cost,
     COALESCE(mult.id, 0)::bigint AS channel_cost_multiplier_id,
@@ -601,8 +601,8 @@ LEFT JOIN channel_models cm ON cm.channel_id = c.id AND cm.model_id = m.id
 LEFT JOIN LATERAL (
     SELECT mp.id, mp.currency, mp.pricing_unit,
            mp.uncached_input_price, mp.cache_read_input_price,
-           mp.cache_write_5m_input_price, mp.cache_write_1h_input_price,
-           mp.cache_write_30m_input_price, mp.output_price, mp.reasoning_output_price
+           mp.cache_creation_5m_input_price, mp.cache_creation_1h_input_price,
+           mp.cache_creation_30m_input_price, mp.output_price, mp.reasoning_output_price
     FROM model_prices mp
     WHERE mp.model_id = m.id
       AND mp.status = 'enabled'
@@ -614,8 +614,8 @@ LEFT JOIN LATERAL (
 LEFT JOIN LATERAL (
     SELECT cp.id, cp.currency, cp.pricing_unit,
            cp.uncached_input_cost, cp.cache_read_input_cost,
-           cp.cache_write_5m_input_cost, cp.cache_write_1h_input_cost,
-           cp.cache_write_30m_input_cost, cp.output_cost, cp.reasoning_output_cost
+           cp.cache_creation_5m_input_cost, cp.cache_creation_1h_input_cost,
+           cp.cache_creation_30m_input_cost, cp.output_cost, cp.reasoning_output_cost
     FROM channel_prices cp
     WHERE cp.channel_id = c.id
       AND cp.model_id = m.id
@@ -656,54 +656,54 @@ type ModelRuntimePoolParams struct {
 }
 
 type ModelRuntimePoolRow struct {
-	ChannelID               int64
-	ChannelName             string
-	ChannelStatus           string
-	CredentialValid         bool
-	HasCredential           bool
-	HasOrigin               bool
-	Protocols               []string
-	AdapterKey              string
-	Priority                int32
-	ConcurrencyLimit        pgtype.Int4
-	ChannelConfigRevision   int64
-	ChannelCapacityRevision int64
-	Origin                  string
-	ProviderOriginRevision  int64
-	ProviderStatusRevision  int64
-	ProviderID              int64
-	ProviderName            string
-	ProviderStatus          string
-	ModelDbID               int64
-	ModelExists             bool
-	ModelStatus             string
-	BindingStatus           string
-	HasModelPrice           bool
-	HasChannelCost          bool
-	ModelPriceID            int64
-	BaseCurrency            string
-	BasePricingUnit         string
-	UncachedInputPrice      pgtype.Numeric
-	CacheReadInputPrice     pgtype.Numeric
-	CacheWrite5mInputPrice  pgtype.Numeric
-	CacheWrite1hInputPrice  pgtype.Numeric
-	CacheWrite30mInputPrice pgtype.Numeric
-	OutputPrice             pgtype.Numeric
-	ReasoningOutputPrice    pgtype.Numeric
-	ChannelPriceID          int64
-	CostCurrency            string
-	CostPricingUnit         string
-	UncachedInputCost       pgtype.Numeric
-	CacheReadInputCost      pgtype.Numeric
-	CacheWrite5mInputCost   pgtype.Numeric
-	CacheWrite1hInputCost   pgtype.Numeric
-	CacheWrite30mInputCost  pgtype.Numeric
-	OutputCost              pgtype.Numeric
-	ReasoningOutputCost     pgtype.Numeric
-	ChannelCostMultiplierID int64
-	CostMultiplier          pgtype.Numeric
-	ChannelRechargeFactorID int64
-	RechargeFactor          pgtype.Numeric
+	ChannelID                  int64
+	ChannelName                string
+	ChannelStatus              string
+	CredentialValid            bool
+	HasCredential              bool
+	HasOrigin                  bool
+	Protocols                  []string
+	AdapterKey                 string
+	Priority                   int32
+	ConcurrencyLimit           pgtype.Int4
+	ChannelConfigRevision      int64
+	ChannelCapacityRevision    int64
+	Origin                     string
+	ProviderOriginRevision     int64
+	ProviderStatusRevision     int64
+	ProviderID                 int64
+	ProviderName               string
+	ProviderStatus             string
+	ModelDbID                  int64
+	ModelExists                bool
+	ModelStatus                string
+	BindingStatus              string
+	HasModelPrice              bool
+	HasChannelCost             bool
+	ModelPriceID               int64
+	BaseCurrency               string
+	BasePricingUnit            string
+	UncachedInputPrice         pgtype.Numeric
+	CacheReadInputPrice        pgtype.Numeric
+	CacheCreation5mInputPrice  pgtype.Numeric
+	CacheCreation1hInputPrice  pgtype.Numeric
+	CacheCreation30mInputPrice pgtype.Numeric
+	OutputPrice                pgtype.Numeric
+	ReasoningOutputPrice       pgtype.Numeric
+	ChannelPriceID             int64
+	CostCurrency               string
+	CostPricingUnit            string
+	UncachedInputCost          pgtype.Numeric
+	CacheReadInputCost         pgtype.Numeric
+	CacheCreation5mInputCost   pgtype.Numeric
+	CacheCreation1hInputCost   pgtype.Numeric
+	CacheCreation30mInputCost  pgtype.Numeric
+	OutputCost                 pgtype.Numeric
+	ReasoningOutputCost        pgtype.Numeric
+	ChannelCostMultiplierID    int64
+	CostMultiplier             pgtype.Numeric
+	ChannelRechargeFactorID    int64
+	RechargeFactor             pgtype.Numeric
 }
 
 // ModelRuntimePool 返回全部未归档渠道及其数据库硬过滤事实，供选路诊断解释
@@ -751,9 +751,9 @@ func (q *Queries) ModelRuntimePool(ctx context.Context, arg ModelRuntimePoolPara
 			&i.BasePricingUnit,
 			&i.UncachedInputPrice,
 			&i.CacheReadInputPrice,
-			&i.CacheWrite5mInputPrice,
-			&i.CacheWrite1hInputPrice,
-			&i.CacheWrite30mInputPrice,
+			&i.CacheCreation5mInputPrice,
+			&i.CacheCreation1hInputPrice,
+			&i.CacheCreation30mInputPrice,
 			&i.OutputPrice,
 			&i.ReasoningOutputPrice,
 			&i.ChannelPriceID,
@@ -761,9 +761,9 @@ func (q *Queries) ModelRuntimePool(ctx context.Context, arg ModelRuntimePoolPara
 			&i.CostPricingUnit,
 			&i.UncachedInputCost,
 			&i.CacheReadInputCost,
-			&i.CacheWrite5mInputCost,
-			&i.CacheWrite1hInputCost,
-			&i.CacheWrite30mInputCost,
+			&i.CacheCreation5mInputCost,
+			&i.CacheCreation1hInputCost,
+			&i.CacheCreation30mInputCost,
 			&i.OutputCost,
 			&i.ReasoningOutputCost,
 			&i.ChannelCostMultiplierID,

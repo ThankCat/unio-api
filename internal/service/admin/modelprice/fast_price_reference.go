@@ -32,7 +32,7 @@ var openAIFastPriceReferences = map[string]FastPriceReference{
 
 // newOpenAIFastPriceReference builds one short-context text-token row from the official
 // Fast mode table. OpenAI's Cache writes column maps to the existing 30m cache-write field.
-func newOpenAIFastPriceReference(uncachedInput, cacheRead, cacheWrite30m, output string) FastPriceReference {
+func newOpenAIFastPriceReference(uncachedInput, cacheRead, cacheCreation30m, output string) FastPriceReference {
 	reference := FastPriceReference{
 		Currency:           "USD",
 		PricingUnit:        PricingUnitPer1MTokens,
@@ -44,8 +44,8 @@ func newOpenAIFastPriceReference(uncachedInput, cacheRead, cacheWrite30m, output
 	if cacheRead != "" {
 		reference.CacheReadInputPrice = stringPointer(cacheRead)
 	}
-	if cacheWrite30m != "" {
-		reference.CacheWrite30mInputPrice = stringPointer(cacheWrite30m)
+	if cacheCreation30m != "" {
+		reference.CacheCreation30mInputPrice = stringPointer(cacheCreation30m)
 	}
 	return reference
 }

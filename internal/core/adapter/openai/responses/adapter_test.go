@@ -947,9 +947,9 @@ func TestChatUsageFromWire(t *testing.T) {
 	}
 }
 
-// TestChatUsageFromWireCacheWriteAliases 验证缓存写入 token 的多字段兜底：
+// TestChatUsageFromWireCacheWriteAliases 验证缓存创建 token 的多字段兜底：
 // 官方 input_tokens_details.cache_write_tokens 优先，其次兼容 sub2api 的 cache_creation_tokens
-// 与顶层 cache_creation_input_tokens，保证上游为 sub2api 时缓存写入不漏记。
+// 与顶层 cache_creation_input_tokens，保证上游为 sub2api 时缓存创建不漏记。
 func TestChatUsageFromWireCacheWriteAliases(t *testing.T) {
 	cases := []struct {
 		name string

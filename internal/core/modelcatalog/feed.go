@@ -21,14 +21,14 @@ import (
 
 // modelsJSONEntry 是 models.dev models.json 的 canonical 模型元数据（按 lab/model 键控）。
 type modelsJSONEntry struct {
-	ID               string         `json:"id"`
-	Name             string         `json:"name"`
-	Description      string         `json:"description"`
-	Family           string         `json:"family"`
-	Attachment       bool           `json:"attachment"`
-	Reasoning        bool           `json:"reasoning"`
-	ToolCall         bool           `json:"tool_call"`
-	StructuredOutput bool           `json:"structured_output"`
+	ID               string `json:"id"`
+	Name             string `json:"name"`
+	Description      string `json:"description"`
+	Family           string `json:"family"`
+	Attachment       bool   `json:"attachment"`
+	Reasoning        bool   `json:"reasoning"`
+	ToolCall         bool   `json:"tool_call"`
+	StructuredOutput bool   `json:"structured_output"`
 	// Knowledge 是知识截止；上游格式不齐（2024-09-30 / 2024-08），原样透传不解析。
 	Knowledge   string `json:"knowledge"`
 	ReleaseDate string `json:"release_date"`
@@ -99,12 +99,12 @@ type CanonicalModel struct {
 	// ModalitiesInput / ModalitiesOutput 是上游原始模态列表，能力声明之外保留原文供展示。
 	ModalitiesInput  []string
 	ModalitiesOutput []string
-	// InputPrice / OutputPrice / CacheReadPrice / CacheWritePrice 是十进制字符串
+	// InputPrice / OutputPrice / CacheReadPrice / CacheCreationPrice 是十进制字符串
 	//（USD / 百万 token），nil 表示该模型无此价格基线。
-	InputPrice      *string
-	OutputPrice     *string
-	CacheReadPrice  *string
-	CacheWritePrice *string
+	InputPrice         *string
+	OutputPrice        *string
+	CacheReadPrice     *string
+	CacheCreationPrice *string
 	// CoarseCapabilities 是 models.dev 粗能力位映射，落到目录能力提示供采纳预填。
 	CoarseCapabilities []capability.Declaration
 	// Fingerprint 是本条目内容指纹（元数据 + 排序能力提示规范化 hash），用于采纳追更对比。
@@ -154,7 +154,7 @@ func ParseFeed(modelsJSON, apiJSON []byte) (Feed, error) {
 			model.InputPrice = decimalOrNil(apiModel.Cost.Input)
 			model.OutputPrice = decimalOrNil(apiModel.Cost.Output)
 			model.CacheReadPrice = decimalOrNil(apiModel.Cost.CacheRead)
-			model.CacheWritePrice = decimalOrNil(apiModel.Cost.CacheWrite)
+			model.CacheCreationPrice = decimalOrNil(apiModel.Cost.CacheWrite)
 		}
 		model.CoarseCapabilities = coarseCapabilities(entry, effortValues(apiModel.ReasoningOptions))
 		model.Fingerprint = entryFingerprint(model)
@@ -379,7 +379,7 @@ func entryFingerprint(m CanonicalModel) string {
 	b.WriteByte('\n')
 	b.WriteString(fingerprintStr(m.CacheReadPrice))
 	b.WriteByte('\n')
-	b.WriteString(fingerprintStr(m.CacheWritePrice))
+	b.WriteString(fingerprintStr(m.CacheCreationPrice))
 	b.WriteByte('\n')
 	if m.ReleaseDate != nil {
 		b.WriteString(m.ReleaseDate.Format("2006-01-02"))

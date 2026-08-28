@@ -21,7 +21,7 @@ func TestDetailMapsCacheRates(t *testing.T) {
 	store := &channelOpsDetailStore{row: sqlc.ChannelOpsDetailRow{
 		CacheUncachedInput:    380,
 		CacheReadInput:        100,
-		CacheWrite30mInput:    20,
+		CacheCreation30mInput: 20,
 		CacheUsageRecords:     4,
 		CacheEvaluableRecords: 4,
 	}}
@@ -33,7 +33,7 @@ func TestDetailMapsCacheRates(t *testing.T) {
 	if detail.Cache.ReadRate == nil || *detail.Cache.ReadRate != 0.2 {
 		t.Fatalf("cache read rate = %v, want 0.2", detail.Cache.ReadRate)
 	}
-	if detail.Cache.WriteRate == nil || *detail.Cache.WriteRate != 0.04 {
-		t.Fatalf("cache write rate = %v, want 0.04", detail.Cache.WriteRate)
+	if detail.Cache.CreationRate == nil || *detail.Cache.CreationRate != 0.04 {
+		t.Fatalf("cache creation rate = %v, want 0.04", detail.Cache.CreationRate)
 	}
 }

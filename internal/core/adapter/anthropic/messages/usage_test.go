@@ -11,7 +11,7 @@ func intptr(v int) *int { return &v }
 // TestMergeUsageWireStreamCacheCreationFromDelta 锁定 sub2api/上游流式形状：
 // message_start 只带全 0 的 cache_creation TTL 占位对象，真实 cache write 总量在 message_delta
 // 的 flat cache_creation_input_tokens 上给出。合并后必须以 flat 权威值入账（8798），
-// 而不能被 message_start 的 0 拆分吞没（否则缓存写入成本被严重少计）。
+// 而不能被 message_start 的 0 拆分吞没（否则缓存创建成本被严重少计）。
 func TestMergeUsageWireStreamCacheCreationFromDelta(t *testing.T) {
 	var state usageWire
 
@@ -33,8 +33,8 @@ func TestMergeUsageWireStreamCacheCreationFromDelta(t *testing.T) {
 	})
 
 	facts := messageUsageFromWire(state).ToUsageFacts()
-	if got, ok := facts.CacheWrite5mInputTokens.BillableValue(); !ok || got != 8798 {
-		t.Fatalf("cache_write_5m = %d ok=%v, want 8798 (flat total must win over stale zero TTL split)", got, ok)
+	if got, ok := facts.CacheCreation5mInputTokens.BillableValue(); !ok || got != 8798 {
+		t.Fatalf("cache_creation_5m = %d ok=%v, want 8798 (flat total must win over stale zero TTL split)", got, ok)
 	}
 }
 
@@ -50,11 +50,11 @@ func TestMergeUsageWireKeepsConsistentTTLSplit(t *testing.T) {
 	})
 
 	facts := messageUsageFromWire(state).ToUsageFacts()
-	if got, ok := facts.CacheWrite5mInputTokens.BillableValue(); !ok || got != 5 {
-		t.Fatalf("cache_write_5m = %d ok=%v, want 5 (TTL split preserved)", got, ok)
+	if got, ok := facts.CacheCreation5mInputTokens.BillableValue(); !ok || got != 5 {
+		t.Fatalf("cache_creation_5m = %d ok=%v, want 5 (TTL split preserved)", got, ok)
 	}
-	if got, ok := facts.CacheWrite1hInputTokens.BillableValue(); !ok || got != 3 {
-		t.Fatalf("cache_write_1h = %d ok=%v, want 3 (TTL split preserved)", got, ok)
+	if got, ok := facts.CacheCreation1hInputTokens.BillableValue(); !ok || got != 3 {
+		t.Fatalf("cache_creation_1h = %d ok=%v, want 3 (TTL split preserved)", got, ok)
 	}
 }
 
@@ -82,8 +82,8 @@ func TestMergeUsageWireOfficialCumulativeNoDoubleCount(t *testing.T) {
 	})
 
 	facts := messageUsageFromWire(state).ToUsageFacts()
-	if got, ok := facts.CacheWrite5mInputTokens.BillableValue(); !ok || got != 500 {
-		t.Fatalf("cache_write_5m = %d ok=%v, want 500 (overwrite, not doubled to 1000)", got, ok)
+	if got, ok := facts.CacheCreation5mInputTokens.BillableValue(); !ok || got != 500 {
+		t.Fatalf("cache_creation_5m = %d ok=%v, want 500 (overwrite, not doubled to 1000)", got, ok)
 	}
 	if got, ok := facts.CacheReadInputTokens.BillableValue(); !ok || got != 1000 {
 		t.Fatalf("cache_read = %d ok=%v, want 1000 (overwrite, not doubled)", got, ok)
@@ -109,11 +109,11 @@ func TestMergeUsageWireOfficial1hTierPreserved(t *testing.T) {
 	})
 
 	facts := messageUsageFromWire(state).ToUsageFacts()
-	if got, ok := facts.CacheWrite1hInputTokens.BillableValue(); !ok || got != 500 {
-		t.Fatalf("cache_write_1h = %d ok=%v, want 500 (1h tier preserved, not collapsed to 5m)", got, ok)
+	if got, ok := facts.CacheCreation1hInputTokens.BillableValue(); !ok || got != 500 {
+		t.Fatalf("cache_creation_1h = %d ok=%v, want 500 (1h tier preserved, not collapsed to 5m)", got, ok)
 	}
-	if got, ok := facts.CacheWrite5mInputTokens.BillableValue(); !ok || got != 0 {
-		t.Fatalf("cache_write_5m = %d ok=%v, want 0", got, ok)
+	if got, ok := facts.CacheCreation5mInputTokens.BillableValue(); !ok || got != 0 {
+		t.Fatalf("cache_creation_5m = %d ok=%v, want 0", got, ok)
 	}
 }
 
@@ -136,11 +136,11 @@ func TestMessageUsageToUsageFactsDeepSeekShape(t *testing.T) {
 		t.Fatalf("cache_read = %d ok=%v", got, ok)
 	}
 	// flat cache_creation 总量归入默认 5m 档。
-	if got, ok := facts.CacheWrite5mInputTokens.BillableValue(); !ok || got != 0 {
-		t.Fatalf("cache_write_5m = %d ok=%v", got, ok)
+	if got, ok := facts.CacheCreation5mInputTokens.BillableValue(); !ok || got != 0 {
+		t.Fatalf("cache_creation_5m = %d ok=%v", got, ok)
 	}
-	if facts.CacheWrite1hInputTokens.State != usage.CountNotApplicable {
-		t.Fatalf("cache_write_1h state = %s, want not_applicable", facts.CacheWrite1hInputTokens.State)
+	if facts.CacheCreation1hInputTokens.State != usage.CountNotApplicable {
+		t.Fatalf("cache_creation_1h state = %s, want not_applicable", facts.CacheCreation1hInputTokens.State)
 	}
 	if got, ok := facts.OutputTokensTotal.BillableValue(); !ok || got != 44 {
 		t.Fatalf("output = %d ok=%v", got, ok)
@@ -170,11 +170,11 @@ func TestMessageUsageToUsageFactsTTLBreakdownAndServerTools(t *testing.T) {
 
 	facts := u.ToUsageFacts()
 
-	if got, ok := facts.CacheWrite5mInputTokens.BillableValue(); !ok || got != 5 {
-		t.Fatalf("cache_write_5m = %d ok=%v", got, ok)
+	if got, ok := facts.CacheCreation5mInputTokens.BillableValue(); !ok || got != 5 {
+		t.Fatalf("cache_creation_5m = %d ok=%v", got, ok)
 	}
-	if got, ok := facts.CacheWrite1hInputTokens.BillableValue(); !ok || got != 3 {
-		t.Fatalf("cache_write_1h = %d ok=%v", got, ok)
+	if got, ok := facts.CacheCreation1hInputTokens.BillableValue(); !ok || got != 3 {
+		t.Fatalf("cache_creation_1h = %d ok=%v", got, ok)
 	}
 	if got, ok := facts.ReasoningOutputTokens.BillableValue(); !ok || got != 2 {
 		t.Fatalf("reasoning = %d ok=%v", got, ok)

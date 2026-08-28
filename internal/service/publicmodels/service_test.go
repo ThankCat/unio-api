@@ -105,8 +105,8 @@ func TestListResolvesRatioPricing(t *testing.T) {
 	strValue(t, m.Standard.Sale.UncachedInput, "0.8", "sale uncached input")
 	strValue(t, m.Standard.Sale.Output, "4", "sale output")
 	strValue(t, m.Standard.Sale.CacheRead, "0.08", "sale cache read")
-	if m.Standard.Sale.CacheWrite30m != nil {
-		t.Fatalf("unset cache write must stay nil, got %q", *m.Standard.Sale.CacheWrite30m)
+	if m.Standard.Sale.CacheCreation30m != nil {
+		t.Fatalf("unset cache write must stay nil, got %q", *m.Standard.Sale.CacheCreation30m)
 	}
 	strValue(t, m.SaleRatio, "0.2", "sale ratio")
 	if m.Fast != nil {

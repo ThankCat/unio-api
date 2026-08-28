@@ -514,16 +514,16 @@ func chatSettlementBilling(amount pgtype.Numeric) *fakeChatBillingCalculator {
 // chatSettlementProviderCost 返回当前测试 usage 和成本价对应的平台成本分项。
 func chatSettlementProviderCost() billing.ProviderCost {
 	return billing.ProviderCost{
-		UncachedInputCostAmount:      testNumeric(70000, -10),
-		OutputCostAmount:             testNumeric(120000, -10),
-		CacheReadInputCostAmount:     testNumeric(7500, -10),
-		CacheWrite5mInputCostAmount:  testNumeric(0, -10),
-		CacheWrite1hInputCostAmount:  testNumeric(0, -10),
-		CacheWrite30mInputCostAmount: testNumeric(0, -10),
-		ReasoningOutputCostAmount:    testNumeric(120000, -10),
-		TotalCostAmount:              testNumeric(317500, -10),
-		Currency:                     "USD",
-		FormulaVersion:               billing.FormulaVersionV1,
+		UncachedInputCostAmount:         testNumeric(70000, -10),
+		OutputCostAmount:                testNumeric(120000, -10),
+		CacheReadInputCostAmount:        testNumeric(7500, -10),
+		CacheCreation5mInputCostAmount:  testNumeric(0, -10),
+		CacheCreation1hInputCostAmount:  testNumeric(0, -10),
+		CacheCreation30mInputCostAmount: testNumeric(0, -10),
+		ReasoningOutputCostAmount:       testNumeric(120000, -10),
+		TotalCostAmount:                 testNumeric(317500, -10),
+		Currency:                        "USD",
+		FormulaVersion:                  billing.FormulaVersionV1,
 	}
 }
 
@@ -666,9 +666,9 @@ func TestChatSettlementSettlesSuccessfulChat(t *testing.T) {
 		usageRecord.ReasoningOutputTokensState != string(coreusage.CountKnown) {
 		t.Fatalf("expected known usage states, got %+v", usageRecord)
 	}
-	if usageRecord.CacheWrite5mInputTokensState != string(coreusage.CountNotApplicable) ||
-		usageRecord.CacheWrite1hInputTokensState != string(coreusage.CountNotApplicable) {
-		t.Fatalf("expected cache write states not_applicable, got 5m=%q 1h=%q", usageRecord.CacheWrite5mInputTokensState, usageRecord.CacheWrite1hInputTokensState)
+	if usageRecord.CacheCreation5mInputTokensState != string(coreusage.CountNotApplicable) ||
+		usageRecord.CacheCreation1hInputTokensState != string(coreusage.CountNotApplicable) {
+		t.Fatalf("expected cache write states not_applicable, got 5m=%q 1h=%q", usageRecord.CacheCreation5mInputTokensState, usageRecord.CacheCreation1hInputTokensState)
 	}
 	if usageRecord.UsageSource != "upstream_response" {
 		t.Fatalf("expected usage source upstream_response, got %q", usageRecord.UsageSource)
@@ -1523,22 +1523,22 @@ func TestChatSettlementRejectsReplayWithDifferentCostSnapshot(t *testing.T) {
 func usageRecordRowFromFacts(facts adapter.ResponseFacts) sqlc.UsageRecord {
 	u := facts.Usage
 	return sqlc.UsageRecord{
-		UncachedInputTokens:           u.UncachedInputTokens.Value,
-		UncachedInputTokensState:      string(u.UncachedInputTokens.State),
-		CacheReadInputTokens:          u.CacheReadInputTokens.Value,
-		CacheReadInputTokensState:     string(u.CacheReadInputTokens.State),
-		CacheWrite5mInputTokens:       u.CacheWrite5mInputTokens.Value,
-		CacheWrite5mInputTokensState:  string(u.CacheWrite5mInputTokens.State),
-		CacheWrite1hInputTokens:       u.CacheWrite1hInputTokens.Value,
-		CacheWrite1hInputTokensState:  string(u.CacheWrite1hInputTokens.State),
-		CacheWrite30mInputTokens:      u.CacheWrite30mInputTokens.Value,
-		CacheWrite30mInputTokensState: string(u.CacheWrite30mInputTokens.State),
-		OutputTokensTotal:             u.OutputTokensTotal.Value,
-		OutputTokensTotalState:        string(u.OutputTokensTotal.State),
-		ReasoningOutputTokens:         u.ReasoningOutputTokens.Value,
-		ReasoningOutputTokensState:    string(u.ReasoningOutputTokens.State),
-		UsageSource:                   string(facts.UsageSource),
-		UsageMappingVersion:           facts.UsageMappingVersion,
+		UncachedInputTokens:              u.UncachedInputTokens.Value,
+		UncachedInputTokensState:         string(u.UncachedInputTokens.State),
+		CacheReadInputTokens:             u.CacheReadInputTokens.Value,
+		CacheReadInputTokensState:        string(u.CacheReadInputTokens.State),
+		CacheCreation5mInputTokens:       u.CacheCreation5mInputTokens.Value,
+		CacheCreation5mInputTokensState:  string(u.CacheCreation5mInputTokens.State),
+		CacheCreation1hInputTokens:       u.CacheCreation1hInputTokens.Value,
+		CacheCreation1hInputTokensState:  string(u.CacheCreation1hInputTokens.State),
+		CacheCreation30mInputTokens:      u.CacheCreation30mInputTokens.Value,
+		CacheCreation30mInputTokensState: string(u.CacheCreation30mInputTokens.State),
+		OutputTokensTotal:                u.OutputTokensTotal.Value,
+		OutputTokensTotalState:           string(u.OutputTokensTotal.State),
+		ReasoningOutputTokens:            u.ReasoningOutputTokens.Value,
+		ReasoningOutputTokensState:       string(u.ReasoningOutputTokens.State),
+		UsageSource:                      string(facts.UsageSource),
+		UsageMappingVersion:              facts.UsageMappingVersion,
 	}
 }
 
@@ -1602,8 +1602,8 @@ func TestChatSettlementSkipsZeroProviderCost(t *testing.T) {
 	zero := testNumeric(0, -10)
 	billingCalculator.cost = billing.ProviderCost{
 		UncachedInputCostAmount: zero, CacheReadInputCostAmount: zero,
-		CacheWrite5mInputCostAmount: zero, CacheWrite1hInputCostAmount: zero,
-		CacheWrite30mInputCostAmount: zero, OutputCostAmount: zero,
+		CacheCreation5mInputCostAmount: zero, CacheCreation1hInputCostAmount: zero,
+		CacheCreation30mInputCostAmount: zero, OutputCostAmount: zero,
 		ReasoningOutputCostAmount: zero, TotalCostAmount: zero,
 		Currency: "USD", FormulaVersion: billing.FormulaVersionV1,
 	}

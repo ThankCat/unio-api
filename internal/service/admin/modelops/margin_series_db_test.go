@@ -138,8 +138,8 @@ func (f *marginFixture) billedRequest(revenue, cost string, ageMinutes int) {
 			request_record_id, provider_id, channel_id, model_id, upstream_model,
 			currency, pricing_unit, uncached_input_cost, output_cost,
 			uncached_input_cost_amount, cache_read_input_cost_amount,
-			cache_write_5m_input_cost_amount, cache_write_1h_input_cost_amount,
-			cache_write_30m_input_cost_amount, output_cost_amount,
+			cache_creation_5m_input_cost_amount, cache_creation_1h_input_cost_amount,
+			cache_creation_30m_input_cost_amount, output_cost_amount,
 			reasoning_output_cost_amount, total_cost_amount, formula_version, created_at
 		)
 		VALUES ($1, $2, $3, $4, 'upstream-model', 'USD', 'per_1m_tokens', 1, 2,

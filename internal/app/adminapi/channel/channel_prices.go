@@ -22,65 +22,65 @@ type ChannelPriceService interface {
 // DEC-026：渠道只录成本（客户售价 = 模型基准价 × 线路倍率）。主成本必填（恒有值）；其余分项成本可空（*string）。
 // model_external_id / model_display_name 仅列表场景有值；单条写入返回为空。
 type channelPriceDTO struct {
-	ID                     int64        `json:"id"`
-	ChannelID              int64        `json:"channel_id"`
-	ModelID                int64        `json:"model_id"`
-	ModelExternalID        string       `json:"model_external_id"`
-	ModelDisplayName       string       `json:"model_display_name"`
-	Currency               string       `json:"currency"`
-	PricingUnit            string       `json:"pricing_unit"`
-	UncachedInputCost      string       `json:"uncached_input_cost"`
-	CacheReadInputCost     *string      `json:"cache_read_input_cost"`
-	CacheWrite5mInputCost  *string      `json:"cache_write_5m_input_cost"`
-	CacheWrite1hInputCost  *string      `json:"cache_write_1h_input_cost"`
-	CacheWrite30mInputCost *string      `json:"cache_write_30m_input_cost"`
-	OutputCost             string       `json:"output_cost"`
-	ReasoningOutputCost    *string      `json:"reasoning_output_cost"`
-	FastCostStatus         string       `json:"fast_cost_status"`
-	FastCosts              *fastCostDTO `json:"fast_costs"`
-	Status                 string       `json:"status"`
-	EffectiveFrom          string       `json:"effective_from"`
-	EffectiveTo            *string      `json:"effective_to"`
-	CreatedAt              string       `json:"created_at"`
-	UpdatedAt              string       `json:"updated_at"`
+	ID                        int64        `json:"id"`
+	ChannelID                 int64        `json:"channel_id"`
+	ModelID                   int64        `json:"model_id"`
+	ModelExternalID           string       `json:"model_external_id"`
+	ModelDisplayName          string       `json:"model_display_name"`
+	Currency                  string       `json:"currency"`
+	PricingUnit               string       `json:"pricing_unit"`
+	UncachedInputCost         string       `json:"uncached_input_cost"`
+	CacheReadInputCost        *string      `json:"cache_read_input_cost"`
+	CacheCreation5mInputCost  *string      `json:"cache_creation_5m_input_cost"`
+	CacheCreation1hInputCost  *string      `json:"cache_creation_1h_input_cost"`
+	CacheCreation30mInputCost *string      `json:"cache_creation_30m_input_cost"`
+	OutputCost                string       `json:"output_cost"`
+	ReasoningOutputCost       *string      `json:"reasoning_output_cost"`
+	FastCostStatus            string       `json:"fast_cost_status"`
+	FastCosts                 *fastCostDTO `json:"fast_costs"`
+	Status                    string       `json:"status"`
+	EffectiveFrom             string       `json:"effective_from"`
+	EffectiveTo               *string      `json:"effective_to"`
+	CreatedAt                 string       `json:"created_at"`
+	UpdatedAt                 string       `json:"updated_at"`
 }
 
 type fastCostDTO struct {
-	ServiceTierID          int64   `json:"service_tier_id"`
-	UncachedInputCost      string  `json:"uncached_input_cost"`
-	CacheReadInputCost     *string `json:"cache_read_input_cost"`
-	CacheWrite5mInputCost  *string `json:"cache_write_5m_input_cost"`
-	CacheWrite1hInputCost  *string `json:"cache_write_1h_input_cost"`
-	CacheWrite30mInputCost *string `json:"cache_write_30m_input_cost"`
-	OutputCost             string  `json:"output_cost"`
-	ReasoningOutputCost    *string `json:"reasoning_output_cost"`
+	ServiceTierID             int64   `json:"service_tier_id"`
+	UncachedInputCost         string  `json:"uncached_input_cost"`
+	CacheReadInputCost        *string `json:"cache_read_input_cost"`
+	CacheCreation5mInputCost  *string `json:"cache_creation_5m_input_cost"`
+	CacheCreation1hInputCost  *string `json:"cache_creation_1h_input_cost"`
+	CacheCreation30mInputCost *string `json:"cache_creation_30m_input_cost"`
+	OutputCost                string  `json:"output_cost"`
+	ReasoningOutputCost       *string `json:"reasoning_output_cost"`
 }
 
 type fastCostRequest struct {
-	UncachedInputCost      string  `json:"uncached_input_cost"`
-	CacheReadInputCost     *string `json:"cache_read_input_cost"`
-	CacheWrite5mInputCost  *string `json:"cache_write_5m_input_cost"`
-	CacheWrite1hInputCost  *string `json:"cache_write_1h_input_cost"`
-	CacheWrite30mInputCost *string `json:"cache_write_30m_input_cost"`
-	OutputCost             string  `json:"output_cost"`
-	ReasoningOutputCost    *string `json:"reasoning_output_cost"`
+	UncachedInputCost         string  `json:"uncached_input_cost"`
+	CacheReadInputCost        *string `json:"cache_read_input_cost"`
+	CacheCreation5mInputCost  *string `json:"cache_creation_5m_input_cost"`
+	CacheCreation1hInputCost  *string `json:"cache_creation_1h_input_cost"`
+	CacheCreation30mInputCost *string `json:"cache_creation_30m_input_cost"`
+	OutputCost                string  `json:"output_cost"`
+	ReasoningOutputCost       *string `json:"reasoning_output_cost"`
 }
 
 type createChannelPriceRequest struct {
-	ModelID                int64            `json:"model_id"`
-	Currency               string           `json:"currency"`
-	PricingUnit            string           `json:"pricing_unit"`
-	UncachedInputCost      string           `json:"uncached_input_cost"`
-	CacheReadInputCost     *string          `json:"cache_read_input_cost"`
-	CacheWrite5mInputCost  *string          `json:"cache_write_5m_input_cost"`
-	CacheWrite1hInputCost  *string          `json:"cache_write_1h_input_cost"`
-	CacheWrite30mInputCost *string          `json:"cache_write_30m_input_cost"`
-	OutputCost             string           `json:"output_cost"`
-	ReasoningOutputCost    *string          `json:"reasoning_output_cost"`
-	FastCosts              *fastCostRequest `json:"fast_costs"`
-	Status                 string           `json:"status"`
-	EffectiveFrom          string           `json:"effective_from"`
-	EffectiveTo            *string          `json:"effective_to"`
+	ModelID                   int64            `json:"model_id"`
+	Currency                  string           `json:"currency"`
+	PricingUnit               string           `json:"pricing_unit"`
+	UncachedInputCost         string           `json:"uncached_input_cost"`
+	CacheReadInputCost        *string          `json:"cache_read_input_cost"`
+	CacheCreation5mInputCost  *string          `json:"cache_creation_5m_input_cost"`
+	CacheCreation1hInputCost  *string          `json:"cache_creation_1h_input_cost"`
+	CacheCreation30mInputCost *string          `json:"cache_creation_30m_input_cost"`
+	OutputCost                string           `json:"output_cost"`
+	ReasoningOutputCost       *string          `json:"reasoning_output_cost"`
+	FastCosts                 *fastCostRequest `json:"fast_costs"`
+	Status                    string           `json:"status"`
+	EffectiveFrom             string           `json:"effective_from"`
+	EffectiveTo               *string          `json:"effective_to"`
 }
 
 type updateChannelPriceRequest struct {
@@ -143,21 +143,21 @@ func (h *channelPricesHandler) create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	p, err := h.service.Create(r.Context(), channelprice.CreateInput{
-		ChannelID:              channelID,
-		ModelID:                modelID,
-		Currency:               req.Currency,
-		PricingUnit:            req.PricingUnit,
-		UncachedInputCost:      req.UncachedInputCost,
-		CacheReadInputCost:     req.CacheReadInputCost,
-		CacheWrite5mInputCost:  req.CacheWrite5mInputCost,
-		CacheWrite1hInputCost:  req.CacheWrite1hInputCost,
-		CacheWrite30mInputCost: req.CacheWrite30mInputCost,
-		OutputCost:             req.OutputCost,
-		ReasoningOutputCost:    req.ReasoningOutputCost,
-		FastCosts:              toFastCostInput(req.FastCosts),
-		Status:                 req.Status,
-		EffectiveFrom:          from,
-		EffectiveTo:            to,
+		ChannelID:                 channelID,
+		ModelID:                   modelID,
+		Currency:                  req.Currency,
+		PricingUnit:               req.PricingUnit,
+		UncachedInputCost:         req.UncachedInputCost,
+		CacheReadInputCost:        req.CacheReadInputCost,
+		CacheCreation5mInputCost:  req.CacheCreation5mInputCost,
+		CacheCreation1hInputCost:  req.CacheCreation1hInputCost,
+		CacheCreation30mInputCost: req.CacheCreation30mInputCost,
+		OutputCost:                req.OutputCost,
+		ReasoningOutputCost:       req.ReasoningOutputCost,
+		FastCosts:                 toFastCostInput(req.FastCosts),
+		Status:                    req.Status,
+		EffectiveFrom:             from,
+		EffectiveTo:               to,
 	})
 	if err != nil {
 		adminhttp.WriteServiceError(w, err)
@@ -201,36 +201,36 @@ func (h *channelPricesHandler) update(w http.ResponseWriter, r *http.Request) {
 
 func toChannelPriceDTO(p channelprice.ChannelPrice) channelPriceDTO {
 	dto := channelPriceDTO{
-		ID:                     p.ID,
-		ChannelID:              p.ChannelID,
-		ModelID:                p.ModelID,
-		ModelExternalID:        p.ModelExternalID,
-		ModelDisplayName:       p.ModelDisplayName,
-		Currency:               p.Currency,
-		PricingUnit:            p.PricingUnit,
-		UncachedInputCost:      p.UncachedInputCost,
-		CacheReadInputCost:     p.CacheReadInputCost,
-		CacheWrite5mInputCost:  p.CacheWrite5mInputCost,
-		CacheWrite1hInputCost:  p.CacheWrite1hInputCost,
-		CacheWrite30mInputCost: p.CacheWrite30mInputCost,
-		OutputCost:             p.OutputCost,
-		ReasoningOutputCost:    p.ReasoningOutputCost,
-		FastCostStatus:         p.FastCostStatus,
-		Status:                 p.Status,
-		EffectiveFrom:          p.EffectiveFrom.UTC().Format(time.RFC3339),
-		CreatedAt:              p.CreatedAt.UTC().Format(time.RFC3339),
-		UpdatedAt:              p.UpdatedAt.UTC().Format(time.RFC3339),
+		ID:                        p.ID,
+		ChannelID:                 p.ChannelID,
+		ModelID:                   p.ModelID,
+		ModelExternalID:           p.ModelExternalID,
+		ModelDisplayName:          p.ModelDisplayName,
+		Currency:                  p.Currency,
+		PricingUnit:               p.PricingUnit,
+		UncachedInputCost:         p.UncachedInputCost,
+		CacheReadInputCost:        p.CacheReadInputCost,
+		CacheCreation5mInputCost:  p.CacheCreation5mInputCost,
+		CacheCreation1hInputCost:  p.CacheCreation1hInputCost,
+		CacheCreation30mInputCost: p.CacheCreation30mInputCost,
+		OutputCost:                p.OutputCost,
+		ReasoningOutputCost:       p.ReasoningOutputCost,
+		FastCostStatus:            p.FastCostStatus,
+		Status:                    p.Status,
+		EffectiveFrom:             p.EffectiveFrom.UTC().Format(time.RFC3339),
+		CreatedAt:                 p.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt:                 p.UpdatedAt.UTC().Format(time.RFC3339),
 	}
 	if p.FastCosts != nil {
 		dto.FastCosts = &fastCostDTO{
-			ServiceTierID:          p.FastCosts.ServiceTierID,
-			UncachedInputCost:      p.FastCosts.UncachedInputCost,
-			CacheReadInputCost:     p.FastCosts.CacheReadInputCost,
-			CacheWrite5mInputCost:  p.FastCosts.CacheWrite5mInputCost,
-			CacheWrite1hInputCost:  p.FastCosts.CacheWrite1hInputCost,
-			CacheWrite30mInputCost: p.FastCosts.CacheWrite30mInputCost,
-			OutputCost:             p.FastCosts.OutputCost,
-			ReasoningOutputCost:    p.FastCosts.ReasoningOutputCost,
+			ServiceTierID:             p.FastCosts.ServiceTierID,
+			UncachedInputCost:         p.FastCosts.UncachedInputCost,
+			CacheReadInputCost:        p.FastCosts.CacheReadInputCost,
+			CacheCreation5mInputCost:  p.FastCosts.CacheCreation5mInputCost,
+			CacheCreation1hInputCost:  p.FastCosts.CacheCreation1hInputCost,
+			CacheCreation30mInputCost: p.FastCosts.CacheCreation30mInputCost,
+			OutputCost:                p.FastCosts.OutputCost,
+			ReasoningOutputCost:       p.FastCosts.ReasoningOutputCost,
 		}
 	}
 	if p.EffectiveTo != nil {
@@ -245,12 +245,12 @@ func toFastCostInput(req *fastCostRequest) *channelprice.FastCostInput {
 		return nil
 	}
 	return &channelprice.FastCostInput{
-		UncachedInputCost:      req.UncachedInputCost,
-		CacheReadInputCost:     req.CacheReadInputCost,
-		CacheWrite5mInputCost:  req.CacheWrite5mInputCost,
-		CacheWrite1hInputCost:  req.CacheWrite1hInputCost,
-		CacheWrite30mInputCost: req.CacheWrite30mInputCost,
-		OutputCost:             req.OutputCost,
-		ReasoningOutputCost:    req.ReasoningOutputCost,
+		UncachedInputCost:         req.UncachedInputCost,
+		CacheReadInputCost:        req.CacheReadInputCost,
+		CacheCreation5mInputCost:  req.CacheCreation5mInputCost,
+		CacheCreation1hInputCost:  req.CacheCreation1hInputCost,
+		CacheCreation30mInputCost: req.CacheCreation30mInputCost,
+		OutputCost:                req.OutputCost,
+		ReasoningOutputCost:       req.ReasoningOutputCost,
 	}
 }

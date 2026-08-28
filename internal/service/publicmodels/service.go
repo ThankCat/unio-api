@@ -29,13 +29,13 @@ type Store interface {
 
 // PriceVector 是一组按分项展开的单价（十进制字符串，USD / 1M tokens）；nil 表示该分项未定价。
 type PriceVector struct {
-	UncachedInput   *string
-	CacheRead       *string
-	CacheWrite5m    *string
-	CacheWrite1h    *string
-	CacheWrite30m   *string
-	Output          *string
-	ReasoningOutput *string
+	UncachedInput    *string
+	CacheRead        *string
+	CacheCreation5m  *string
+	CacheCreation1h  *string
+	CacheCreation30m *string
+	Output           *string
+	ReasoningOutput  *string
 }
 
 // PriceGroup 是某个服务档位的「官方牌价 + 对客售价」对照。
@@ -128,24 +128,24 @@ func (s *Service) List(ctx context.Context) ([]Model, error) {
 
 func buildModel(row sqlc.ListPublicModelsRow, caps []Capability) (Model, error) {
 	standardList := billing.CustomerPriceSnapshot{
-		Currency:                row.Currency,
-		PricingUnit:             row.PricingUnit,
-		UncachedInputPrice:      row.UncachedInputPrice,
-		CacheReadInputPrice:     row.CacheReadInputPrice,
-		CacheWrite5mInputPrice:  row.CacheWrite5mInputPrice,
-		CacheWrite1hInputPrice:  row.CacheWrite1hInputPrice,
-		CacheWrite30mInputPrice: row.CacheWrite30mInputPrice,
-		OutputPrice:             row.OutputPrice,
-		ReasoningOutputPrice:    row.ReasoningOutputPrice,
+		Currency:                   row.Currency,
+		PricingUnit:                row.PricingUnit,
+		UncachedInputPrice:         row.UncachedInputPrice,
+		CacheReadInputPrice:        row.CacheReadInputPrice,
+		CacheCreation5mInputPrice:  row.CacheCreation5mInputPrice,
+		CacheCreation1hInputPrice:  row.CacheCreation1hInputPrice,
+		CacheCreation30mInputPrice: row.CacheCreation30mInputPrice,
+		OutputPrice:                row.OutputPrice,
+		ReasoningOutputPrice:       row.ReasoningOutputPrice,
 	}
 	standardOverride := billing.SaleOverride{
-		UncachedInputPrice:      row.SaleUncachedInputPrice,
-		CacheReadInputPrice:     row.SaleCacheReadInputPrice,
-		CacheWrite5mInputPrice:  row.SaleCacheWrite5mInputPrice,
-		CacheWrite1hInputPrice:  row.SaleCacheWrite1hInputPrice,
-		CacheWrite30mInputPrice: row.SaleCacheWrite30mInputPrice,
-		OutputPrice:             row.SaleOutputPrice,
-		ReasoningOutputPrice:    row.SaleReasoningOutputPrice,
+		UncachedInputPrice:         row.SaleUncachedInputPrice,
+		CacheReadInputPrice:        row.SaleCacheReadInputPrice,
+		CacheCreation5mInputPrice:  row.SaleCacheCreation5mInputPrice,
+		CacheCreation1hInputPrice:  row.SaleCacheCreation1hInputPrice,
+		CacheCreation30mInputPrice: row.SaleCacheCreation30mInputPrice,
+		OutputPrice:                row.SaleOutputPrice,
+		ReasoningOutputPrice:       row.SaleReasoningOutputPrice,
 	}
 	standardSale, err := billing.ResolveCustomerPrice(standardList, row.SalePriceRatio, standardOverride)
 	if err != nil {
@@ -187,24 +187,24 @@ func buildModel(row sqlc.ListPublicModelsRow, caps []Capability) (Model, error) 
 
 	if row.FastConfigured {
 		fastList := billing.CustomerPriceSnapshot{
-			Currency:                row.Currency,
-			PricingUnit:             row.PricingUnit,
-			UncachedInputPrice:      row.FastUncachedInputPrice,
-			CacheReadInputPrice:     row.FastCacheReadInputPrice,
-			CacheWrite5mInputPrice:  row.FastCacheWrite5mInputPrice,
-			CacheWrite1hInputPrice:  row.FastCacheWrite1hInputPrice,
-			CacheWrite30mInputPrice: row.FastCacheWrite30mInputPrice,
-			OutputPrice:             row.FastOutputPrice,
-			ReasoningOutputPrice:    row.FastReasoningOutputPrice,
+			Currency:                   row.Currency,
+			PricingUnit:                row.PricingUnit,
+			UncachedInputPrice:         row.FastUncachedInputPrice,
+			CacheReadInputPrice:        row.FastCacheReadInputPrice,
+			CacheCreation5mInputPrice:  row.FastCacheCreation5mInputPrice,
+			CacheCreation1hInputPrice:  row.FastCacheCreation1hInputPrice,
+			CacheCreation30mInputPrice: row.FastCacheCreation30mInputPrice,
+			OutputPrice:                row.FastOutputPrice,
+			ReasoningOutputPrice:       row.FastReasoningOutputPrice,
 		}
 		fastOverride := billing.SaleOverride{
-			UncachedInputPrice:      row.FastSaleUncachedInputPrice,
-			CacheReadInputPrice:     row.FastSaleCacheReadInputPrice,
-			CacheWrite5mInputPrice:  row.FastSaleCacheWrite5mInputPrice,
-			CacheWrite1hInputPrice:  row.FastSaleCacheWrite1hInputPrice,
-			CacheWrite30mInputPrice: row.FastSaleCacheWrite30mInputPrice,
-			OutputPrice:             row.FastSaleOutputPrice,
-			ReasoningOutputPrice:    row.FastSaleReasoningOutputPrice,
+			UncachedInputPrice:         row.FastSaleUncachedInputPrice,
+			CacheReadInputPrice:        row.FastSaleCacheReadInputPrice,
+			CacheCreation5mInputPrice:  row.FastSaleCacheCreation5mInputPrice,
+			CacheCreation1hInputPrice:  row.FastSaleCacheCreation1hInputPrice,
+			CacheCreation30mInputPrice: row.FastSaleCacheCreation30mInputPrice,
+			OutputPrice:                row.FastSaleOutputPrice,
+			ReasoningOutputPrice:       row.FastSaleReasoningOutputPrice,
 		}
 		fastSale, err := billing.ResolveCustomerPrice(fastList, row.SalePriceRatio, fastOverride)
 		if err != nil {
@@ -221,13 +221,13 @@ func buildModel(row sqlc.ListPublicModelsRow, caps []Capability) (Model, error) 
 
 func vectorFromSnapshot(s billing.CustomerPriceSnapshot) PriceVector {
 	return PriceVector{
-		UncachedInput:   opsutil.NumericStringPtr(s.UncachedInputPrice),
-		CacheRead:       opsutil.NumericStringPtr(s.CacheReadInputPrice),
-		CacheWrite5m:    opsutil.NumericStringPtr(s.CacheWrite5mInputPrice),
-		CacheWrite1h:    opsutil.NumericStringPtr(s.CacheWrite1hInputPrice),
-		CacheWrite30m:   opsutil.NumericStringPtr(s.CacheWrite30mInputPrice),
-		Output:          opsutil.NumericStringPtr(s.OutputPrice),
-		ReasoningOutput: opsutil.NumericStringPtr(s.ReasoningOutputPrice),
+		UncachedInput:    opsutil.NumericStringPtr(s.UncachedInputPrice),
+		CacheRead:        opsutil.NumericStringPtr(s.CacheReadInputPrice),
+		CacheCreation5m:  opsutil.NumericStringPtr(s.CacheCreation5mInputPrice),
+		CacheCreation1h:  opsutil.NumericStringPtr(s.CacheCreation1hInputPrice),
+		CacheCreation30m: opsutil.NumericStringPtr(s.CacheCreation30mInputPrice),
+		Output:           opsutil.NumericStringPtr(s.OutputPrice),
+		ReasoningOutput:  opsutil.NumericStringPtr(s.ReasoningOutputPrice),
 	}
 }
 

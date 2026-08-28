@@ -74,34 +74,34 @@ func TestListMapsCustomerSafeFieldsAndScopesToUser(t *testing.T) {
 	completed := started.Add(1500 * time.Millisecond)
 	store := &fakeStore{
 		listRows: []sqlc.ListConsoleBilledRequestsRow{{
-			TotalCount:              1,
-			ID:                      11,
-			RequestID:               "req_safe",
-			CreatedAt:               pgtype.Timestamptz{Time: started, Valid: true},
-			ClientIp:                pgtype.Text{String: "203.0.113.10", Valid: true},
-			ApiKeyID:                9,
-			ApiKeyName:              pgtype.Text{String: "prod", Valid: true},
-			ApiKeyPrefix:            pgtype.Text{String: "sk-unio-xhe8wl5d", Valid: true},
-			Endpoint:                "chat_completions",
-			Stream:                  true,
-			RequestedModelID:        "claude-sonnet-4-5",
-			ModelDisplayName:        pgtype.Text{String: "Claude Sonnet 4.5", Valid: true},
-			IngressProtocol:         "anthropic",
-			InputPricePer1m:         mustNumeric(t, "1"),
-			OutputPricePer1m:        mustNumeric(t, "6"),
-			CacheReadPricePer1m:     mustNumeric(t, "0.1"),
-			PriceServiceTier:        pgtype.Text{String: "standard", Valid: true},
-			ReasoningEffort:         pgtype.Text{String: "medium", Valid: true},
-			UncachedInputTokens:     80,
-			CacheReadInputTokens:    10,
-			CacheWrite5mInputTokens: 10,
-			InputTokens:             100,
-			OutputTokens:            20,
-			ReasoningOutputTokens:   5,
-			StartedAt:               pgtype.Timestamptz{Time: started, Valid: true},
-			CompletedAt:             pgtype.Timestamptz{Time: completed, Valid: true},
-			GatewayFirstTokenAt:     pgtype.Timestamptz{Time: started.Add(400 * time.Millisecond), Valid: true},
-			UserChargeUsd:           mustNumeric(t, "0.15"),
+			TotalCount:                 1,
+			ID:                         11,
+			RequestID:                  "req_safe",
+			CreatedAt:                  pgtype.Timestamptz{Time: started, Valid: true},
+			ClientIp:                   pgtype.Text{String: "203.0.113.10", Valid: true},
+			ApiKeyID:                   9,
+			ApiKeyName:                 pgtype.Text{String: "prod", Valid: true},
+			ApiKeyPrefix:               pgtype.Text{String: "sk-unio-xhe8wl5d", Valid: true},
+			Endpoint:                   "chat_completions",
+			Stream:                     true,
+			RequestedModelID:           "claude-sonnet-4-5",
+			ModelDisplayName:           pgtype.Text{String: "Claude Sonnet 4.5", Valid: true},
+			IngressProtocol:            "anthropic",
+			InputPricePer1m:            mustNumeric(t, "1"),
+			OutputPricePer1m:           mustNumeric(t, "6"),
+			CacheReadPricePer1m:        mustNumeric(t, "0.1"),
+			PriceServiceTier:           pgtype.Text{String: "standard", Valid: true},
+			ReasoningEffort:            pgtype.Text{String: "medium", Valid: true},
+			UncachedInputTokens:        80,
+			CacheReadInputTokens:       10,
+			CacheCreation5mInputTokens: 10,
+			InputTokens:                100,
+			OutputTokens:               20,
+			ReasoningOutputTokens:      5,
+			StartedAt:                  pgtype.Timestamptz{Time: started, Valid: true},
+			CompletedAt:                pgtype.Timestamptz{Time: completed, Valid: true},
+			GatewayFirstTokenAt:        pgtype.Timestamptz{Time: started.Add(400 * time.Millisecond), Valid: true},
+			UserChargeUsd:              mustNumeric(t, "0.15"),
 		}},
 	}
 
@@ -162,7 +162,7 @@ func TestListMapsCustomerSafeFieldsAndScopesToUser(t *testing.T) {
 	if item.PriceServiceTier == nil || *item.PriceServiceTier != "standard" {
 		t.Fatalf("tier = %v", item.PriceServiceTier)
 	}
-	if item.UncachedInputTokens != 80 || item.CacheReadInputTokens != 10 || item.CacheWrite5mInputTokens != 10 || item.ReasoningOutputTokens != 5 {
+	if item.UncachedInputTokens != 80 || item.CacheReadInputTokens != 10 || item.CacheCreation5mInputTokens != 10 || item.ReasoningOutputTokens != 5 {
 		t.Fatalf("token breakdown = %+v", item)
 	}
 }
@@ -202,12 +202,12 @@ func TestSummaryUsesAllTimeWhenBoundsOmitted(t *testing.T) {
 			OutputTokenCount:        60,
 			UncachedInputTokenCount: 90,
 			CacheReadTokenCount:     20,
-			CacheWriteTokenCount:    10,
+			CacheCreationTokenCount: 10,
 			ChargeUsd:               mustNumeric(t, "1.25"),
 			UncachedInputChargeUsd:  mustNumeric(t, "0.90"),
 			OutputChargeUsd:         mustNumeric(t, "0.24"),
 			CacheReadChargeUsd:      mustNumeric(t, "0.04"),
-			CacheWriteChargeUsd:     mustNumeric(t, "0.07"),
+			CacheCreationChargeUsd:  mustNumeric(t, "0.07"),
 			ListChargeUsd:           mustNumeric(t, "2.50"),
 			AverageLatencyMs:        750,
 			AverageFirstTokenMs:     400,
@@ -240,7 +240,7 @@ func TestSummaryUsesAllTimeWhenBoundsOmitted(t *testing.T) {
 	if store.topParams.UserID != 7 || store.topParams.FromTime.Valid || store.topParams.ToTime.Valid {
 		t.Fatalf("top model params = %+v", store.topParams)
 	}
-	if summary.RequestCount != 4 || summary.StreamCount != 3 || summary.TokenCount != 180 || summary.InputTokenCount != 120 || summary.OutputTokenCount != 60 || summary.UncachedInputTokenCount != 90 || summary.CacheReadTokenCount != 20 || summary.CacheWriteTokenCount != 10 || summary.ChargeUSD != "1.25" || summary.UncachedInputChargeUSD != "0.9" || summary.OutputChargeUSD != "0.24" || summary.CacheReadChargeUSD != "0.04" || summary.CacheWriteChargeUSD != "0.07" || summary.ListChargeUSD != "2.5" || summary.AverageLatencyMs != 750 || summary.AverageFirstTokenMs != 400 || summary.MedianLatencyMs != 620 || summary.AverageTPS != 18.1818 {
+	if summary.RequestCount != 4 || summary.StreamCount != 3 || summary.TokenCount != 180 || summary.InputTokenCount != 120 || summary.OutputTokenCount != 60 || summary.UncachedInputTokenCount != 90 || summary.CacheReadTokenCount != 20 || summary.CacheCreationTokenCount != 10 || summary.ChargeUSD != "1.25" || summary.UncachedInputChargeUSD != "0.9" || summary.OutputChargeUSD != "0.24" || summary.CacheReadChargeUSD != "0.04" || summary.CacheCreationChargeUSD != "0.07" || summary.ListChargeUSD != "2.5" || summary.AverageLatencyMs != 750 || summary.AverageFirstTokenMs != 400 || summary.MedianLatencyMs != 620 || summary.AverageTPS != 18.1818 {
 		t.Fatalf("summary = %+v", summary)
 	}
 	if len(summary.TopModels) != 2 || summary.TopModels[0].ModelID != "gpt-5.2" || summary.TopModels[0].DisplayName != "GPT-5.2" || summary.TopModels[0].RequestCount != 3 || summary.TopModels[0].IngressProtocol != "openai" || summary.TopModels[0].InputPricePer1M == nil || *summary.TopModels[0].InputPricePer1M != "1" || summary.TopModels[0].OutputPricePer1M == nil || *summary.TopModels[0].OutputPricePer1M != "6" {

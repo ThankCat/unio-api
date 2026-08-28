@@ -949,13 +949,13 @@ func TestStreamFinishTimeoutEvidenceUsesFirstTokenTiming(t *testing.T) {
 func TestStreamFinishKeepsPlainTailErrorOutOfUpstreamAttribution(t *testing.T) {
 	facts := &adapter.ResponseFacts{
 		Usage: usage.Facts{
-			UncachedInputTokens:      usage.KnownTokens(11),
-			CacheReadInputTokens:     usage.KnownTokens(5),
-			CacheWrite5mInputTokens:  usage.NotApplicableTokens(),
-			CacheWrite30mInputTokens: usage.NotApplicableTokens(),
-			CacheWrite1hInputTokens:  usage.NotApplicableTokens(),
-			OutputTokensTotal:        usage.KnownTokens(7),
-			ReasoningOutputTokens:    usage.NotApplicableTokens(),
+			UncachedInputTokens:         usage.KnownTokens(11),
+			CacheReadInputTokens:        usage.KnownTokens(5),
+			CacheCreation5mInputTokens:  usage.NotApplicableTokens(),
+			CacheCreation30mInputTokens: usage.NotApplicableTokens(),
+			CacheCreation1hInputTokens:  usage.NotApplicableTokens(),
+			OutputTokensTotal:           usage.KnownTokens(7),
+			ReasoningOutputTokens:       usage.NotApplicableTokens(),
 		},
 		UsageSource: usage.SourceUpstreamStream,
 	}

@@ -230,12 +230,12 @@ func TestNilObserverIsSafeNoOp(t *testing.T) {
 
 func reliableFacts(input, output int64) usage.Facts {
 	return usage.Facts{
-		UncachedInputTokens:      usage.KnownTokens(input),
-		CacheReadInputTokens:     usage.KnownTokens(0),
-		CacheWrite5mInputTokens:  usage.NotApplicableTokens(),
-		CacheWrite30mInputTokens: usage.NotApplicableTokens(),
-		CacheWrite1hInputTokens:  usage.NotApplicableTokens(),
-		OutputTokensTotal:        usage.KnownTokens(output),
-		ReasoningOutputTokens:    usage.NotApplicableTokens(),
+		UncachedInputTokens:         usage.KnownTokens(input),
+		CacheReadInputTokens:        usage.KnownTokens(0),
+		CacheCreation5mInputTokens:  usage.NotApplicableTokens(),
+		CacheCreation30mInputTokens: usage.NotApplicableTokens(),
+		CacheCreation1hInputTokens:  usage.NotApplicableTokens(),
+		OutputTokensTotal:           usage.KnownTokens(output),
+		ReasoningOutputTokens:       usage.NotApplicableTokens(),
 	}
 }

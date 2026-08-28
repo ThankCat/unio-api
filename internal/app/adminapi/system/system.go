@@ -71,13 +71,13 @@ type recoveryJobDetailDTO struct {
 	FormulaVersion       string  `json:"formula_version"`
 	PricingUnit          string  `json:"pricing_unit"`
 
-	UncachedInputTokens      int64 `json:"uncached_input_tokens"`
-	CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
-	CacheWrite5mInputTokens  int64 `json:"cache_write_5m_input_tokens"`
-	CacheWrite1hInputTokens  int64 `json:"cache_write_1h_input_tokens"`
-	CacheWrite30mInputTokens int64 `json:"cache_write_30m_input_tokens"`
-	OutputTokensTotal        int64 `json:"output_tokens_total"`
-	ReasoningOutputTokens    int64 `json:"reasoning_output_tokens"`
+	UncachedInputTokens         int64 `json:"uncached_input_tokens"`
+	CacheReadInputTokens        int64 `json:"cache_read_input_tokens"`
+	CacheCreation5mInputTokens  int64 `json:"cache_creation_5m_input_tokens"`
+	CacheCreation1hInputTokens  int64 `json:"cache_creation_1h_input_tokens"`
+	CacheCreation30mInputTokens int64 `json:"cache_creation_30m_input_tokens"`
+	OutputTokensTotal           int64 `json:"output_tokens_total"`
+	ReasoningOutputTokens       int64 `json:"reasoning_output_tokens"`
 
 	// 仅 ?include_internal=true 时回显内部诊断详情，否则为 null。
 	LastInternalErrorDetail *string `json:"last_internal_error_detail"`
@@ -194,21 +194,21 @@ func toRecoveryJobSummaryDTO(j query.RecoveryJobSummary) recoveryJobSummaryDTO {
 
 func toRecoveryJobDetailDTO(j query.RecoveryJobDetail) recoveryJobDetailDTO {
 	return recoveryJobDetailDTO{
-		recoveryJobSummaryDTO:    toRecoveryJobSummaryDTO(j.RecoveryJobSummary),
-		UpstreamResponseID:       j.UpstreamResponseID,
-		UpstreamFinishReason:     j.UpstreamFinishReason,
-		UpstreamRequestID:        j.UpstreamRequestID,
-		UsageSource:              j.UsageSource,
-		UsageMappingVersion:      j.UsageMappingVersion,
-		FormulaVersion:           j.FormulaVersion,
-		PricingUnit:              j.PricingUnit,
-		UncachedInputTokens:      j.UncachedInputTokens,
-		CacheReadInputTokens:     j.CacheReadInputTokens,
-		CacheWrite5mInputTokens:  j.CacheWrite5mInputTokens,
-		CacheWrite1hInputTokens:  j.CacheWrite1hInputTokens,
-		CacheWrite30mInputTokens: j.CacheWrite30mInputTokens,
-		OutputTokensTotal:        j.OutputTokensTotal,
-		ReasoningOutputTokens:    j.ReasoningOutputTokens,
-		LastInternalErrorDetail:  j.LastInternalErrorDetail,
+		recoveryJobSummaryDTO:       toRecoveryJobSummaryDTO(j.RecoveryJobSummary),
+		UpstreamResponseID:          j.UpstreamResponseID,
+		UpstreamFinishReason:        j.UpstreamFinishReason,
+		UpstreamRequestID:           j.UpstreamRequestID,
+		UsageSource:                 j.UsageSource,
+		UsageMappingVersion:         j.UsageMappingVersion,
+		FormulaVersion:              j.FormulaVersion,
+		PricingUnit:                 j.PricingUnit,
+		UncachedInputTokens:         j.UncachedInputTokens,
+		CacheReadInputTokens:        j.CacheReadInputTokens,
+		CacheCreation5mInputTokens:  j.CacheCreation5mInputTokens,
+		CacheCreation1hInputTokens:  j.CacheCreation1hInputTokens,
+		CacheCreation30mInputTokens: j.CacheCreation30mInputTokens,
+		OutputTokensTotal:           j.OutputTokensTotal,
+		ReasoningOutputTokens:       j.ReasoningOutputTokens,
+		LastInternalErrorDetail:     j.LastInternalErrorDetail,
 	}
 }
