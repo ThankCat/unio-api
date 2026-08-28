@@ -10,14 +10,14 @@ import (
 // 预检放行的方法必须覆盖路由实际注册的写方法。少一个，浏览器侧对应功能就整体失效，
 // 而 curl 不发预检，测不出来——所以这里按方法逐个断言。
 func TestCORSPreflightAllowsEveryRoutedMethod(t *testing.T) {
-	handler := CORS([]string{"http://localhost:5174"})(http.HandlerFunc(
+	handler := CORS([]string{"http://127.0.0.1:18522"})(http.HandlerFunc(
 		func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		},
 	))
 
 	request := httptest.NewRequest(http.MethodOptions, "/v1/api-keys/1", nil)
-	request.Header.Set("Origin", "http://localhost:5174")
+	request.Header.Set("Origin", "http://127.0.0.1:18522")
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
 
@@ -40,7 +40,7 @@ func TestCORSPreflightAllowsEveryRoutedMethod(t *testing.T) {
 }
 
 func TestCORSRejectsUnlistedOrigin(t *testing.T) {
-	handler := CORS([]string{"http://localhost:5174"})(http.HandlerFunc(
+	handler := CORS([]string{"http://127.0.0.1:18522"})(http.HandlerFunc(
 		func(w http.ResponseWriter, _ *http.Request) {
 			t.Error("handler must not run for a disallowed origin")
 		},

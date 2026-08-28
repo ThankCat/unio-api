@@ -97,7 +97,7 @@ dev: check-env check-air infra ## 一键启动全部服务（热加载，Ctrl+C 
 	echo "==> gateway  http://localhost$${GATEWAY_HTTP_ADDR}  /v1/*"; \
 	echo "==> admin    http://localhost$${ADMIN_HTTP_ADDR}  /v1/*"; \
 	echo "==> console  http://localhost$${CONSOLE_HTTP_ADDR}  /v1/auth/*"; \
-	echo "==> website  http://localhost$${WEBSITE_HTTP_ADDR:-:8524}  /v1/models"; \
+	echo "==> website  http://localhost$${WEBSITE_HTTP_ADDR:-:8523}  /v1/models"; \
 	echo "==> worker   (无 HTTP)"; \
 	air -c .air.gateway.toml & \
 	air -c .air.admin.toml & \

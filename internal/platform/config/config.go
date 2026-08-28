@@ -849,7 +849,7 @@ func Load() (Config, error) {
 			DocsBaseURL:           strings.TrimRight(strings.TrimSpace(os.Getenv("CONSOLE_DOCS_BASE_URL")), "/"),
 		},
 		Website: WebsiteConfig{
-			HTTPAddr: getEnv("WEBSITE_HTTP_ADDR", ":8524"),
+			HTTPAddr: getEnv("WEBSITE_HTTP_ADDR", ":8523"),
 		},
 		TokenEstimate: TokenEstimateConfig{
 			CountMedia:        tokenEstimateCountMedia,

@@ -111,7 +111,7 @@ LABEL org.opencontainers.image.title="Unio Website Server"
 
 COPY --from=website-builder --chown=unio:unio /out/website-server /app/website-server
 
-EXPOSE 8524
+EXPOSE 8523
 
 CMD ["/app/website-server"]
 
