@@ -18,12 +18,17 @@ type envelope struct {
 			BaseURL   string   `json:"base_url"`
 			AuthStyle string   `json:"auth_style"`
 			Endpoints []string `json:"endpoints"`
-			DocURL    string   `json:"doc_url"`
 		} `json:"protocols"`
 	} `json:"data"`
 }
 
 func get(t *testing.T, deps Deps) envelope {
+	t.Helper()
+	out, _ := getWithBody(t, deps)
+	return out
+}
+
+func getWithBody(t *testing.T, deps Deps) (envelope, string) {
 	t.Helper()
 	r := chi.NewRouter()
 	Register(r, deps)
@@ -38,7 +43,7 @@ func get(t *testing.T, deps Deps) envelope {
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatalf("decode: %v; body = %s", err, rec.Body.String())
 	}
-	return out
+	return out, rec.Body.String()
 }
 
 // 没配公开地址时不能猜一个出来给用户——前端据 configured 隐藏整块接入区。
@@ -56,7 +61,6 @@ func TestEndpointsReportsUnconfigured(t *testing.T) {
 func TestEndpointsListsBothProtocols(t *testing.T) {
 	out := get(t, Deps{
 		GatewayPublicBaseURL: "https://api.example.com/v1",
-		DocsBaseURL:          "https://docs.example.com",
 	})
 
 	if !out.Data.Configured {
@@ -74,9 +78,6 @@ func TestEndpointsListsBothProtocols(t *testing.T) {
 		}
 		if len(p.Endpoints) == 0 {
 			t.Fatalf("%s must expose at least one endpoint", p.Key)
-		}
-		if !strings.HasPrefix(p.DocURL, "https://docs.example.com") {
-			t.Fatalf("%s doc_url = %q", p.Key, p.DocURL)
 		}
 	}
 
@@ -97,13 +98,12 @@ func TestEndpointsListsBothProtocols(t *testing.T) {
 	}
 }
 
-// 文档站没配时不能拼出 "/quickstart/openai" 这种断头链接。
-func TestEndpointsOmitsDocURLWhenDocsUnset(t *testing.T) {
-	out := get(t, Deps{GatewayPublicBaseURL: "https://api.example.com/v1"})
+// 文档地址不由网关下发：文档站部署在哪属于前端形态，由 console 的 VITE_DOCS_URL 决定。
+// 网关同时配一份意味着同一个地址要在两处保持一致，而漏配的表现是按钮静默消失。
+func TestEndpointsDoesNotCarryDocURL(t *testing.T) {
+	_, body := getWithBody(t, Deps{GatewayPublicBaseURL: "https://api.example.com/v1"})
 
-	for _, p := range out.Data.Protocols {
-		if p.DocURL != "" {
-			t.Fatalf("%s doc_url = %q, want empty", p.Key, p.DocURL)
-		}
+	if strings.Contains(body, "doc_url") {
+		t.Fatalf("response must not carry doc_url; body = %s", body)
 	}
 }

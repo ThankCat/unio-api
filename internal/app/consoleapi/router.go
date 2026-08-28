@@ -79,7 +79,6 @@ func NewRouter(deps Deps) (http.Handler, error) {
 		// 接入元信息不需要身份：用户在登录页就该能看到往哪儿发请求；出品方图标是公开展示资产。
 		consolemeta.Register(r, consolemeta.Deps{
 			GatewayPublicBaseURL: deps.Config.GatewayPublicBaseURL,
-			DocsBaseURL:          deps.Config.DocsBaseURL,
 			LabLogos:             deps.LabLogos,
 		})
 		if deps.RequestService != nil || deps.UsageService != nil || deps.APIKeyService != nil || deps.WalletService != nil || deps.ModelsService != nil {

@@ -26,8 +26,6 @@ type Deps struct {
 	// GatewayPublicBaseURL 是网关对外的推理入口，如 https://api.example.com/v1。
 	// 留空表示部署方没配，此时接入区返回 configured=false，前端隐藏整块。
 	GatewayPublicBaseURL string
-	// DocsBaseURL 是文档站根地址，用于拼各协议的文档锚点。留空则不返回文档链接。
-	DocsBaseURL string
 	// LabLogos 提供出品方图标；nil 时不挂图标路由。
 	LabLogos LabLogoStore
 }
@@ -37,13 +35,15 @@ type Deps struct {
 var labSlugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 
 // protocolDTO 描述一个可接入协议：用哪个 base_url、能打哪些端点。
+//
+// 不含文档链接：文档站部署在哪属于前端的部署形态，由 console 的 VITE_DOCS_URL 决定，
+// 前端按 key 拼路径。网关同时配一份只会让同一个地址要在两处保持一致。
 type protocolDTO struct {
 	Key       string   `json:"key"`
 	Label     string   `json:"label"`
 	BaseURL   string   `json:"base_url"`
 	AuthStyle string   `json:"auth_style"`
 	Endpoints []string `json:"endpoints"`
-	DocURL    string   `json:"doc_url,omitempty"`
 }
 
 type endpointsDTO struct {
@@ -107,14 +107,6 @@ func (h *handler) endpoints(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 
-	docs := h.deps.DocsBaseURL
-	protocolDoc := func(anchor string) string {
-		if docs == "" {
-			return ""
-		}
-		return docs + anchor
-	}
-
 	// 端点清单与 gatewayapi 路由表一一对应：这里改了，那边也得改，反之亦然。
 	// 之所以硬编码而不从 chi 反射，是因为要给用户看的是「协议 + 语义分组」，
 	// 而不是路由树的全部叶子（含 healthz、内部探针等无关项）。
@@ -127,7 +119,6 @@ func (h *handler) endpoints(w http.ResponseWriter, _ *http.Request) {
 				BaseURL:   base,
 				AuthStyle: "bearer",
 				Endpoints: []string{"/chat/completions", "/responses", "/models"},
-				DocURL:    protocolDoc("/quickstart/openai"),
 			},
 			{
 				Key:       "anthropic",
@@ -135,7 +126,6 @@ func (h *handler) endpoints(w http.ResponseWriter, _ *http.Request) {
 				BaseURL:   base,
 				AuthStyle: "x-api-key",
 				Endpoints: []string{"/messages"},
-				DocURL:    protocolDoc("/quickstart/anthropic"),
 			},
 		},
 	})

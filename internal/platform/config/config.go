@@ -125,8 +125,6 @@ type ConsoleConfig struct {
 	// 与 GATEWAY_HTTP_ADDR 是两件事：后者是进程监听地址，前者是用户侧看到的地址
 	// （通常带域名与 TLS，且经过反代）。留空表示未配置，Console 的接入区会隐藏。
 	GatewayPublicBaseURL string
-	// DocsBaseURL 是接入文档站点根地址，用于拼各协议的文档链接。留空则不展示文档入口。
-	DocsBaseURL string
 }
 
 // WebsiteConfig 保存 website-server（营销站公开只读 API）的配置。
@@ -846,7 +844,6 @@ func Load() (Config, error) {
 			AccessTokenTTL:        consoleAccessTokenTTL,
 			RefreshTokenTTL:       consoleRefreshTokenTTL,
 			GatewayPublicBaseURL:  strings.TrimRight(strings.TrimSpace(os.Getenv("GATEWAY_PUBLIC_BASE_URL")), "/"),
-			DocsBaseURL:           strings.TrimRight(strings.TrimSpace(os.Getenv("CONSOLE_DOCS_BASE_URL")), "/"),
 		},
 		Website: WebsiteConfig{
 			HTTPAddr: getEnv("WEBSITE_HTTP_ADDR", ":8523"),
