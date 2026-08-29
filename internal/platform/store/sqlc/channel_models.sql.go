@@ -18,6 +18,9 @@ SELECT
     m.max_output_tokens AS model_max_output_tokens,
     p.id AS provider_id,
     p.slug AS provider_slug,
+    -- 倍率路径成本按 provider 结算币种记账（D2 修订）：基准价数值 × 倍率 = 原币金额，
+    -- 比较/报表时按当日汇率折算；充值倍率只承载「名义额度 → 原币支出」的折价，不再folding汇率。
+    p.currency AS provider_currency,
     c.adapter_key AS adapter_key,
     $1::text AS protocol,
     c.id AS channel_id,
@@ -197,6 +200,7 @@ type FindModelCandidatesRow struct {
 	ModelMaxOutputTokens               pgtype.Int8
 	ProviderID                         int64
 	ProviderSlug                       string
+	ProviderCurrency                   string
 	AdapterKey                         string
 	Protocol                           string
 	ChannelID                          int64
@@ -303,6 +307,7 @@ func (q *Queries) FindModelCandidates(ctx context.Context, arg FindModelCandidat
 			&i.ModelMaxOutputTokens,
 			&i.ProviderID,
 			&i.ProviderSlug,
+			&i.ProviderCurrency,
 			&i.AdapterKey,
 			&i.Protocol,
 			&i.ChannelID,
@@ -389,4 +394,20 @@ func (q *Queries) FindModelCandidates(ctx context.Context, arg FindModelCandidat
 		return nil, err
 	}
 	return items, nil
+}
+
+const getChannelProviderCurrency = `-- name: GetChannelProviderCurrency :one
+SELECT p.currency
+FROM providers p
+JOIN channels c ON c.provider_id = p.id
+WHERE c.id = $1
+`
+
+// GetChannelProviderCurrency 取渠道所属 provider 的结算币种：倍率路径成本按此币种记账（D2 修订），
+// settlement / probe 在构建倍率成本快照时覆写币种用。
+func (q *Queries) GetChannelProviderCurrency(ctx context.Context, channelID int64) (string, error) {
+	row := q.db.QueryRow(ctx, getChannelProviderCurrency, channelID)
+	var currency string
+	err := row.Scan(&currency)
+	return currency, err
 }

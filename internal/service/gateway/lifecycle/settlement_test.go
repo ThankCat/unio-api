@@ -1503,7 +1503,8 @@ func TestChatSettlementRejectsReplayWithDifferentCostSnapshot(t *testing.T) {
 	if _, err := deps.pool.Exec(deps.ctx, `
 		UPDATE cost_snapshots
 		SET uncached_input_cost_amount = uncached_input_cost_amount + 0.000001,
-		    total_cost_amount = total_cost_amount + 0.000001
+		    total_cost_amount = total_cost_amount + 0.000001,
+		    total_cost_amount_usd = total_cost_amount_usd + 0.000001
 		WHERE request_record_id = $1
 	`, deps.requestRecord.ID); err != nil {
 		t.Fatalf("tamper cost snapshot: %v", err)

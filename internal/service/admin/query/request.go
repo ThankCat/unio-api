@@ -89,25 +89,30 @@ type RequestListItem struct {
 	OutputTokens                int64
 	ReasoningOutputTokens       int64
 
-	// 费用金额（USD 十进制字符串；无结算快照 / 账本时为 nil）。UserChargeUSD=用户实际扣费净额，TotalCostUSD=平台成本。
-	UserChargeUSD                *string
-	TotalCostUSD                 *string
-	UncachedInputCostUSD         *string
-	CacheReadInputCostUSD        *string
-	CacheCreation5mInputCostUSD  *string
-	CacheCreation1hInputCostUSD  *string
-	CacheCreation30mInputCostUSD *string
-	OutputCostUSD                *string
-	ReasoningOutputCostUSD       *string
+	// 费用金额（十进制字符串；无结算快照 / 账本时为 nil）。UserChargeUSD=用户实际扣费净额（USD）。
+	// 成本按 provider 结算币种记账（CostCurrency，D2 修订）：TotalCostAmount 与分项 *CostAmount 为原币金额；
+	// TotalCostUSD 为结算钉档汇率（CostFxRate）折算的 USD 总额，毛利/汇总一律用它。
+	UserChargeUSD                   *string
+	CostCurrency                    *string
+	CostFxRate                      *string
+	TotalCostUSD                    *string
+	TotalCostAmount                 *string
+	UncachedInputCostAmount         *string
+	CacheReadInputCostAmount        *string
+	CacheCreation5mInputCostAmount  *string
+	CacheCreation1hInputCostAmount  *string
+	CacheCreation30mInputCostAmount *string
+	OutputCostAmount                *string
+	ReasoningOutputCostAmount       *string
 
-	// 计费单价快照（USD 十进制字符串，per_1m_tokens）。平台侧=成本单价，用户侧=售价单价，供「单价 × tokens = 金额」计算过程展示。
-	UncachedInputCostUnitUSD          *string
-	CacheReadInputCostUnitUSD         *string
-	CacheCreation5mInputCostUnitUSD   *string
-	CacheCreation1hInputCostUnitUSD   *string
-	CacheCreation30mInputCostUnitUSD  *string
-	OutputCostUnitUSD                 *string
-	ReasoningOutputCostUnitUSD        *string
+	// 计费单价快照（十进制字符串，per_1m_tokens）。成本单价 *CostUnit 为原币（CostCurrency），售价单价 *PriceUnitUSD 为 USD。
+	UncachedInputCostUnit          *string
+	CacheReadInputCostUnit         *string
+	CacheCreation5mInputCostUnit   *string
+	CacheCreation1hInputCostUnit   *string
+	CacheCreation30mInputCostUnit  *string
+	OutputCostUnit                 *string
+	ReasoningOutputCostUnit        *string
 	UncachedInputPriceUnitUSD         *string
 	CacheReadInputPriceUnitUSD        *string
 	CacheCreation5mInputPriceUnitUSD  *string
@@ -229,8 +234,12 @@ type RequestDetail struct {
 	BillingException *BillingException
 }
 
-// CostSnapshotView 是平台成本快照的展示视图：每分项成本单价（per_1m_tokens）+ 实际金额 + 总额（USD 字符串）。
+// CostSnapshotView 是平台成本快照的展示视图：每分项成本单价（per_1m_tokens）+ 实际金额 + 总额。
+// 金额按 provider 结算币种记账（Currency，D2 修订）；TotalCostAmountUSD 为结算钉档汇率（FxRate）折算的 USD 总额。
 type CostSnapshotView struct {
+	Currency           *string
+	FxRate             *string
+	TotalCostAmountUSD *string
 	UncachedInputCostUnit           *string
 	CacheReadInputCostUnit          *string
 	CacheCreation5mInputCostUnit    *string
@@ -270,6 +279,9 @@ type PriceSnapshotView struct {
 
 func toCostSnapshotView(c sqlc.CostSnapshot) CostSnapshotView {
 	return CostSnapshotView{
+		Currency:                        &c.Currency,
+		FxRate:                          opsutil.NumericStringPtr(c.FxRate),
+		TotalCostAmountUSD:              opsutil.NumericStringPtr(c.TotalCostAmountUsd),
 		UncachedInputCostUnit:           opsutil.NumericStringPtr(c.UncachedInputCost),
 		CacheReadInputCostUnit:          opsutil.NumericStringPtr(c.CacheReadInputCost),
 		CacheCreation5mInputCostUnit:    opsutil.NumericStringPtr(c.CacheCreation5mInputCost),
@@ -513,23 +525,26 @@ func toRequestListItem(r sqlc.ListRequestRecordsPageRow) RequestListItem {
 		OutputTokens:                r.OutputTokensTotal,
 		ReasoningOutputTokens:       r.ReasoningOutputTokens,
 
-		UserChargeUSD:                opsutil.NumericStringPtr(r.UserChargeAmount),
-		TotalCostUSD:                 opsutil.NumericStringPtr(r.TotalCostAmount),
-		UncachedInputCostUSD:         opsutil.NumericStringPtr(r.UncachedInputCostAmount),
-		CacheReadInputCostUSD:        opsutil.NumericStringPtr(r.CacheReadInputCostAmount),
-		CacheCreation5mInputCostUSD:  opsutil.NumericStringPtr(r.CacheCreation5mInputCostAmount),
-		CacheCreation1hInputCostUSD:  opsutil.NumericStringPtr(r.CacheCreation1hInputCostAmount),
-		CacheCreation30mInputCostUSD: opsutil.NumericStringPtr(r.CacheCreation30mInputCostAmount),
-		OutputCostUSD:                opsutil.NumericStringPtr(r.OutputCostAmount),
-		ReasoningOutputCostUSD:       opsutil.NumericStringPtr(r.ReasoningOutputCostAmount),
+		UserChargeUSD:                   opsutil.NumericStringPtr(r.UserChargeAmount),
+		CostCurrency:                    textPtr(r.CostCurrency),
+		CostFxRate:                      opsutil.NumericStringPtr(r.CostFxRate),
+		TotalCostUSD:                    opsutil.NumericStringPtr(r.TotalCostAmountUsd),
+		TotalCostAmount:                 opsutil.NumericStringPtr(r.TotalCostAmount),
+		UncachedInputCostAmount:         opsutil.NumericStringPtr(r.UncachedInputCostAmount),
+		CacheReadInputCostAmount:        opsutil.NumericStringPtr(r.CacheReadInputCostAmount),
+		CacheCreation5mInputCostAmount:  opsutil.NumericStringPtr(r.CacheCreation5mInputCostAmount),
+		CacheCreation1hInputCostAmount:  opsutil.NumericStringPtr(r.CacheCreation1hInputCostAmount),
+		CacheCreation30mInputCostAmount: opsutil.NumericStringPtr(r.CacheCreation30mInputCostAmount),
+		OutputCostAmount:                opsutil.NumericStringPtr(r.OutputCostAmount),
+		ReasoningOutputCostAmount:       opsutil.NumericStringPtr(r.ReasoningOutputCostAmount),
 
-		UncachedInputCostUnitUSD:          opsutil.NumericStringPtr(r.UncachedInputCost),
-		CacheReadInputCostUnitUSD:         opsutil.NumericStringPtr(r.CacheReadInputCost),
-		CacheCreation5mInputCostUnitUSD:   opsutil.NumericStringPtr(r.CacheCreation5mInputCost),
-		CacheCreation1hInputCostUnitUSD:   opsutil.NumericStringPtr(r.CacheCreation1hInputCost),
-		CacheCreation30mInputCostUnitUSD:  opsutil.NumericStringPtr(r.CacheCreation30mInputCost),
-		OutputCostUnitUSD:                 opsutil.NumericStringPtr(r.OutputCost),
-		ReasoningOutputCostUnitUSD:        opsutil.NumericStringPtr(r.ReasoningOutputCost),
+		UncachedInputCostUnit:         opsutil.NumericStringPtr(r.UncachedInputCost),
+		CacheReadInputCostUnit:        opsutil.NumericStringPtr(r.CacheReadInputCost),
+		CacheCreation5mInputCostUnit:  opsutil.NumericStringPtr(r.CacheCreation5mInputCost),
+		CacheCreation1hInputCostUnit:  opsutil.NumericStringPtr(r.CacheCreation1hInputCost),
+		CacheCreation30mInputCostUnit: opsutil.NumericStringPtr(r.CacheCreation30mInputCost),
+		OutputCostUnit:                opsutil.NumericStringPtr(r.OutputCost),
+		ReasoningOutputCostUnit:       opsutil.NumericStringPtr(r.ReasoningOutputCost),
 		UncachedInputPriceUnitUSD:         opsutil.NumericStringPtr(r.UncachedInputPrice),
 		CacheReadInputPriceUnitUSD:        opsutil.NumericStringPtr(r.CacheReadInputPrice),
 		CacheCreation5mInputPriceUnitUSD:  opsutil.NumericStringPtr(r.CacheCreation5mInputPrice),

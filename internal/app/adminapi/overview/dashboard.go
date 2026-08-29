@@ -207,10 +207,12 @@ type radarDTO struct {
 
 type breakdownRowDTO struct {
 	Label          string                    `json:"label"`
-	RefID          *int64                    `json:"ref_id"`
-	Status         string                    `json:"status"`
-	BalanceUSD     *string                   `json:"balance_usd"`
-	BalanceStatus  string                    `json:"balance_status"`
+	RefID           *int64                   `json:"ref_id"`
+	Status          string                   `json:"status"`
+	Balance         *string                  `json:"balance"`
+	BalanceCurrency string                   `json:"balance_currency"`
+	BalanceUSD      *string                  `json:"balance_usd"`
+	BalanceStatus   string                   `json:"balance_status"`
 	Terminal       int64                     `json:"terminal"`
 	Succeeded      int64                     `json:"succeeded"`
 	Failed         int64                     `json:"failed"`
@@ -303,10 +305,12 @@ func (h *dashboardHandler) breakdown(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, breakdownRowDTO{
 			Label:         row.Label,
-			RefID:         row.RefID,
-			Status:        row.Status,
-			BalanceUSD:    row.BalanceUSD,
-			BalanceStatus: row.BalanceStatus,
+			RefID:           row.RefID,
+			Status:          row.Status,
+			Balance:         row.Balance,
+			BalanceCurrency: row.BalanceCurrency,
+			BalanceUSD:      row.BalanceUSD,
+			BalanceStatus:   row.BalanceStatus,
 			Terminal:      row.Terminal,
 			Succeeded:     row.Succeeded,
 			Failed:        row.Failed,

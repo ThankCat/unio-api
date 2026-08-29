@@ -82,15 +82,15 @@ func TestBalanceUSDUsesFourExplicitStatuses(t *testing.T) {
 		{name: "negative", amount: "-0.01", status: "negative"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			store := &providerBalanceStoreStub{provider: sqlc.Provider{ID: 7}}
+			store := &providerBalanceStoreStub{provider: sqlc.Provider{ID: 7, Currency: CurrencyUSD}}
 			if tc.amount == "" {
 				store.balanceErr = pgx.ErrNoRows
 			} else {
 				store.balance = sqlc.ProviderBalance{ProviderID: 7, Currency: CurrencyUSD, Balance: testBalanceNumeric(t, tc.amount)}
 			}
-			got, err := NewService(store, &providerBalanceLedgerStub{}).BalanceUSD(context.Background(), 7)
+			got, err := NewService(store, &providerBalanceLedgerStub{}).Balance(context.Background(), 7)
 			if err != nil {
-				t.Fatalf("BalanceUSD: %v", err)
+				t.Fatalf("Balance: %v", err)
 			}
 			if got.Status != tc.status {
 				t.Fatalf("expected status %q, got %q", tc.status, got.Status)
@@ -104,7 +104,7 @@ func TestBalanceUSDUsesFourExplicitStatuses(t *testing.T) {
 
 func TestAdjustValidatesCurrencyAmountAndReason(t *testing.T) {
 	service := NewService(
-		&providerBalanceStoreStub{provider: sqlc.Provider{ID: 7}},
+		&providerBalanceStoreStub{provider: sqlc.Provider{ID: 7, Currency: CurrencyUSD}},
 		&providerBalanceLedgerStub{},
 	)
 	base := AdjustParams{ProviderID: 7, Direction: providerledger.DirectionCredit, Amount: "1", Currency: "USD", Reason: "seed"}
@@ -129,8 +129,8 @@ func TestAdjustValidatesCurrencyAmountAndReason(t *testing.T) {
 }
 
 func TestBalanceStoreErrorIsNotReportedAsUnconfigured(t *testing.T) {
-	store := &providerBalanceStoreStub{provider: sqlc.Provider{ID: 7}, balanceErr: errors.New("db down")}
-	_, err := NewService(store, &providerBalanceLedgerStub{}).BalanceUSD(context.Background(), 7)
+	store := &providerBalanceStoreStub{provider: sqlc.Provider{ID: 7, Currency: CurrencyUSD}, balanceErr: errors.New("db down")}
+	_, err := NewService(store, &providerBalanceLedgerStub{}).Balance(context.Background(), 7)
 	if failure.CodeOf(err) != failure.CodeAdminStoreFailed {
 		t.Fatalf("expected store failure, got %v (%s)", err, failure.CodeOf(err))
 	}

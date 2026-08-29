@@ -38,6 +38,7 @@ type providerDTO struct {
 	OriginRevision     int64   `json:"origin_revision"`
 	Status             string  `json:"status"`
 	StatusRevision     int64   `json:"status_revision"`
+	Currency           string  `json:"currency"`
 	CreatedAt          string  `json:"created_at"`
 	UpdatedAt          string  `json:"updated_at"`
 	ArchivedAt         *string `json:"archived_at"`
@@ -49,10 +50,11 @@ type statusChangeDTO struct {
 }
 
 type createProviderRequest struct {
-	Slug   string `json:"slug"`
-	Name   string `json:"name"`
-	Origin string `json:"origin"`
-	Status string `json:"status"`
+	Slug     string `json:"slug"`
+	Name     string `json:"name"`
+	Origin   string `json:"origin"`
+	Status   string `json:"status"`
+	Currency string `json:"currency"`
 }
 
 type updateProviderRequest struct {
@@ -109,7 +111,7 @@ func (handler *providersHandler) create(w http.ResponseWriter, request *http.Req
 		adminhttp.WriteServiceError(w, err)
 		return
 	}
-	result, err := handler.service.Create(request.Context(), adminprovider.CreateInput{Slug: body.Slug, Name: body.Name, Origin: body.Origin, Status: body.Status})
+	result, err := handler.service.Create(request.Context(), adminprovider.CreateInput{Slug: body.Slug, Name: body.Name, Origin: body.Origin, Status: body.Status, Currency: body.Currency})
 	if err != nil {
 		adminhttp.WriteServiceError(w, err)
 		return
@@ -310,6 +312,7 @@ func toProviderDTO(provider adminprovider.Provider) providerDTO {
 	return providerDTO{
 		ID: provider.ID, Slug: provider.Slug, Name: provider.Name, Origin: provider.Origin,
 		OriginRevision: provider.OriginRevision, Status: provider.Status, StatusRevision: provider.StatusRevision,
+		Currency:  provider.Currency,
 		CreatedAt: provider.CreatedAt.UTC().Format(time.RFC3339), UpdatedAt: provider.UpdatedAt.UTC().Format(time.RFC3339),
 		ArchivedAt: adminhttp.RFC3339Ptr(provider.ArchivedAt), RuntimeSyncPending: provider.RuntimeSyncPending,
 	}

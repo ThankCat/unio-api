@@ -211,6 +211,47 @@ func TestDeleteProviderCleanWhenEmpty(t *testing.T) {
 	}
 }
 
+// TestDeleteProviderClearsAdminOnlyLedger 验证：账本只有手工调额分录（无真实交易归因）时，
+// 删除随手清理分录与余额缓存行——测试服务商设过余额也能删（2026-08-29 用户反馈）。
+// 交易性分录（usage/probe）必然伴随渠道/探测记录的外键引用，拒绝路径由 BlockedByChannel 用例覆盖。
+func TestDeleteProviderClearsAdminOnlyLedger(t *testing.T) {
+	ctx, tx, queries, cleanup := newModelChannelTestTx(t)
+	defer cleanup()
+
+	suffix := time.Now().UnixNano()
+	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("del-adj-provider-%d", suffix), "enabled")
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO provider_ledger_entries
+			(provider_id, entry_type, amount, currency, balance_before, balance_after, idempotency_key, reason)
+		VALUES ($1, 'adjustment_credit', 123, 'USD', 0, 123, $2, '测试注资')
+	`, providerID, fmt.Sprintf("del-adj-ledger-%d", suffix)); err != nil {
+		t.Fatalf("insert adjustment ledger entry: %v", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO provider_balances (provider_id, currency, balance) VALUES ($1, 'USD', 123)
+	`, providerID); err != nil {
+		t.Fatalf("insert provider balance: %v", err)
+	}
+
+	affected, err := queries.DeleteProvider(ctx, providerID)
+	if err != nil {
+		t.Fatalf("delete provider with admin-only ledger: %v", err)
+	}
+	if affected != 1 {
+		t.Fatalf("expected 1 provider deleted, got %d", affected)
+	}
+	var ledgerLeft, balanceLeft int
+	if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM provider_ledger_entries WHERE provider_id = $1`, providerID).Scan(&ledgerLeft); err != nil {
+		t.Fatalf("count ledger: %v", err)
+	}
+	if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM provider_balances WHERE provider_id = $1`, providerID).Scan(&balanceLeft); err != nil {
+		t.Fatalf("count balances: %v", err)
+	}
+	if ledgerLeft != 0 || balanceLeft != 0 {
+		t.Fatalf("expected admin-only ledger cleared, ledger=%d balances=%d", ledgerLeft, balanceLeft)
+	}
+}
+
 // TestDeleteProviderBlockedByChannel 验证：provider 名下仍有渠道时，DB 的 NO ACTION 外键
 // 拒绝删除（23503）。这也间接证明「未被级联清理的引用」会在语句末挡住删除——
 // 等价于 channel/model 被请求/账务历史引用时的拒绝路径，上层据此降级为 conflict。

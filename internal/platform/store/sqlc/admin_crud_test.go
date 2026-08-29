@@ -22,7 +22,7 @@ func TestProviderCRUDQueries(t *testing.T) {
 	slug := fmt.Sprintf("admin-prov-%d", suffix)
 
 	created, err := queries.CreateProvider(ctx, sqlc.CreateProviderParams{
-		Slug: slug, Name: "Admin Provider", Origin: fmt.Sprintf("https://admin-provider-%d.example.test", suffix), Status: "enabled",
+		Slug: slug, Name: "Admin Provider", Origin: fmt.Sprintf("https://admin-provider-%d.example.test", suffix), Status: "enabled", Currency: "USD",
 	})
 	if err != nil {
 		t.Fatalf("create provider: %v", err)

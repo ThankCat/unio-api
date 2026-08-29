@@ -35,7 +35,7 @@ const (
 	// StatusEnabled / StatusDisabled 是 channel 启停状态，与 channels.status 的 DB 约束一致。
 	StatusEnabled  = "enabled"
 	StatusDisabled = "disabled"
-	// StatusArchived 表示 channel 已归档（默认隐藏、不参与路由、已退出线路池；可恢复）。
+	// StatusArchived 表示 channel 已归档（默认隐藏、不参与路由候选；可恢复）。
 	StatusArchived = "archived"
 )
 
@@ -893,7 +893,7 @@ func (s *Service) Archive(ctx context.Context, id int64) error {
 }
 
 // Restore 取消归档渠道：archived → disabled。护栏：所属 provider 仍归档时拦截（先恢复服务商）。
-// 名字保持归档时的后缀名；不自动重加线路池（需手动）。
+// 名字保持归档时的后缀名；恢复后为停用状态，需手动启用才重新进入路由候选。
 func (s *Service) Restore(ctx context.Context, id int64) error {
 	if id <= 0 {
 		return invalidArgument("id", "channel id must be positive")

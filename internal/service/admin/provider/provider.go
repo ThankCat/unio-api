@@ -65,11 +65,15 @@ type Provider struct {
 	OriginRevision     int64
 	Status             string
 	StatusRevision     int64
+	Currency           string
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
 	ArchivedAt         *time.Time
 	RuntimeSyncPending bool
 }
+
+// 结算币种白名单（D3/M2）：与 providers_currency_check 约束一致，扩币种时同步扩。
+var allowedProviderCurrencies = map[string]struct{}{"USD": {}, "CNY": {}}
 
 type StatusChangeResult struct {
 	RuntimeSyncPending bool
@@ -80,6 +84,8 @@ type CreateInput struct {
 	Name   string
 	Origin string
 	Status string
+	// Currency 是该供应商的结算币种（D3）：账单/余额/渠道成本都跟随此币种；创建后不可修改。
+	Currency string
 }
 
 type UpdateInput struct {
@@ -157,7 +163,11 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (Provider, erro
 	if err := validateMutableStatus(status); err != nil {
 		return Provider{}, err
 	}
-	row, err := s.store.CreateProvider(ctx, sqlc.CreateProviderParams{Slug: slug, Name: name, Origin: origin, Status: status})
+	currency := strings.ToUpper(strings.TrimSpace(input.Currency))
+	if _, ok := allowedProviderCurrencies[currency]; !ok {
+		return Provider{}, invalidArgument("currency", "currency must be one of USD/CNY")
+	}
+	row, err := s.store.CreateProvider(ctx, sqlc.CreateProviderParams{Slug: slug, Name: name, Origin: origin, Status: status, Currency: currency})
 	if err != nil {
 		if isUniqueViolation(err) {
 			return Provider{}, conflict("provider slug or origin already exists")
@@ -398,7 +408,7 @@ func (s *Service) getRow(ctx context.Context, id int64) (sqlc.Provider, error) {
 }
 
 func toProvider(row sqlc.Provider) Provider {
-	result := Provider{ID: row.ID, Slug: row.Slug, Name: row.Name, Origin: row.Origin, OriginRevision: row.OriginRevision, Status: row.Status, StatusRevision: row.StatusRevision, CreatedAt: row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time}
+	result := Provider{ID: row.ID, Slug: row.Slug, Name: row.Name, Origin: row.Origin, OriginRevision: row.OriginRevision, Status: row.Status, StatusRevision: row.StatusRevision, Currency: row.Currency, CreatedAt: row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time}
 	if row.ArchivedAt.Valid {
 		archivedAt := row.ArchivedAt.Time
 		result.ArchivedAt = &archivedAt

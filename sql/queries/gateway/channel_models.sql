@@ -16,6 +16,9 @@ SELECT
     m.max_output_tokens AS model_max_output_tokens,
     p.id AS provider_id,
     p.slug AS provider_slug,
+    -- 倍率路径成本按 provider 结算币种记账（D2 修订）：基准价数值 × 倍率 = 原币金额，
+    -- 比较/报表时按当日汇率折算；充值倍率只承载「名义额度 → 原币支出」的折价，不再folding汇率。
+    p.currency AS provider_currency,
     c.adapter_key AS adapter_key,
     sqlc.arg(ingress_protocol)::text AS protocol,
     c.id AS channel_id,
@@ -181,3 +184,11 @@ WHERE m.model_id = sqlc.arg(requested_model_id)
 ORDER BY
     c.priority ASC,
     c.id ASC;
+
+-- name: GetChannelProviderCurrency :one
+-- GetChannelProviderCurrency 取渠道所属 provider 的结算币种：倍率路径成本按此币种记账（D2 修订），
+-- settlement / probe 在构建倍率成本快照时覆写币种用。
+SELECT p.currency
+FROM providers p
+JOIN channels c ON c.provider_id = p.id
+WHERE c.id = sqlc.arg(channel_id);

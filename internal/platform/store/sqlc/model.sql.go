@@ -1564,9 +1564,9 @@ SELECT
     -- 外层 EXISTS (SELECT 1 WHERE <复合布尔>) 让 sqlc 推断为非空 bool（裸复合布尔默认可空 pgtype.Bool）。
     EXISTS (SELECT 1 WHERE
         EXISTS (
-            SELECT 1 FROM channel_prices p
-            WHERE p.channel_id = c.id AND p.model_id = $1 AND p.status = 'enabled'
-              AND p.effective_from <= now() AND (p.effective_to IS NULL OR p.effective_to > now())
+            SELECT 1 FROM channel_prices has_cp
+            WHERE has_cp.channel_id = c.id AND has_cp.model_id = $1 AND has_cp.status = 'enabled'
+              AND has_cp.effective_from <= now() AND (has_cp.effective_to IS NULL OR has_cp.effective_to > now())
         )
         OR (
             EXISTS (
@@ -1588,11 +1588,25 @@ SELECT
     price.output_cost AS output_cost,
     -- Fast 档成本同口径。两侧都没有 Fast 价时为 NULL，表示该渠道对本模型不单独区分 Fast。
     price.fast_uncached_input_cost AS fast_input_cost,
-    price.fast_output_cost AS fast_output_cost
+    price.fast_output_cost AS fast_output_cost,
+    -- 成本币种与 USD 折算（多货币，PLAN 5.5 / D2 修订）：绝对路径与倍率路径成本均按
+    -- provider 结算币种记账，折算用与守卫同源的最新汇率——设价面板「看到的」与守卫「执行的」
+    -- 永远同一口径；缺汇率时 usd 列为 NULL（前端提示先录汇率）。
+    (COALESCE(price.abs_currency, p.currency))::text AS cost_currency,
+    (CASE WHEN COALESCE(price.abs_currency, p.currency) = 'USD' THEN price.uncached_input_cost ELSE price.uncached_input_cost / fx.rate END)::numeric AS input_cost_usd,
+    (CASE WHEN COALESCE(price.abs_currency, p.currency) = 'USD' THEN price.output_cost ELSE price.output_cost / fx.rate END)::numeric AS output_cost_usd,
+    (CASE WHEN COALESCE(price.abs_currency, p.currency) = 'USD' THEN price.fast_uncached_input_cost ELSE price.fast_uncached_input_cost / fx.rate END)::numeric AS fast_input_cost_usd,
+    (CASE WHEN COALESCE(price.abs_currency, p.currency) = 'USD' THEN price.fast_output_cost ELSE price.fast_output_cost / fx.rate END)::numeric AS fast_output_cost_usd,
+    fx.rate AS cost_fx_rate,
+    fx.rate_date AS cost_fx_rate_date
 FROM channel_models cm
 JOIN channels c ON c.id = cm.channel_id
+JOIN providers p ON p.id = c.provider_id
 LEFT JOIN LATERAL (
     SELECT
+        -- 仅透出绝对路径币种；成本币种合成（COALESCE 到 provider 币种）放外层——
+        -- sqlc 解析不了嵌套 LATERAL 对外层 providers 别名的引用。
+        abs.currency AS abs_currency,
         COALESCE(
             abs.uncached_input_cost,
             CASE
@@ -1624,19 +1638,20 @@ LEFT JOIN LATERAL (
             END
         ) AS fast_output_cost
     FROM (SELECT 1) AS _
+    -- abs 别名用 cprice（channel_prices），p 留给外层 providers（倍率路径成本币种 = provider 币种）。
     LEFT JOIN LATERAL (
-        SELECT p.uncached_input_cost, p.output_cost,
+        SELECT cprice.currency, cprice.uncached_input_cost, cprice.output_cost,
             fast.uncached_input_cost AS fast_uncached_input_cost,
             fast.output_cost AS fast_output_cost
-        FROM channel_prices p
+        FROM channel_prices cprice
         LEFT JOIN channel_price_service_tiers fast
-          ON fast.channel_price_id = p.id AND fast.service_tier = 'fast'
-        WHERE p.channel_id = c.id
-          AND p.model_id = $1
-          AND p.status = 'enabled'
-          AND p.effective_from <= now()
-          AND (p.effective_to IS NULL OR p.effective_to > now())
-        ORDER BY p.effective_from DESC, p.id DESC
+          ON fast.channel_price_id = cprice.id AND fast.service_tier = 'fast'
+        WHERE cprice.channel_id = c.id
+          AND cprice.model_id = $1
+          AND cprice.status = 'enabled'
+          AND cprice.effective_from <= now()
+          AND (cprice.effective_to IS NULL OR cprice.effective_to > now())
+        ORDER BY cprice.effective_from DESC, cprice.id DESC
         LIMIT 1
     ) abs ON TRUE
     LEFT JOIN LATERAL (
@@ -1675,6 +1690,13 @@ LEFT JOIN LATERAL (
         LIMIT 1
     ) recharge ON TRUE
 ) price ON TRUE
+LEFT JOIN LATERAL (
+    SELECT er.rate, er.rate_date
+    FROM exchange_rates er
+    WHERE er.base_currency = 'USD' AND er.quote_currency = COALESCE(price.abs_currency, p.currency)
+    ORDER BY er.rate_date DESC, er.fetched_at DESC
+    LIMIT 1
+) fx ON COALESCE(price.abs_currency, p.currency) <> 'USD'
 LEFT JOIN request_attempts a
     ON a.channel_id = cm.channel_id
     AND a.upstream_model = cm.upstream_model
@@ -1683,7 +1705,8 @@ LEFT JOIN request_attempts a
 WHERE cm.model_id = $1
 GROUP BY c.id, c.name, c.status, cm.status, cm.upstream_model, c.priority,
     price.uncached_input_cost, price.output_cost,
-    price.fast_uncached_input_cost, price.fast_output_cost
+    price.fast_uncached_input_cost, price.fast_output_cost,
+    price.abs_currency, p.currency, fx.rate, fx.rate_date
 ORDER BY attempt_total DESC, c.priority, c.id
 `
 
@@ -1694,20 +1717,27 @@ type ModelOpsChannelsParams struct {
 }
 
 type ModelOpsChannelsRow struct {
-	ChannelID        int64
-	ChannelName      string
-	ChannelStatus    string
-	BindingStatus    string
-	UpstreamModel    string
-	Priority         int32
-	AttemptTotal     int64
-	AttemptSucceeded int64
-	LatencyP95       float64
-	HasPrice         bool
-	InputCost        pgtype.Numeric
-	OutputCost       pgtype.Numeric
-	FastInputCost    pgtype.Numeric
-	FastOutputCost   pgtype.Numeric
+	ChannelID         int64
+	ChannelName       string
+	ChannelStatus     string
+	BindingStatus     string
+	UpstreamModel     string
+	Priority          int32
+	AttemptTotal      int64
+	AttemptSucceeded  int64
+	LatencyP95        float64
+	HasPrice          bool
+	InputCost         pgtype.Numeric
+	OutputCost        pgtype.Numeric
+	FastInputCost     pgtype.Numeric
+	FastOutputCost    pgtype.Numeric
+	CostCurrency      string
+	InputCostUsd      pgtype.Numeric
+	OutputCostUsd     pgtype.Numeric
+	FastInputCostUsd  pgtype.Numeric
+	FastOutputCostUsd pgtype.Numeric
+	CostFxRate        pgtype.Numeric
+	CostFxRateDate    pgtype.Date
 }
 
 // ModelOpsChannels 单模型的承载渠道（绑定）+ attempt 指标（抽屉渠道 Tab，§3.4 最关键）。
@@ -1735,6 +1765,13 @@ func (q *Queries) ModelOpsChannels(ctx context.Context, arg ModelOpsChannelsPara
 			&i.OutputCost,
 			&i.FastInputCost,
 			&i.FastOutputCost,
+			&i.CostCurrency,
+			&i.InputCostUsd,
+			&i.OutputCostUsd,
+			&i.FastInputCostUsd,
+			&i.FastOutputCostUsd,
+			&i.CostFxRate,
+			&i.CostFxRateDate,
 		); err != nil {
 			return nil, err
 		}
@@ -1787,9 +1824,10 @@ SELECT
           AND ($3::timestamptz IS NULL OR le.created_at < $3::timestamptz)
     ), 0)::numeric AS revenue_usd,
     COALESCE((
-        SELECT SUM(cs.total_cost_amount)
+        -- 成本读 USD 归一列（D8）：每笔按结算钉住的汇率折算，跨币种直接求和。
+        SELECT SUM(cs.total_cost_amount_usd)
         FROM cost_snapshots cs
-        WHERE cs.model_id = $1 AND cs.currency = 'USD'
+        WHERE cs.model_id = $1
           AND ($2::timestamptz IS NULL OR cs.created_at >= $2::timestamptz)
           AND ($3::timestamptz IS NULL OR cs.created_at < $3::timestamptz)
     ), 0)::numeric AS cost_usd,
@@ -1978,9 +2016,10 @@ WITH requests AS (
 ), costs AS (
     SELECT
         date_trunc($1::text, cs.created_at)::timestamptz AS bucket,
-        SUM(cs.total_cost_amount) AS cost_usd
+        -- 成本读 USD 归一列（D8）。
+        SUM(cs.total_cost_amount_usd) AS cost_usd
     FROM cost_snapshots cs
-    WHERE cs.model_id = $2 AND cs.currency = 'USD'
+    WHERE cs.model_id = $2
       AND ($3::timestamptz IS NULL OR cs.created_at >= $3::timestamptz)
       AND ($4::timestamptz IS NULL OR cs.created_at < $4::timestamptz)
     GROUP BY 1
@@ -2444,7 +2483,7 @@ type ModelsOpsTableRow struct {
 // §3.4 模型商品控制台只读运维聚合。
 // 模型口径：request_records.requested_model_id(文本) = models.model_id。请求/性能为 request 粒度。
 // 成本按 cost_snapshots.model_id（数值 FK）归因；收入按 ledger_entries(debit) JOIN request 归因；仅 USD。
-// 基础供给候选：enabled 绑定 + 渠道 enabled + 可解析成本；不代表任何 Route 正在售卖（§3.4.8）。
+// 基础供给候选：enabled 绑定 + 渠道 enabled + 可解析成本；不代表模型已定价可卖（§3.4.8）。
 // ModelsOpsTable 模型商品运维主表（分页）：静态元数据 + 渠道/基准价；请求/毛利等指标在详情页聚合。
 func (q *Queries) ModelsOpsTable(ctx context.Context, arg ModelsOpsTableParams) ([]ModelsOpsTableRow, error) {
 	rows, err := q.db.Query(ctx, modelsOpsTable,

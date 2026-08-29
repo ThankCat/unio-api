@@ -40,6 +40,8 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/service/admin/model"
 	modelcatalogadmin "github.com/ThankCat/unio-gateway/internal/service/admin/modelcatalog"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/modelops"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/adminmessage"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/exchangerate"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/modelprice"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/modelrouting"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/provider"
@@ -156,6 +158,8 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 	providerOpsService := providerops.NewService(queries)
 	providerLedgerService := providerledger.NewService(deps.DB, queries)
 	providerBalanceService := providerbalance.NewService(queries, providerLedgerService)
+	adminMessageService := adminmessage.NewService(queries)
+	exchangeRateService := exchangerate.NewService(queries, settingsStore, deps.Config.ExchangeRate.APIKey)
 	var providerBreakerRuntime *breakerstore.Store
 	var channelBreakerRuntime apichannel.BreakerRuntime
 	var settingsRuntimePublisher appsettings.RuntimeControlPublisher
@@ -247,7 +251,7 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 	// M9 工作台看板：复用同一 sqlc Queries 做只读聚合（KPI 概览 + 时间序列）。
 	dashboardService := dashboard.NewService(queries)
 
-	// 选路观测（ADR-0020 移除 Route 后补回的候选排序与流量分布视图）。
+	// 选路观测：候选排序与流量分布视图（模型侧观测口径，ADR-0020）。
 	// Redis 不可用时仍然构造：统计类接口只读 PG，实时视图会如实报告运行态不可用。
 	var modelRoutingService *modelrouting.Service
 	if sharedBreakerStore != nil {
@@ -331,6 +335,8 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		RecoveryJobQueryService:   recoveryJobQueryService,
 		RuntimeDiagnosticsService: runtimeDiagnosticsService,
 		GatewayLoggingService:     gatewayLoggingService,
+		MessageService:            adminMessageService,
+		ExchangeRateService:       exchangeRateService,
 		ProviderSettingsService:   providerSettingsService,
 
 		GatewayConfig: deps.Config.Gateway,

@@ -8,7 +8,9 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/capability"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/channel"
+	"github.com/ThankCat/unio-gateway/internal/app/adminapi/exchangerate"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/ledger"
+	"github.com/ThankCat/unio-gateway/internal/app/adminapi/message"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/middleware"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/model"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/overview"
@@ -77,6 +79,12 @@ type adminHTTPDeps struct {
 	RuntimeDiagnosticsService system.RuntimeDiagnosticsService
 	GatewayLoggingService     system.GatewayLoggingService
 
+	// 站内消息中心（告警通道 MVP）。
+	MessageService message.MessageService
+
+	// 汇率管理（多货币）。
+	ExchangeRateService exchangerate.ExchangeRateService
+
 	ProviderSettingsService system.ProviderSettingsService
 
 	// 系统配置只读面板（进程级 env 生效值，脱敏）；gateway 热路径配置已迁移为运行时配置，不在此列。
@@ -138,6 +146,8 @@ func NewAdminHTTPHandler(deps adminHTTPDeps) http.Handler {
 		RecoveryJobQueryService:   deps.RecoveryJobQueryService,
 		RuntimeDiagnosticsService: deps.RuntimeDiagnosticsService,
 		GatewayLoggingService:     deps.GatewayLoggingService,
+		MessageService:            deps.MessageService,
+		ExchangeRateService:       deps.ExchangeRateService,
 		ProviderSettingsService:   deps.ProviderSettingsService,
 
 		GatewayConfig: deps.GatewayConfig,

@@ -46,7 +46,10 @@ INSERT INTO cost_snapshots (
     service_tier,
     model_price_service_tier_id,
     channel_price_service_tier_id,
-    tier_cost_source
+    tier_cost_source,
+    fx_rate,
+    fx_rate_date,
+    total_cost_amount_usd
 )
 VALUES (
     $1,
@@ -82,9 +85,13 @@ VALUES (
     $31,
     $32,
     $33,
-    $34
+    $34,
+    -- 钉汇率三列（D4）：非 USD 成本必须带结算时所用汇率与折算 USD 总额；USD 行 fx 为 NULL、usd=total。
+    $35,
+    $36,
+    $37
 )
-RETURNING id, request_record_id, cost_price_id, provider_id, channel_id, model_id, upstream_model, currency, pricing_unit, uncached_input_cost, cache_read_input_cost, cache_creation_5m_input_cost, cache_creation_1h_input_cost, output_cost, reasoning_output_cost, uncached_input_cost_amount, cache_read_input_cost_amount, cache_creation_5m_input_cost_amount, cache_creation_1h_input_cost_amount, output_cost_amount, reasoning_output_cost_amount, total_cost_amount, formula_version, created_at, cache_creation_30m_input_cost, cache_creation_30m_input_cost_amount, cost_base_model_price_id, channel_cost_multiplier_id, cost_multiplier, channel_recharge_factor_id, recharge_factor, long_context_applied, service_tier, model_price_service_tier_id, channel_price_service_tier_id, tier_cost_source
+RETURNING id, request_record_id, cost_price_id, provider_id, channel_id, model_id, upstream_model, currency, pricing_unit, uncached_input_cost, cache_read_input_cost, cache_creation_5m_input_cost, cache_creation_1h_input_cost, output_cost, reasoning_output_cost, uncached_input_cost_amount, cache_read_input_cost_amount, cache_creation_5m_input_cost_amount, cache_creation_1h_input_cost_amount, output_cost_amount, reasoning_output_cost_amount, total_cost_amount, formula_version, created_at, cache_creation_30m_input_cost, cache_creation_30m_input_cost_amount, cost_base_model_price_id, channel_cost_multiplier_id, cost_multiplier, channel_recharge_factor_id, recharge_factor, long_context_applied, service_tier, model_price_service_tier_id, channel_price_service_tier_id, tier_cost_source, fx_rate, fx_rate_date, total_cost_amount_usd
 `
 
 type CreateCostSnapshotParams struct {
@@ -122,6 +129,9 @@ type CreateCostSnapshotParams struct {
 	ModelPriceServiceTierID         pgtype.Int8
 	ChannelPriceServiceTierID       pgtype.Int8
 	TierCostSource                  pgtype.Text
+	FxRate                          pgtype.Numeric
+	FxRateDate                      pgtype.Date
+	TotalCostAmountUsd              pgtype.Numeric
 }
 
 // CreateCostSnapshot 创建一次请求结算使用的上游成本价快照和实际成本事实。
@@ -161,6 +171,9 @@ func (q *Queries) CreateCostSnapshot(ctx context.Context, arg CreateCostSnapshot
 		arg.ModelPriceServiceTierID,
 		arg.ChannelPriceServiceTierID,
 		arg.TierCostSource,
+		arg.FxRate,
+		arg.FxRateDate,
+		arg.TotalCostAmountUsd,
 	)
 	var i CostSnapshot
 	err := row.Scan(
@@ -200,12 +213,15 @@ func (q *Queries) CreateCostSnapshot(ctx context.Context, arg CreateCostSnapshot
 		&i.ModelPriceServiceTierID,
 		&i.ChannelPriceServiceTierID,
 		&i.TierCostSource,
+		&i.FxRate,
+		&i.FxRateDate,
+		&i.TotalCostAmountUsd,
 	)
 	return i, err
 }
 
 const getCostSnapshotByRequest = `-- name: GetCostSnapshotByRequest :one
-SELECT id, request_record_id, cost_price_id, provider_id, channel_id, model_id, upstream_model, currency, pricing_unit, uncached_input_cost, cache_read_input_cost, cache_creation_5m_input_cost, cache_creation_1h_input_cost, output_cost, reasoning_output_cost, uncached_input_cost_amount, cache_read_input_cost_amount, cache_creation_5m_input_cost_amount, cache_creation_1h_input_cost_amount, output_cost_amount, reasoning_output_cost_amount, total_cost_amount, formula_version, created_at, cache_creation_30m_input_cost, cache_creation_30m_input_cost_amount, cost_base_model_price_id, channel_cost_multiplier_id, cost_multiplier, channel_recharge_factor_id, recharge_factor, long_context_applied, service_tier, model_price_service_tier_id, channel_price_service_tier_id, tier_cost_source
+SELECT id, request_record_id, cost_price_id, provider_id, channel_id, model_id, upstream_model, currency, pricing_unit, uncached_input_cost, cache_read_input_cost, cache_creation_5m_input_cost, cache_creation_1h_input_cost, output_cost, reasoning_output_cost, uncached_input_cost_amount, cache_read_input_cost_amount, cache_creation_5m_input_cost_amount, cache_creation_1h_input_cost_amount, output_cost_amount, reasoning_output_cost_amount, total_cost_amount, formula_version, created_at, cache_creation_30m_input_cost, cache_creation_30m_input_cost_amount, cost_base_model_price_id, channel_cost_multiplier_id, cost_multiplier, channel_recharge_factor_id, recharge_factor, long_context_applied, service_tier, model_price_service_tier_id, channel_price_service_tier_id, tier_cost_source, fx_rate, fx_rate_date, total_cost_amount_usd
 FROM cost_snapshots
 WHERE request_record_id = $1
 `
@@ -251,6 +267,9 @@ func (q *Queries) GetCostSnapshotByRequest(ctx context.Context, requestRecordID 
 		&i.ModelPriceServiceTierID,
 		&i.ChannelPriceServiceTierID,
 		&i.TierCostSource,
+		&i.FxRate,
+		&i.FxRateDate,
+		&i.TotalCostAmountUsd,
 	)
 	return i, err
 }

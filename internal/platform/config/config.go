@@ -32,6 +32,15 @@ type Config struct {
 	Console          ConsoleConfig
 	Website          WebsiteConfig
 	TokenEstimate    TokenEstimateConfig
+	ExchangeRate     ExchangeRateConfig
+}
+
+// ExchangeRateConfig 保存汇率基础设施配置（多货币支持）。
+// APIKey 是 ExchangeRate-API 主源的环境变量兜底值：运行时以 app_settings 的
+// gateway.exchange_rate_api_key 优先，设置表未配置时回退本值（PLAN 5.1 双层解析）。
+type ExchangeRateConfig struct {
+	APIKey       string
+	SyncInterval time.Duration
 }
 
 // TokenEstimateConfig 保存输入 token 估算的媒体处理配置（对齐 new-api GetMediaToken 系列）。
@@ -559,6 +568,17 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	exchangeRateSyncInterval, err := getEnvDuration("EXCHANGE_RATE_SYNC_INTERVAL", 6*time.Hour)
+	if err != nil {
+		return Config{}, err
+	}
+	if exchangeRateSyncInterval <= 0 {
+		return Config{}, failure.New(
+			failure.CodeConfigInvalid,
+			failure.WithMessage("EXCHANGE_RATE_SYNC_INTERVAL must be a positive duration"),
+		)
+	}
+
 	modelCatalogSyncInterval, err := getEnvDuration("MODEL_CATALOG_SYNC_INTERVAL", 24*time.Hour)
 	if err != nil {
 		return Config{}, err
@@ -853,6 +873,10 @@ func Load() (Config, error) {
 			FetchRemoteImages: tokenEstimateFetchRemoteImages,
 			FetchTimeout:      tokenEstimateFetchTimeout,
 			FetchMaxBytes:     int64(tokenEstimateFetchMaxMB) << 20,
+		},
+		ExchangeRate: ExchangeRateConfig{
+			APIKey:       getEnv("EXCHANGE_RATE_API_KEY", ""),
+			SyncInterval: exchangeRateSyncInterval,
 		},
 	}, nil
 }

@@ -445,6 +445,18 @@ func (s *Service) Delete(ctx context.Context, id int64) error {
 		return invalidArgument("id", "model id must be positive")
 	}
 
+	// 生命周期护栏：启用中的模型还在售卖，先停用（流量归零、影响可见）再删除。
+	current, err := s.store.LookupModelByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return notFound("model not found")
+		}
+		return storeFailed(err, "get model")
+	}
+	if current.Status == StatusEnabled {
+		return conflict("disable the model before deleting it")
+	}
+
 	affected, err := s.store.DeleteModelCascade(ctx, id)
 	if err != nil {
 		if isForeignKeyViolation(err) {

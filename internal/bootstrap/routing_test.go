@@ -58,7 +58,7 @@ func TestNewChatRouterUsesPlaintextCredential(t *testing.T) {
 				UpstreamModel:     "gpt-4.1",
 			},
 		},
-	}, 30*time.Second, nil)
+	}, 30*time.Second, nil, nil)
 
 	plan, err := router.PlanChat(context.Background(), routing.ChatRouteRequest{
 		UserID:          1,

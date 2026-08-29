@@ -1,12 +1,12 @@
 -- name: ListProviders :many
 -- ListProviders 列出全部 provider，按 id 升序，供 admin 管理台展示。
-SELECT id, slug, name, origin, origin_revision, status, status_revision, created_at, updated_at, archived_at
+SELECT id, slug, name, origin, origin_revision, status, status_revision, created_at, updated_at, archived_at, currency
 FROM providers
 ORDER BY id;
 
 -- name: ListProvidersPage :many
 -- ListProvidersPage 按状态/关键字过滤后分页列出 provider；status、q 为 NULL 时不过滤。
-SELECT id, slug, name, origin, origin_revision, status, status_revision, created_at, updated_at, archived_at
+SELECT id, slug, name, origin, origin_revision, status, status_revision, created_at, updated_at, archived_at, currency
 FROM providers
 WHERE (sqlc.narg('status')::text IS NULL OR status = sqlc.narg('status')::text)
   AND (
@@ -30,35 +30,61 @@ WHERE (sqlc.narg('status')::text IS NULL OR status = sqlc.narg('status')::text)
 
 -- name: GetProvider :one
 -- GetProvider 按 id 读取单个 provider。
-SELECT id, slug, name, origin, origin_revision, status, status_revision, created_at, updated_at, archived_at
+SELECT id, slug, name, origin, origin_revision, status, status_revision, created_at, updated_at, archived_at, currency
 FROM providers
 WHERE id = $1
 LIMIT 1;
 
 -- name: CreateProvider :one
 -- CreateProvider 创建 provider；slug 全局唯一由 DB 唯一约束保证。
-INSERT INTO providers (slug, name, origin, status)
-VALUES (sqlc.arg(slug), sqlc.arg(name), sqlc.arg(origin), sqlc.arg(status))
-RETURNING id, slug, name, origin, origin_revision, status, status_revision, created_at, updated_at, archived_at;
+-- currency 是该供应商的结算币种（D3），创建时必选；产生价格/账务引用后不可修改（应用层强制）。
+INSERT INTO providers (slug, name, origin, status, currency)
+VALUES (sqlc.arg(slug), sqlc.arg(name), sqlc.arg(origin), sqlc.arg(status), sqlc.arg(currency))
+RETURNING id, slug, name, origin, origin_revision, status, status_revision, created_at, updated_at, archived_at, currency;
 
 -- name: UpdateProvider :one
--- UpdateProvider 更新 provider 的展示名；slug、origin 与 status 使用各自专用入口。
+-- UpdateProvider 更新 provider 的展示名；slug、origin 与 status 使用各自专用入口。currency 不可改。
 UPDATE providers
 SET name = sqlc.arg(name), updated_at = now()
 WHERE id = sqlc.arg(id)
-RETURNING id, slug, name, origin, origin_revision, status, status_revision, created_at, updated_at, archived_at;
+RETURNING id, slug, name, origin, origin_revision, status, status_revision, created_at, updated_at, archived_at, currency;
+
+-- name: CountProviderCurrencyRefs :one
+-- CountProviderCurrencyRefs 统计 provider 币种语义的引用数（渠道价格 + 账本 + 余额行）。
+-- 任一引用存在即禁止修改 currency（D3 不可变规则的应用层依据）。
+SELECT
+    (SELECT COUNT(*) FROM channel_prices cp JOIN channels c ON c.id = cp.channel_id WHERE c.provider_id = sqlc.arg(provider_id))
+  + (SELECT COUNT(*) FROM provider_ledger_entries ple WHERE ple.provider_id = sqlc.arg(provider_id))
+  + (SELECT COUNT(*) FROM provider_balances pb WHERE pb.provider_id = sqlc.arg(provider_id)) AS total;
 
 -- name: DeleteProvider :execrows
 -- DeleteProvider 物理删除 provider，用于清理录错且从未使用的脏数据。
 -- 终态 provider_routing_operations 随 Provider 清理；非终态操作通过 RESTRICT 阻止删除。
+-- 纯手工调额的账本（adjustment_credit/adjustment_debit）与余额缓存行属管理员自录的管理数据，
+-- 无真实交易归因，随删除一并清理——测试服务商设过余额也能删；一旦存在任何交易性分录
+--（usage_debit/probe_debit 等），账本保留原样，由 NO ACTION 外键拦下整个删除。
 -- Provider 本身不做请求/账务级联：一旦名下仍有 channel，或 provider 被请求/账务历史
 --（request_records/request_attempts/cost_snapshots/settlement_recovery_jobs
 -- 等 NO ACTION 外键）引用，整条语句报 23503 全部回滚，上层降级为 conflict，提示先删渠道或改用停用。
--- 数据修改型 CTE 保证三段各执行一次、外键在语句末统一校验，故清子表 + 删主体在单语句内原子完成。
+-- 数据修改型 CTE 保证各段各执行一次、外键在语句末统一校验，故清子表 + 删主体在单语句内原子完成。
 WITH deleted_terminal_ops AS (
     DELETE FROM provider_routing_operations
     WHERE provider_id = sqlc.arg(id)
       AND state IN ('committed', 'aborted')
+), admin_only_ledger AS (
+    SELECT NOT EXISTS (
+        SELECT 1 FROM provider_ledger_entries e
+        WHERE e.provider_id = sqlc.arg(id)
+          AND e.entry_type NOT IN ('adjustment_credit', 'adjustment_debit')
+    ) AS ok
+), deleted_admin_ledger AS (
+    DELETE FROM provider_ledger_entries
+    WHERE provider_id = sqlc.arg(id)
+      AND (SELECT ok FROM admin_only_ledger)
+), deleted_balances AS (
+    DELETE FROM provider_balances
+    WHERE provider_id = sqlc.arg(id)
+      AND (SELECT ok FROM admin_only_ledger)
 )
 DELETE FROM providers WHERE providers.id = sqlc.arg(id);
 
@@ -106,12 +132,17 @@ SELECT
     p.origin,
     p.origin_revision,
     p.status_revision,
+    p.currency,
     p.created_at,
-    pb.balance AS balance_usd,
+    -- 余额按 provider 原始币种记账（D2）；balance_usd 是按最新汇率折算的展示口径（缺汇率时 NULL）。
+    pb.balance AS balance,
+    (CASE WHEN p.currency = 'USD' THEN pb.balance ELSE pb.balance / fx.rate END)::numeric AS balance_usd,
+    fx.rate AS fx_rate,
+    -- 低余额判定按 USD 等值口径（§12.C.5）；缺汇率时比较为 NULL，落到 normal 不误报。
     CASE
         WHEN pb.balance IS NULL THEN 'unconfigured'
         WHEN pb.balance < 0 THEN 'negative'
-        WHEN pb.balance < 10 THEN 'low'
+        WHEN (CASE WHEN p.currency = 'USD' THEN pb.balance ELSE pb.balance / fx.rate END) < 10 THEN 'low'
         ELSE 'normal'
     END AS balance_status,
     (SELECT COUNT(*) FROM channels c WHERE c.provider_id = p.id) AS channel_total,
@@ -122,13 +153,23 @@ SELECT
         WHERE c.provider_id = p.id AND cm.status = 'enabled'
     ) AS models_count
 FROM providers p
-LEFT JOIN provider_balances pb ON pb.provider_id = p.id AND pb.currency = 'USD'
+LEFT JOIN provider_balances pb ON pb.provider_id = p.id AND pb.currency = p.currency
+LEFT JOIN LATERAL (
+    SELECT er.rate
+    FROM exchange_rates er
+    WHERE er.base_currency = 'USD' AND er.quote_currency = p.currency
+    ORDER BY er.rate_date DESC, er.fetched_at DESC
+    LIMIT 1
+) fx ON p.currency <> 'USD'
 WHERE (sqlc.narg('status')::text IS NULL OR p.status = sqlc.narg('status')::text)
   AND (sqlc.narg('search')::text IS NULL OR p.name ILIKE '%' || sqlc.narg('search')::text || '%' OR p.slug ILIKE '%' || sqlc.narg('search')::text || '%')
   AND (
       sqlc.narg('low_balance')::bool IS NULL
       OR NOT sqlc.narg('low_balance')::bool
-      OR (pb.balance IS NOT NULL AND pb.balance < 10)
+      OR (pb.balance IS NOT NULL AND (
+          pb.balance < 0
+          OR (CASE WHEN p.currency = 'USD' THEN pb.balance ELSE pb.balance / fx.rate END) < 10
+      ))
   )
 ORDER BY
   CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'name') IN ('', 'name') AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN p.name END DESC NULLS LAST,
@@ -161,13 +202,23 @@ LIMIT sqlc.arg('page_limit') OFFSET sqlc.arg('page_offset');
 -- name: ProvidersOpsTableCount :one
 SELECT COUNT(*) AS total
 FROM providers p
-LEFT JOIN provider_balances pb ON pb.provider_id = p.id AND pb.currency = 'USD'
+LEFT JOIN provider_balances pb ON pb.provider_id = p.id AND pb.currency = p.currency
+LEFT JOIN LATERAL (
+    SELECT er.rate
+    FROM exchange_rates er
+    WHERE er.base_currency = 'USD' AND er.quote_currency = p.currency
+    ORDER BY er.rate_date DESC, er.fetched_at DESC
+    LIMIT 1
+) fx ON p.currency <> 'USD'
 WHERE (sqlc.narg('status')::text IS NULL OR p.status = sqlc.narg('status')::text)
   AND (sqlc.narg('search')::text IS NULL OR p.name ILIKE '%' || sqlc.narg('search')::text || '%' OR p.slug ILIKE '%' || sqlc.narg('search')::text || '%')
   AND (
       sqlc.narg('low_balance')::bool IS NULL
       OR NOT sqlc.narg('low_balance')::bool
-      OR (pb.balance IS NOT NULL AND pb.balance < 10)
+      OR (pb.balance IS NOT NULL AND (
+          pb.balance < 0
+          OR (CASE WHEN p.currency = 'USD' THEN pb.balance ELSE pb.balance / fx.rate END) < 10
+      ))
   );
 
 -- name: ProviderOpsDetail :one
@@ -181,7 +232,8 @@ WITH money AS (
             + u.output_tokens_total
         ), 0)::bigint AS tokens_total,
         COALESCE(SUM(le.amount) FILTER (WHERE le.entry_type = 'debit' AND le.currency = 'USD'), 0)::numeric AS revenue_usd,
-        COALESCE(SUM(cs.total_cost_amount) FILTER (WHERE cs.currency = 'USD'), 0)::numeric AS cost_usd
+        -- 成本统一读 USD 归一列（D8）：每笔按结算时钉住的汇率折算，跨币种可直接求和。
+        COALESCE(SUM(cs.total_cost_amount_usd), 0)::numeric AS cost_usd
     FROM request_records r
     LEFT JOIN usage_records u ON u.request_record_id = r.id
     LEFT JOIN cost_snapshots cs ON cs.request_record_id = r.id
@@ -191,10 +243,19 @@ WITH money AS (
       AND (sqlc.narg('to_time')::timestamptz IS NULL OR r.created_at < sqlc.narg('to_time')::timestamptz)
 ),
 balance AS (
-    SELECT balance
-    FROM provider_balances
-    WHERE provider_id = sqlc.arg('provider_id')
-      AND currency = 'USD'
+    -- 余额按 provider 原始币种行读取（D2），折算列供展示。
+    SELECT pb.balance, p.currency,
+        (CASE WHEN p.currency = 'USD' THEN pb.balance ELSE pb.balance / fx.rate END)::numeric AS balance_usd
+    FROM providers p
+    LEFT JOIN provider_balances pb ON pb.provider_id = p.id AND pb.currency = p.currency
+    LEFT JOIN LATERAL (
+        SELECT er.rate
+        FROM exchange_rates er
+        WHERE er.base_currency = 'USD' AND er.quote_currency = p.currency
+        ORDER BY er.rate_date DESC, er.fetched_at DESC
+        LIMIT 1
+    ) fx ON p.currency <> 'USD'
+    WHERE p.id = sqlc.arg('provider_id')
 ),
 tps AS (
     SELECT COALESCE(
@@ -290,11 +351,13 @@ cache AS (
     FROM cache_usage
 )
 SELECT
-    (SELECT balance FROM balance) AS balance_usd,
+    (SELECT balance FROM balance) AS balance,
+    (SELECT currency FROM balance) AS balance_currency,
+    (SELECT balance_usd FROM balance) AS balance_usd,
     CASE
         WHEN (SELECT balance FROM balance) IS NULL THEN 'unconfigured'
         WHEN (SELECT balance FROM balance) < 0 THEN 'negative'
-        WHEN (SELECT balance FROM balance) < 10 THEN 'low'
+        WHEN (SELECT balance_usd FROM balance) < 10 THEN 'low'
         ELSE 'normal'
     END AS balance_status,
     (SELECT COUNT(*) FROM channels c WHERE c.provider_id = sqlc.arg('provider_id')) AS channel_total,

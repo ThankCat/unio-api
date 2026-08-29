@@ -34,7 +34,10 @@ INSERT INTO cost_snapshots (
     service_tier,
     model_price_service_tier_id,
     channel_price_service_tier_id,
-    tier_cost_source
+    tier_cost_source,
+    fx_rate,
+    fx_rate_date,
+    total_cost_amount_usd
 )
 VALUES (
     sqlc.arg(request_record_id),
@@ -70,6 +73,10 @@ VALUES (
     sqlc.arg(service_tier),
     sqlc.narg(model_price_service_tier_id),
     sqlc.narg(channel_price_service_tier_id),
-    sqlc.arg(tier_cost_source)
+    sqlc.arg(tier_cost_source),
+    -- 钉汇率三列（D4）：非 USD 成本必须带结算时所用汇率与折算 USD 总额；USD 行 fx 为 NULL、usd=total。
+    sqlc.narg(fx_rate),
+    sqlc.narg(fx_rate_date),
+    sqlc.arg(total_cost_amount_usd)
 )
 RETURNING *;

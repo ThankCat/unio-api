@@ -13,6 +13,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
 	"github.com/ThankCat/unio-gateway/internal/core/billing"
+	"github.com/ThankCat/unio-gateway/internal/core/fx"
 	"github.com/ThankCat/unio-gateway/internal/core/ledger"
 	"github.com/ThankCat/unio-gateway/internal/core/providerledger"
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
@@ -52,6 +53,19 @@ type ChatSettlementService struct {
 	billingCalculator ChatBillingCalculator
 	ledgerCapturer    ChatLedgerCapturer
 	providerLedger    ChatProviderLedger
+	fxRates           FxRateSource
+}
+
+// FxRateSource 提供成本币种 → USD 的最新汇率（由 core/fx.Service 实现）。
+type FxRateSource interface {
+	LatestRate(ctx context.Context, quote string) (fx.Rate, error)
+}
+
+// WithFxRates 注入汇率读取器（多货币结算钉汇率用，D4）。未注入时仅支持 USD 成本快照；
+// 非 USD 成本在缺注入/缺汇率时结算显式失败，由 settlement recovery 在修复后重放。
+func (s *ChatSettlementService) WithFxRates(rates FxRateSource) *ChatSettlementService {
+	s.fxRates = rates
+	return s
 }
 
 // NewChatSettlementService 创建 chat 请求结算 service。
@@ -232,8 +246,16 @@ func resolveSettlementCost(
 	tier servicetier.Tier,
 	atTime time.Time,
 ) (resolvedSettlementCost, error) {
+	// 倍率路径成本按 provider 结算币种记账（D2 修订）；绝对路径快照自带币种（=provider 币种，D3 触发器保证）。
+	providerCurrency, err := queries.GetChannelProviderCurrency(ctx, channelID)
+	if err != nil {
+		return resolvedSettlementCost{}, failure.Wrap(
+			failure.CodeGatewayChatSettlementFailed, err,
+			failure.WithMessage("load provider currency for chat settlement"),
+		)
+	}
 	if tier == servicetier.TierFast {
-		return resolveFastSettlementCost(ctx, queries, channelID, modelID, pins)
+		return resolveFastSettlementCost(ctx, queries, channelID, modelID, pins, providerCurrency)
 	}
 
 	// 1. 覆盖 pin。
@@ -256,7 +278,7 @@ func resolveSettlementCost(
 
 	// 2. 倍率 pin。
 	if pins.CostBaseModelPriceID > 0 && pins.ChannelCostMultiplierID > 0 {
-		resolved, ok, err := resolvePinnedMultiplierCost(ctx, queries, channelID, modelID, pins)
+		resolved, ok, err := resolvePinnedMultiplierCost(ctx, queries, channelID, modelID, pins, providerCurrency)
 		if err != nil {
 			return resolvedSettlementCost{}, err
 		}
@@ -267,7 +289,7 @@ func resolveSettlementCost(
 	}
 
 	// 3. 回退：按 attemptStart 重查（覆盖优先，否则参考成本 × 倍率）。
-	return resolveActiveSettlementCost(ctx, queries, channelID, modelID, atTime)
+	return resolveActiveSettlementCost(ctx, queries, channelID, modelID, atTime, providerCurrency)
 }
 
 // overrideResolvedCost 从绝对成本覆盖行构造解析结果（沿用 channelPriceCostSnapshot 的 numericOrZero 归一）。
@@ -284,6 +306,7 @@ func resolveFastSettlementCost(
 	queries *sqlc.Queries,
 	channelID, modelID int64,
 	pins settlementCostPins,
+	providerCurrency string,
 ) (resolvedSettlementCost, error) {
 	if pins.ChannelPriceID > 0 && pins.ChannelPriceServiceTierID > 0 {
 		parent, err := queries.GetChannelPrice(ctx, pins.ChannelPriceID)
@@ -344,6 +367,10 @@ func resolveFastSettlementCost(
 	if err != nil {
 		return resolvedSettlementCost{}, failure.Wrap(failure.CodeGatewayChatSettlementFailed, err, failure.WithMessage("scale Fast provider cost"))
 	}
+	// 倍率路径成本按 provider 结算币种记账（D2 修订）。
+	if providerCurrency != "" {
+		snapshot.Currency = providerCurrency
+	}
 	return resolvedSettlementCost{
 		snapshot:                normalizeCostSnapshotRequiredRates(snapshot),
 		modelPriceServiceTierID: fastBase.ID,
@@ -363,6 +390,7 @@ func resolvePinnedMultiplierCost(
 	queries *sqlc.Queries,
 	channelID, modelID int64,
 	pins settlementCostPins,
+	providerCurrency string,
 ) (resolvedSettlementCost, bool, error) {
 	base, err := queries.GetModelPrice(ctx, pins.CostBaseModelPriceID)
 	if err != nil {
@@ -400,7 +428,7 @@ func resolvePinnedMultiplierCost(
 		rechargeFactorID = crf.ID
 	}
 
-	snapshot, err := scaledMultiplierCostSnapshot(base, mult.Multiplier, rechargeFactor)
+	snapshot, err := scaledMultiplierCostSnapshot(base, mult.Multiplier, rechargeFactor, providerCurrency)
 	if err != nil {
 		return resolvedSettlementCost{}, false, err
 	}
@@ -422,6 +450,7 @@ func resolveActiveSettlementCost(
 	queries *sqlc.Queries,
 	channelID, modelID int64,
 	atTime time.Time,
+	providerCurrency string,
 ) (resolvedSettlementCost, error) {
 	at := pgtype.Timestamptz{Time: atTime, Valid: true}
 
@@ -461,7 +490,7 @@ func resolveActiveSettlementCost(
 		return resolvedSettlementCost{}, failure.Wrap(failure.CodeGatewayChatSettlementFailed, err, failure.WithMessage("find active channel recharge factor for chat settlement"))
 	}
 
-	snapshot, err := scaledMultiplierCostSnapshot(base, mult.Multiplier, rechargeFactor)
+	snapshot, err := scaledMultiplierCostSnapshot(base, mult.Multiplier, rechargeFactor, providerCurrency)
 	if err != nil {
 		return resolvedSettlementCost{}, err
 	}
@@ -510,13 +539,18 @@ func channelPriceServiceTierCostSnapshot(parent sqlc.ChannelPrice, tier sqlc.Cha
 // DEC-031：成本基数复用 model_prices，经 billing.ModelPriceToProviderCost 映射为成本向量（*_price → *_cost，1:1）。
 // 必填分项（uncached/output）空值归一为 0；可选分项保留 NULL，供 CalculateProviderCost 回退到基价
 // （cache_* → uncached，reasoning → output）。切勿把可选分项写成 0，否则会变成「显式免费」少计成本。
-func scaledMultiplierCostSnapshot(base sqlc.ModelPrice, priceMultiplier, rechargeFactor pgtype.Numeric) (billing.ProviderCostSnapshot, error) {
+// providerCurrency 非空时覆写快照币种（D2 修订：倍率路径成本按 provider 结算币种记账，
+// 基准价数值 × 倍率 = 原币金额；比较/归一由 fx 按当日汇率折算）。
+func scaledMultiplierCostSnapshot(base sqlc.ModelPrice, priceMultiplier, rechargeFactor pgtype.Numeric, providerCurrency string) (billing.ProviderCostSnapshot, error) {
 	scaled, err := billing.ScaleProviderCostByFactors(costBaseSnapshot(base), priceMultiplier, rechargeFactor)
 	if err != nil {
 		return billing.ProviderCostSnapshot{}, failure.Wrap(
 			failure.CodeGatewayChatSettlementFailed, err,
 			failure.WithMessage("scale provider cost by channel multiplier and recharge factor"),
 		)
+	}
+	if providerCurrency != "" {
+		scaled.Currency = providerCurrency
 	}
 	return normalizeCostSnapshotRequiredRates(scaled), nil
 }
@@ -548,6 +582,48 @@ func normalizeCostSnapshotRequiredRates(c billing.ProviderCostSnapshot) billing.
 // oneNumeric 返回 1.0 的 NUMERIC（充值倍率未配置时的缺省，名义即真实）。
 func oneNumeric() pgtype.Numeric {
 	return pgtype.Numeric{Int: big.NewInt(1), Exp: 0, Valid: true}
+}
+
+// costSnapshotUsdScale 与 cost_snapshots.total_cost_amount_usd 的 NUMERIC(20,10) 精度对齐。
+const costSnapshotUsdScale = 10
+
+// resolveCostSnapshotFx 解出成本快照的钉汇率三列（D4）。
+//
+// USD：fx 列 NULL、usd = 原币总额（CHECK 约束强制此形态）。非 USD：取最新可用汇率
+// （允许陈旧，结算永不因新鲜度失败，D7），usd = total ÷ rate——big.Rat 精确除、单次舍入
+// 到 scale 10。非 USD 且拿不到任何汇率时显式报错让结算失败：守卫保证 CNY 渠道存在时
+// 汇率必已存在（D11），走到这里只可能是 fxRates 未注入或汇率行被人为删除，
+// 交给 settlement recovery 在修复后重放，绝不能用错误口径把账算下去。
+func (s *ChatSettlementService) resolveCostSnapshotFx(
+	ctx context.Context, currency string, total pgtype.Numeric,
+) (fxRate pgtype.Numeric, fxRateDate pgtype.Date, totalUsd pgtype.Numeric, err error) {
+	if currency == fx.BaseCurrency {
+		return pgtype.Numeric{}, pgtype.Date{}, total, nil
+	}
+	if s.fxRates == nil {
+		return pgtype.Numeric{}, pgtype.Date{}, pgtype.Numeric{}, failure.New(
+			failure.CodeGatewayChatSettlementFailed,
+			failure.WithMessage("non-USD cost snapshot requires fx rates but none configured"),
+		)
+	}
+	rate, rateErr := s.fxRates.LatestRate(ctx, currency)
+	if rateErr != nil {
+		return pgtype.Numeric{}, pgtype.Date{}, pgtype.Numeric{}, failure.Wrap(
+			failure.CodeGatewayChatSettlementFailed,
+			rateErr,
+			failure.WithMessage("resolve fx rate for cost snapshot currency "+currency),
+		)
+	}
+	totalRat, convErr := fx.RatFromNumeric(total)
+	if convErr != nil {
+		return pgtype.Numeric{}, pgtype.Date{}, pgtype.Numeric{}, failure.Wrap(
+			failure.CodeGatewayChatSettlementFailed,
+			convErr,
+			failure.WithMessage("convert total cost amount for fx normalization"),
+		)
+	}
+	usd := fx.NumericFromRat(fx.UsdFromOriginal(totalRat, rate.Value), costSnapshotUsdScale)
+	return rate.Numeric, pgtype.Date{Time: rate.Date, Valid: true}, usd, nil
 }
 
 func chatSettlementFinalStatuses(params ChatSettlementParams) (requestlog.RequestStatus, requestlog.AttemptStatus) {
@@ -972,6 +1048,13 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		return err
 	}
 
+	// 钉汇率（D4）：非 USD 成本取最新汇率折算 USD 归一总额，汇率与所属日一并落库存档；
+	// USD 成本 fx 列为 NULL、usd = 原币总额。恢复重放读取既有快照行，不会重解析汇率（S7-R）。
+	fxRate, fxRateDate, totalCostUsd, err := s.resolveCostSnapshotFx(ctx, costSnapshot.Currency, providerCost.TotalCostAmount)
+	if err != nil {
+		return err
+	}
+
 	// 写入成本快照：覆盖路径 cost_price_id 置位、倍率列 NULL；倍率路径反之（cost_price_id NULL + 来源 id/标量置位）。
 	costSnapshotRow, err := txQueries.CreateCostSnapshot(ctx, sqlc.CreateCostSnapshotParams{
 		RequestRecordID:                 params.RequestRecord.ID,
@@ -1008,6 +1091,9 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		ModelPriceServiceTierID:         nullableInt8(cost.modelPriceServiceTierID),
 		ChannelPriceServiceTierID:       nullableInt8(tierSelection.channelPriceServiceTierID),
 		TierCostSource:                  pgtype.Text{String: cost.tierCostSource, Valid: tierSelection.settled != ""},
+		FxRate:                          fxRate,
+		FxRateDate:                      fxRateDate,
+		TotalCostAmountUsd:              totalCostUsd,
 	})
 	if err != nil {
 		return failure.Wrap(

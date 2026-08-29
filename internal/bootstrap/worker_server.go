@@ -11,14 +11,17 @@ import (
 
 	"github.com/ThankCat/unio-gateway/internal/app/workers"
 	"github.com/ThankCat/unio-gateway/internal/core/billing"
+	"github.com/ThankCat/unio-gateway/internal/core/fx"
 	"github.com/ThankCat/unio-gateway/internal/core/ledger"
 	"github.com/ThankCat/unio-gateway/internal/core/modelcatalog"
 	"github.com/ThankCat/unio-gateway/internal/core/providerledger"
 	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
 	"github.com/ThankCat/unio-gateway/internal/platform/config"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/adminmessage"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/channelmodelinventory"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/channeltest"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/exchangerate"
 	"github.com/ThankCat/unio-gateway/internal/service/appsettings"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
@@ -57,7 +60,7 @@ func NewWorkerServerApp(ctx context.Context, deps WorkerServerAppDeps) (*WorkerS
 		billing.Service{},
 		ledgerService,
 		providerLedgerService,
-	)
+	).WithFxRates(fx.NewService(queries, 0))
 	chatSettlementRecoveryService := lifecycle.NewChatSettlementRecoveryService(queries, chatSettlementService)
 
 	settlementRecoveryWorker := workers.NewSettlementRecoveryWorker(
@@ -142,6 +145,25 @@ func NewWorkerServerApp(ctx context.Context, deps WorkerServerAppDeps) (*WorkerS
 	units = append(units,
 		workers.NewChannelModelDiscoveryWorker(channelModelInventoryService, settingsStore, deps.Logger),
 		workers.NewChannelModelVerificationWorker(channelModelInventoryService),
+	)
+
+	// 多货币三件套（PLAN 5.6）：汇率日常同步（多源+合理性校验）、汇率变动后的存量毛利复查、
+	// 每日账务对账。告警统一写 admin 消息中心（§12.C.3）。
+	adminMessageService := adminmessage.NewService(queries)
+	fxFetcher := &fx.Fetcher{Sources: []fx.Source{
+		&fx.ExchangeRateAPISource{
+			Client: http.DefaultClient,
+			APIKey: func(ctx context.Context) string {
+				return appsettings.GatewayExchangeRateAPIKey(ctx, settingsStore, deps.Config.ExchangeRate.APIKey)
+			},
+		},
+		&fx.OpenERAPISource{Client: http.DefaultClient},
+		&fx.FrankfurterSource{Client: http.DefaultClient},
+	}}
+	units = append(units,
+		workers.NewFxRateSyncWorker(queries, fxFetcher, adminMessageService, deps.Logger, deps.Config.ExchangeRate.SyncInterval, exchangerate.SupportedQuotes),
+		workers.NewFxMarginRecheckWorker(deps.DB, adminMessageService, deps.Logger),
+		workers.NewFxReconciliationWorker(queries, adminMessageService, deps.Logger),
 	)
 	channelTestCfg := appsettings.AdminBackendChannelTest(ctx, settingsStore)
 	deps.Logger.Info("channel test worker registered",

@@ -34,6 +34,8 @@ type providerOpsRowDTO struct {
 	Status         string  `json:"status"`
 	StatusRevision int64   `json:"status_revision"`
 	CreatedAt      string  `json:"created_at"`
+	Currency       string  `json:"currency"`
+	Balance        *string `json:"balance"`
 	BalanceUSD     *string `json:"balance_usd"`
 	BalanceStatus  string  `json:"balance_status"`
 	ChannelTotal   int64   `json:"channel_total"`
@@ -41,6 +43,8 @@ type providerOpsRowDTO struct {
 }
 
 type providerOpsDetailDTO struct {
+	Balance          *string                   `json:"balance"`
+	BalanceCurrency  string                    `json:"balance_currency"`
 	BalanceUSD       *string                   `json:"balance_usd"`
 	BalanceStatus    string                    `json:"balance_status"`
 	ChannelTotal     int64                     `json:"channel_total"`
@@ -136,6 +140,7 @@ func providerOpsRowDTOFrom(row providerops.Row) providerOpsRowDTO {
 		ID: row.ID, Slug: row.Slug, Name: row.Name, Origin: row.Origin,
 		OriginRevision: row.OriginRevision, Status: row.Status, StatusRevision: row.StatusRevision,
 		CreatedAt: adminhttp.RFC3339(row.CreatedAt), ChannelTotal: row.ChannelTotal,
+		Currency: row.Currency, Balance: row.Balance,
 		BalanceUSD: row.BalanceUSD, BalanceStatus: row.BalanceStatus,
 		ModelsCount: row.ModelsCount,
 	}
@@ -158,6 +163,8 @@ func (h *providerOpsHandler) detail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	adminhttp.WriteData(w, http.StatusOK, providerOpsDetailDTO{
+		Balance:          d.Balance,
+		BalanceCurrency:  d.BalanceCurrency,
 		BalanceUSD:       d.BalanceUSD,
 		BalanceStatus:    d.BalanceStatus,
 		ChannelTotal:     d.ChannelTotal,

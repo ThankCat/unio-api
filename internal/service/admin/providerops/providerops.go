@@ -44,14 +44,20 @@ type Row struct {
 	OriginRevision int64
 	StatusRevision int64
 	CreatedAt      time.Time
-	BalanceUSD     *string
-	BalanceStatus  string
-	ChannelTotal   int64
-	ModelsCount    int64
+	// 多货币（D2）：Balance/Currency 是原币记账事实；BalanceUSD 是按最新汇率折算的展示口径（缺汇率为 nil）。
+	Currency      string
+	Balance       *string
+	BalanceUSD    *string
+	BalanceStatus string
+	ChannelTotal  int64
+	ModelsCount   int64
 }
 
 // Detail 是详情页概览（含 attempt/延迟/Token/利润/TPS 等运维指标）。
 type Detail struct {
+	// 多货币（D2）：Balance/BalanceCurrency 原币事实，BalanceUSD 折算展示口径（缺汇率为 nil）。
+	Balance          *string
+	BalanceCurrency  string
 	BalanceUSD       *string
 	BalanceStatus    string
 	ChannelTotal     int64
@@ -161,6 +167,8 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 			OriginRevision: r.OriginRevision,
 			StatusRevision: r.StatusRevision,
 			CreatedAt:      r.CreatedAt.Time,
+			Currency:       r.Currency,
+			Balance:        opsutil.NumericStringPtr(r.Balance),
 			BalanceUSD:     opsutil.NumericStringPtr(r.BalanceUsd),
 			BalanceStatus:  r.BalanceStatus,
 			ChannelTotal:   r.ChannelTotal,
@@ -179,6 +187,8 @@ func (s *Service) Detail(ctx context.Context, providerID int64, from, to time.Ti
 	revenue := opsutil.NumericString(r.RevenueUsd)
 	cost := opsutil.NumericString(r.CostUsd)
 	return Detail{
+		Balance:          opsutil.NumericStringPtr(r.Balance),
+		BalanceCurrency:  r.BalanceCurrency,
 		BalanceUSD:       opsutil.NumericStringPtr(r.BalanceUsd),
 		BalanceStatus:    r.BalanceStatus,
 		ChannelTotal:     r.ChannelTotal,

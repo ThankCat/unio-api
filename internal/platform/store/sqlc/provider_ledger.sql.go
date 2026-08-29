@@ -42,11 +42,23 @@ func (q *Queries) AddProviderBalance(ctx context.Context, arg AddProviderBalance
 const countLowBalanceProviders = `-- name: CountLowBalanceProviders :one
 SELECT COUNT(*) AS total
 FROM providers p
-JOIN provider_balances pb ON pb.provider_id = p.id AND pb.currency = 'USD'
+JOIN provider_balances pb ON pb.provider_id = p.id AND pb.currency = p.currency
+LEFT JOIN LATERAL (
+    SELECT er.rate
+    FROM exchange_rates er
+    WHERE er.base_currency = 'USD' AND er.quote_currency = p.currency
+    ORDER BY er.rate_date DESC, er.fetched_at DESC
+    LIMIT 1
+) fx ON p.currency <> 'USD'
 WHERE p.status <> 'archived'
-  AND pb.balance < 10
+  AND (
+      pb.balance < 0
+      OR (CASE WHEN p.currency = 'USD' THEN pb.balance ELSE pb.balance / fx.rate END) < 10
+  )
 `
 
+// 低余额按 USD 等值口径判定（§12.C.5）：余额按 provider 原始币种行读取，
+// 非 USD 按最新汇率折算后与 10 比较；负余额直接计入；缺汇率时不误报。
 func (q *Queries) CountLowBalanceProviders(ctx context.Context) (int64, error) {
 	row := q.db.QueryRow(ctx, countLowBalanceProviders)
 	var total int64

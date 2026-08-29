@@ -92,5 +92,6 @@ func DefaultRegistry() *Registry {
 		channelTestDefinition(),
 		channelModelDiscoveryDefinition(),
 		dashboardThresholdsDefinition(),
+		exchangeRateAPIKeyDefinition(),
 	)
 }

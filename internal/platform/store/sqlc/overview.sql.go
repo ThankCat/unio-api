@@ -96,7 +96,8 @@ money_agg AS (
             + u.output_tokens_total
         ), 0)::bigint AS tokens_total,
         COALESCE(SUM(ledger.revenue_usd), 0)::numeric AS revenue_usd,
-        COALESCE(SUM(cs.total_cost_amount) FILTER (WHERE cs.currency = 'USD'), 0)::numeric AS cost_usd
+        -- 成本读 USD 归一列（D8）。
+        COALESCE(SUM(cs.total_cost_amount_usd), 0)::numeric AS cost_usd
     FROM request_records r
     LEFT JOIN usage_records u ON u.request_record_id = r.id
     LEFT JOIN cost_snapshots cs ON cs.request_record_id = r.id
@@ -244,7 +245,8 @@ SELECT
         + u.output_tokens_total
     ), 0)::bigint AS tokens_total,
     COALESCE(SUM(ledger.revenue_usd), 0)::numeric AS revenue_usd,
-    COALESCE(SUM(cs.total_cost_amount) FILTER (WHERE cs.currency = 'USD'), 0)::numeric AS cost_usd,
+    -- 成本读 USD 归一列（D8）。
+    COALESCE(SUM(cs.total_cost_amount_usd), 0)::numeric AS cost_usd,
     COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
         CASE
             WHEN r.status = 'succeeded' AND r.completed_at IS NOT NULL
@@ -355,7 +357,8 @@ money_agg AS (
             + u.output_tokens_total
         ), 0)::bigint AS tokens_total,
         COALESCE(SUM(ledger.revenue_usd), 0)::numeric AS revenue_usd,
-        COALESCE(SUM(cs.total_cost_amount) FILTER (WHERE cs.currency = 'USD'), 0)::numeric AS cost_usd
+        -- 成本读 USD 归一列（D8）：每笔按结算钉住的汇率折算，跨币种直接求和。
+        COALESCE(SUM(cs.total_cost_amount_usd), 0)::numeric AS cost_usd
     FROM request_records r
     LEFT JOIN usage_records u ON u.request_record_id = r.id
     LEFT JOIN cost_snapshots cs ON cs.request_record_id = r.id
@@ -395,11 +398,15 @@ SELECT
     a.provider_id,
     a.provider_name,
     a.provider_status,
-    pb.balance AS balance_usd,
+    -- 余额按 provider 原始币种行读取（D2）；balance_usd 为最新汇率折算展示口径；
+    -- 低余额判定按 USD 等值（§12.C.5），缺汇率时比较为 NULL 落到 normal 不误报。
+    p.currency AS balance_currency,
+    pb.balance AS balance,
+    (CASE WHEN p.currency = 'USD' THEN pb.balance ELSE pb.balance / fx.rate END)::numeric AS balance_usd,
     CASE
         WHEN pb.balance IS NULL THEN 'unconfigured'
         WHEN pb.balance < 0 THEN 'negative'
-        WHEN pb.balance < 10 THEN 'low'
+        WHEN (CASE WHEN p.currency = 'USD' THEN pb.balance ELSE pb.balance / fx.rate END) < 10 THEN 'low'
         ELSE 'normal'
     END AS balance_status,
     a.terminal_total,
@@ -417,7 +424,15 @@ SELECT
     a.latency_p99,
     COALESCE(t.avg_tps, 0)::float8 AS avg_tps
 FROM attempt_agg a
-LEFT JOIN provider_balances pb ON pb.provider_id = a.provider_id AND pb.currency = 'USD'
+JOIN providers p ON p.id = a.provider_id
+LEFT JOIN provider_balances pb ON pb.provider_id = a.provider_id AND pb.currency = p.currency
+LEFT JOIN LATERAL (
+    SELECT er.rate
+    FROM exchange_rates er
+    WHERE er.base_currency = 'USD' AND er.quote_currency = p.currency
+    ORDER BY er.rate_date DESC, er.fetched_at DESC
+    LIMIT 1
+) fx ON p.currency <> 'USD'
 LEFT JOIN money_agg m ON m.provider_id = a.provider_id
 LEFT JOIN tps_agg t ON t.provider_id = a.provider_id
 ORDER BY a.terminal_total DESC
@@ -430,25 +445,27 @@ type DashboardBreakdownProviderParams struct {
 }
 
 type DashboardBreakdownProviderRow struct {
-	ProviderID     int64
-	ProviderName   string
-	ProviderStatus string
-	BalanceUsd     pgtype.Numeric
-	BalanceStatus  string
-	TerminalTotal  int64
-	SucceededTotal int64
-	FailedTotal    int64
-	ChannelCount   int64
-	TokensTotal    int64
-	RevenueUsd     pgtype.Numeric
-	CostUsd        pgtype.Numeric
-	LatencySample  int64
-	LatencyAvg     float64
-	LatencyP50     float64
-	LatencyP90     float64
-	LatencyP95     float64
-	LatencyP99     float64
-	AvgTps         float64
+	ProviderID      int64
+	ProviderName    string
+	ProviderStatus  string
+	BalanceCurrency string
+	Balance         pgtype.Numeric
+	BalanceUsd      pgtype.Numeric
+	BalanceStatus   string
+	TerminalTotal   int64
+	SucceededTotal  int64
+	FailedTotal     int64
+	ChannelCount    int64
+	TokensTotal     int64
+	RevenueUsd      pgtype.Numeric
+	CostUsd         pgtype.Numeric
+	LatencySample   int64
+	LatencyAvg      float64
+	LatencyP50      float64
+	LatencyP90      float64
+	LatencyP95      float64
+	LatencyP99      float64
+	AvgTps          float64
 }
 
 // DashboardBreakdownProvider 按服务商 attempt 聚合成功率/延迟；Token/金额仍按最终请求账务事实聚合。
@@ -465,6 +482,8 @@ func (q *Queries) DashboardBreakdownProvider(ctx context.Context, arg DashboardB
 			&i.ProviderID,
 			&i.ProviderName,
 			&i.ProviderStatus,
+			&i.BalanceCurrency,
+			&i.Balance,
 			&i.BalanceUsd,
 			&i.BalanceStatus,
 			&i.TerminalTotal,

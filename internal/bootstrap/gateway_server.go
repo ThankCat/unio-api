@@ -11,6 +11,7 @@ import (
 
 	"github.com/ThankCat/unio-gateway/internal/app/gatewayapi"
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
+	"github.com/ThankCat/unio-gateway/internal/core/fx"
 	messagesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/anthropic/messages"
 	"github.com/ThankCat/unio-gateway/internal/core/runtimecontrol"
 	"github.com/ThankCat/unio-gateway/internal/core/tokenest"
@@ -226,7 +227,7 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 	// settingsApplier 周期推送热更新。breaker、admission 与 balanced 参数只读 Redis committed control。
 	adapter.SetStreamIdleTimeout(appsettings.GatewayStreamIdleTimeout(ctx, settingsStore))
 
-	chatRouter := NewChatRouter(queries, appsettings.GatewayDefaultResponseTimeout(ctx, settingsStore), deps.Logger)
+	chatRouter := NewChatRouter(queries, appsettings.GatewayDefaultResponseTimeout(ctx, settingsStore), deps.Logger, fx.NewService(queries, 0))
 	// 首字保护是独立预算（§11.3）：与响应超时同起点，但由自己的全局默认与渠道列决定。
 	chatRouter.SetDefaultFirstTokenTimeout(appsettings.GatewayDefaultFirstTokenTimeout(ctx, settingsStore))
 

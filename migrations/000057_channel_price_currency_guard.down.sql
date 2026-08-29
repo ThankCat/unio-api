@@ -1,0 +1,2 @@
+DROP TRIGGER trg_channel_prices_currency_guard ON public.channel_prices;
+DROP FUNCTION public.assert_channel_price_currency_matches_provider();

@@ -4,6 +4,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/ThankCat/unio-gateway/internal/core/billing"
+	"github.com/ThankCat/unio-gateway/internal/core/fx"
 	"github.com/ThankCat/unio-gateway/internal/core/ledger"
 	"github.com/ThankCat/unio-gateway/internal/core/providerledger"
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
@@ -40,7 +41,7 @@ func NewChatGateway(
 		billing.Service{},
 		ledgerService,
 		providerLedgerService,
-	)
+	).WithFxRates(fx.NewService(queries, 0))
 	chatSettlementRecoveryStore := lifecycle.NewChatSettlementRecoveryStore(
 		queries,
 		workerConfig.SettlementRecoveryInitialDelay,
@@ -106,7 +107,7 @@ func NewResponsesGateway(
 		billing.Service{},
 		ledgerService,
 		providerLedgerService,
-	)
+	).WithFxRates(fx.NewService(queries, 0))
 	chatSettlementRecoveryStore := lifecycle.NewChatSettlementRecoveryStore(
 		queries,
 		workerConfig.SettlementRecoveryInitialDelay,
@@ -166,7 +167,7 @@ func NewMessagesGateway(
 		billing.Service{},
 		ledgerService,
 		providerLedgerService,
-	)
+	).WithFxRates(fx.NewService(queries, 0))
 	chatSettlementRecoveryStore := lifecycle.NewChatSettlementRecoveryStore(
 		queries,
 		workerConfig.SettlementRecoveryInitialDelay,

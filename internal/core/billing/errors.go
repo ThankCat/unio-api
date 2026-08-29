@@ -13,4 +13,6 @@ var (
 	ErrUnsupportedPricingUnit = errors.New("billing: unsupported pricing unit")
 	// ErrUnsupportedFormula 表示当前 billing service 不支持该价格计算公式。
 	ErrUnsupportedFormula = errors.New("billing: unsupported formula")
+	// ErrMissingFxRate 表示售价与成本币种不同但未提供汇率（跨币种比较必须带 fxRate，D5）。
+	ErrMissingFxRate = errors.New("billing: sale/cost currency mismatch without fx rate")
 )

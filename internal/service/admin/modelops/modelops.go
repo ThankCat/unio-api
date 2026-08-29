@@ -142,6 +142,24 @@ type ChannelRow struct {
 	// Fast 档成本；两侧都没配 Fast 价时为 nil，表示该渠道对本模型不区分 Fast。
 	FastInputCost  *string
 	FastOutputCost *string
+	// 成本币种与 USD 折算（多货币）：CostCurrency 是原币（绝对路径=provider 币种，倍率路径=USD）；
+	// *_USD 为按最新汇率折算的展示口径（与守卫同源），缺汇率时为 nil；FxRate/FxRateDate 供脚注展示。
+	CostCurrency      string
+	InputCostUSD      *string
+	OutputCostUSD     *string
+	FastInputCostUSD  *string
+	FastOutputCostUSD *string
+	CostFxRate        *string
+	CostFxRateDate    *string
+}
+
+// dateStringPtr 把可空 DATE 转成 YYYY-MM-DD 字符串指针（汇率日脚注展示）。
+func dateStringPtr(d pgtype.Date) *string {
+	if !d.Valid {
+		return nil
+	}
+	s := d.Time.Format("2006-01-02")
+	return &s
 }
 
 // PerfPoint 是抽屉性能 Tab 时序点。收入与成本按各自时间戳分桶，
@@ -353,6 +371,13 @@ func (s *Service) Channels(ctx context.Context, modelID int64, from, to time.Tim
 			OutputCost:       opsutil.NumericStringPtr(r.OutputCost),
 			FastInputCost:    opsutil.NumericStringPtr(r.FastInputCost),
 			FastOutputCost:   opsutil.NumericStringPtr(r.FastOutputCost),
+			CostCurrency:     r.CostCurrency,
+			InputCostUSD:     opsutil.NumericStringPtr(r.InputCostUsd),
+			OutputCostUSD:    opsutil.NumericStringPtr(r.OutputCostUsd),
+			FastInputCostUSD: opsutil.NumericStringPtr(r.FastInputCostUsd),
+			FastOutputCostUSD: opsutil.NumericStringPtr(r.FastOutputCostUsd),
+			CostFxRate:        opsutil.NumericStringPtr(r.CostFxRate),
+			CostFxRateDate:    dateStringPtr(r.CostFxRateDate),
 		})
 	}
 	return out, nil

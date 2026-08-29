@@ -1035,6 +1035,10 @@ SELECT
     COALESCE(ur.output_tokens_total, 0)::bigint AS output_tokens_total,
     COALESCE(ur.reasoning_output_tokens, 0)::bigint AS reasoning_output_tokens,
     cs.total_cost_amount,
+    -- 多货币（D2 修订）：成本快照按 provider 币种记账，展示/毛利需要币种 + 钉档汇率 + USD 折算。
+    cs.currency AS cost_currency,
+    cs.fx_rate AS cost_fx_rate,
+    cs.total_cost_amount_usd,
     cs.uncached_input_cost_amount,
     cs.cache_read_input_cost_amount,
     cs.cache_creation_5m_input_cost_amount,
@@ -1222,6 +1226,9 @@ type ListRequestRecordsPageRow struct {
 	OutputTokensTotal               int64
 	ReasoningOutputTokens           int64
 	TotalCostAmount                 pgtype.Numeric
+	CostCurrency                    pgtype.Text
+	CostFxRate                      pgtype.Numeric
+	TotalCostAmountUsd              pgtype.Numeric
 	UncachedInputCostAmount         pgtype.Numeric
 	CacheReadInputCostAmount        pgtype.Numeric
 	CacheCreation5mInputCostAmount  pgtype.Numeric
@@ -1346,6 +1353,9 @@ func (q *Queries) ListRequestRecordsPage(ctx context.Context, arg ListRequestRec
 			&i.OutputTokensTotal,
 			&i.ReasoningOutputTokens,
 			&i.TotalCostAmount,
+			&i.CostCurrency,
+			&i.CostFxRate,
+			&i.TotalCostAmountUsd,
 			&i.UncachedInputCostAmount,
 			&i.CacheReadInputCostAmount,
 			&i.CacheCreation5mInputCostAmount,

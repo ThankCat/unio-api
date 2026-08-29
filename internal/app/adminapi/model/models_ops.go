@@ -125,6 +125,14 @@ type modelOpsChannelDTO struct {
 	// Fast 档成本；两侧都没配 Fast 价时为 null，表示该渠道对本模型不区分 Fast。
 	FastInputCost  *string `json:"fast_input_cost"`
 	FastOutputCost *string `json:"fast_output_cost"`
+	// 成本币种与 USD 折算（多货币）：*_usd 缺汇率时为 null；fx 字段供「按 X 日汇率 Y 折算」脚注。
+	CostCurrency      string  `json:"cost_currency"`
+	InputCostUSD      *string `json:"input_cost_usd"`
+	OutputCostUSD     *string `json:"output_cost_usd"`
+	FastInputCostUSD  *string `json:"fast_input_cost_usd"`
+	FastOutputCostUSD *string `json:"fast_output_cost_usd"`
+	CostFxRate        *string `json:"cost_fx_rate"`
+	CostFxRateDate    *string `json:"cost_fx_rate_date"`
 }
 
 type modelOpsPerfPointDTO struct {
@@ -324,6 +332,13 @@ func (h *modelOpsHandler) channels(w http.ResponseWriter, r *http.Request) {
 			OutputCost:       c.OutputCost,
 			FastInputCost:    c.FastInputCost,
 			FastOutputCost:   c.FastOutputCost,
+			CostCurrency:     c.CostCurrency,
+			InputCostUSD:     c.InputCostUSD,
+			OutputCostUSD:    c.OutputCostUSD,
+			FastInputCostUSD: c.FastInputCostUSD,
+			FastOutputCostUSD: c.FastOutputCostUSD,
+			CostFxRate:        c.CostFxRate,
+			CostFxRateDate:    c.CostFxRateDate,
 		})
 	}
 	adminhttp.WriteData(w, http.StatusOK, out)

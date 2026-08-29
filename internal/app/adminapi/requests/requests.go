@@ -63,22 +63,27 @@ type requestListItemDTO struct {
 	ReasoningOutputTokens       int64 `json:"reasoning_output_tokens"`
 	// USD 十进制字符串；无结算快照 / 账本时为 null。
 	UserChargeUsd                *string `json:"user_charge_usd"`
-	TotalCostUsd                 *string `json:"total_cost_usd"`
-	UncachedInputCostUsd         *string `json:"uncached_input_cost_usd"`
-	CacheReadInputCostUsd        *string `json:"cache_read_input_cost_usd"`
-	CacheCreation5mInputCostUsd  *string `json:"cache_creation_5m_input_cost_usd"`
-	CacheCreation1hInputCostUsd  *string `json:"cache_creation_1h_input_cost_usd"`
-	CacheCreation30mInputCostUsd *string `json:"cache_creation_30m_input_cost_usd"`
-	OutputCostUsd                *string `json:"output_cost_usd"`
-	ReasoningOutputCostUsd       *string `json:"reasoning_output_cost_usd"`
+	// 成本按 provider 结算币种记账（cost_currency，D2 修订）：*_cost_amount 为原币金额；
+	// total_cost_usd 为结算钉档汇率（cost_fx_rate）折算的 USD 总额，毛利/汇总用它。
+	CostCurrency                    *string `json:"cost_currency"`
+	CostFxRate                      *string `json:"cost_fx_rate"`
+	TotalCostUsd                    *string `json:"total_cost_usd"`
+	TotalCostAmount                 *string `json:"total_cost_amount"`
+	UncachedInputCostAmount         *string `json:"uncached_input_cost_amount"`
+	CacheReadInputCostAmount        *string `json:"cache_read_input_cost_amount"`
+	CacheCreation5mInputCostAmount  *string `json:"cache_creation_5m_input_cost_amount"`
+	CacheCreation1hInputCostAmount  *string `json:"cache_creation_1h_input_cost_amount"`
+	CacheCreation30mInputCostAmount *string `json:"cache_creation_30m_input_cost_amount"`
+	OutputCostAmount                *string `json:"output_cost_amount"`
+	ReasoningOutputCostAmount       *string `json:"reasoning_output_cost_amount"`
 	// 计费单价快照（USD 字符串，per_1m_tokens）：平台成本单价×7 + 用户售价单价×7，供「单价×tokens=金额」计算过程展示。
-	UncachedInputCostUnitUsd          *string `json:"uncached_input_cost_unit_usd"`
-	CacheReadInputCostUnitUsd         *string `json:"cache_read_input_cost_unit_usd"`
-	CacheCreation5mInputCostUnitUsd   *string `json:"cache_creation_5m_input_cost_unit_usd"`
-	CacheCreation1hInputCostUnitUsd   *string `json:"cache_creation_1h_input_cost_unit_usd"`
-	CacheCreation30mInputCostUnitUsd  *string `json:"cache_creation_30m_input_cost_unit_usd"`
-	OutputCostUnitUsd                 *string `json:"output_cost_unit_usd"`
-	ReasoningOutputCostUnitUsd        *string `json:"reasoning_output_cost_unit_usd"`
+	UncachedInputCostUnit             *string `json:"uncached_input_cost_unit"`
+	CacheReadInputCostUnit            *string `json:"cache_read_input_cost_unit"`
+	CacheCreation5mInputCostUnit      *string `json:"cache_creation_5m_input_cost_unit"`
+	CacheCreation1hInputCostUnit      *string `json:"cache_creation_1h_input_cost_unit"`
+	CacheCreation30mInputCostUnit     *string `json:"cache_creation_30m_input_cost_unit"`
+	OutputCostUnit                    *string `json:"output_cost_unit"`
+	ReasoningOutputCostUnit           *string `json:"reasoning_output_cost_unit"`
 	UncachedInputPriceUnitUsd         *string `json:"uncached_input_price_unit_usd"`
 	CacheReadInputPriceUnitUsd        *string `json:"cache_read_input_price_unit_usd"`
 	CacheCreation5mInputPriceUnitUsd  *string `json:"cache_creation_5m_input_price_unit_usd"`
@@ -125,8 +130,12 @@ type requestListItemDTO struct {
 	StickyAfterChannelName   *string `json:"sticky_after_channel_name"`
 }
 
-// costSnapshotDTO 是平台成本快照（单价 per_1m_tokens + 金额，USD 字符串）。
+// costSnapshotDTO 是平台成本快照（单价 per_1m_tokens + 金额）。金额按 provider 结算币种记账
+// （currency，D2 修订）；total_cost_amount_usd 为结算钉档汇率（fx_rate）折算的 USD 总额。
 type costSnapshotDTO struct {
+	Currency                        *string `json:"currency"`
+	FxRate                          *string `json:"fx_rate"`
+	TotalCostAmountUsd              *string `json:"total_cost_amount_usd"`
 	UncachedInputCostUnit           *string `json:"uncached_input_cost_unit"`
 	CacheReadInputCostUnit          *string `json:"cache_read_input_cost_unit"`
 	CacheCreation5mInputCostUnit    *string `json:"cache_creation_5m_input_cost_unit"`
@@ -384,22 +393,25 @@ func toRequestListItemDTO(item query.RequestListItem) requestListItemDTO {
 		OutputTokens:                 item.OutputTokens,
 		ReasoningOutputTokens:        item.ReasoningOutputTokens,
 		UserChargeUsd:                item.UserChargeUSD,
-		TotalCostUsd:                 item.TotalCostUSD,
-		UncachedInputCostUsd:         item.UncachedInputCostUSD,
-		CacheReadInputCostUsd:        item.CacheReadInputCostUSD,
-		CacheCreation5mInputCostUsd:  item.CacheCreation5mInputCostUSD,
-		CacheCreation1hInputCostUsd:  item.CacheCreation1hInputCostUSD,
-		CacheCreation30mInputCostUsd: item.CacheCreation30mInputCostUSD,
-		OutputCostUsd:                item.OutputCostUSD,
-		ReasoningOutputCostUsd:       item.ReasoningOutputCostUSD,
+		CostCurrency:                    item.CostCurrency,
+		CostFxRate:                      item.CostFxRate,
+		TotalCostUsd:                    item.TotalCostUSD,
+		TotalCostAmount:                 item.TotalCostAmount,
+		UncachedInputCostAmount:         item.UncachedInputCostAmount,
+		CacheReadInputCostAmount:        item.CacheReadInputCostAmount,
+		CacheCreation5mInputCostAmount:  item.CacheCreation5mInputCostAmount,
+		CacheCreation1hInputCostAmount:  item.CacheCreation1hInputCostAmount,
+		CacheCreation30mInputCostAmount: item.CacheCreation30mInputCostAmount,
+		OutputCostAmount:                item.OutputCostAmount,
+		ReasoningOutputCostAmount:       item.ReasoningOutputCostAmount,
 
-		UncachedInputCostUnitUsd:          item.UncachedInputCostUnitUSD,
-		CacheReadInputCostUnitUsd:         item.CacheReadInputCostUnitUSD,
-		CacheCreation5mInputCostUnitUsd:   item.CacheCreation5mInputCostUnitUSD,
-		CacheCreation1hInputCostUnitUsd:   item.CacheCreation1hInputCostUnitUSD,
-		CacheCreation30mInputCostUnitUsd:  item.CacheCreation30mInputCostUnitUSD,
-		OutputCostUnitUsd:                 item.OutputCostUnitUSD,
-		ReasoningOutputCostUnitUsd:        item.ReasoningOutputCostUnitUSD,
+		UncachedInputCostUnit:             item.UncachedInputCostUnit,
+		CacheReadInputCostUnit:            item.CacheReadInputCostUnit,
+		CacheCreation5mInputCostUnit:      item.CacheCreation5mInputCostUnit,
+		CacheCreation1hInputCostUnit:      item.CacheCreation1hInputCostUnit,
+		CacheCreation30mInputCostUnit:     item.CacheCreation30mInputCostUnit,
+		OutputCostUnit:                    item.OutputCostUnit,
+		ReasoningOutputCostUnit:           item.ReasoningOutputCostUnit,
 		UncachedInputPriceUnitUsd:         item.UncachedInputPriceUnitUSD,
 		CacheReadInputPriceUnitUsd:        item.CacheReadInputPriceUnitUSD,
 		CacheCreation5mInputPriceUnitUsd:  item.CacheCreation5mInputPriceUnitUSD,
@@ -449,6 +461,9 @@ func toRequestListItemDTO(item query.RequestListItem) requestListItemDTO {
 
 func toCostSnapshotDTO(c query.CostSnapshotView) costSnapshotDTO {
 	return costSnapshotDTO{
+		Currency:                        c.Currency,
+		FxRate:                          c.FxRate,
+		TotalCostAmountUsd:              c.TotalCostAmountUSD,
 		UncachedInputCostUnit:           c.UncachedInputCostUnit,
 		CacheReadInputCostUnit:          c.CacheReadInputCostUnit,
 		CacheCreation5mInputCostUnit:    c.CacheCreation5mInputCostUnit,

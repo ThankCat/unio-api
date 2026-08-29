@@ -173,6 +173,18 @@ func TestDeleteNotFoundWhenNoRows(t *testing.T) {
 	}
 }
 
+// 生命周期护栏：启用中的模型还在售卖，删除必须先停用（2026-08-29 用户确认的状态机）。
+func TestDeleteRejectsEnabledModel(t *testing.T) {
+	store := &fakeModelStore{lookupRow: sqlc.Model{ID: 9, Status: model.StatusEnabled}}
+	err := model.NewService(store, nil, nil).Delete(context.Background(), 9)
+	if got := failure.CodeOf(err); got != failure.CodeAdminConflict {
+		t.Fatalf("expected %q, got %q", failure.CodeAdminConflict, got)
+	}
+	if store.deleteCalls != 0 {
+		t.Fatalf("store delete should not be called for enabled model")
+	}
+}
+
 // 已被请求/账务历史引用时，DB 报外键冲突（23503），降级为 conflict 提示改用停用。
 func TestDeleteConflictOnForeignKeyViolation(t *testing.T) {
 	store := &fakeModelStore{deleteErr: &pgconn.PgError{Code: "23503"}}

@@ -74,12 +74,18 @@ func (s *Service) Adjust(ctx context.Context, params AdjustParams) (Adjustment, 
 	if params.ProviderID <= 0 {
 		return Adjustment{}, invalidArgument("provider_id", "provider_id must be greater than zero")
 	}
-	if err := s.ensureProvider(ctx, params.ProviderID); err != nil {
+	providerRow, err := s.getProvider(ctx, params.ProviderID)
+	if err != nil {
 		return Adjustment{}, err
 	}
+	// 调额只接受该 provider 的原始结算币种（D2/D3）：余额按原币记账，永不换汇。
+	// 币种留空视为原币（前端只读展示 provider 币种时可不传）。
 	currency := strings.ToUpper(strings.TrimSpace(params.Currency))
-	if currency != CurrencyUSD {
-		return Adjustment{}, invalidArgument("currency", "currency must be USD")
+	if currency == "" {
+		currency = providerRow.Currency
+	}
+	if currency != providerRow.Currency {
+		return Adjustment{}, invalidArgument("currency", "currency must match provider currency "+providerRow.Currency)
 	}
 	reason := strings.TrimSpace(params.Reason)
 	if reason == "" {
@@ -90,7 +96,6 @@ func (s *Service) Adjust(ctx context.Context, params AdjustParams) (Adjustment, 
 		idempotencyKey = fmt.Sprintf("admin:provider-adjust:%d:%s", params.ProviderID, uuid.NewString())
 	}
 	var entry providerledger.Entry
-	var err error
 	if strings.TrimSpace(params.TargetBalance) != "" {
 		target, parseErr := parseTargetMoney(params.TargetBalance)
 		if parseErr != nil {
@@ -129,23 +134,31 @@ func (s *Service) Adjust(ctx context.Context, params AdjustParams) (Adjustment, 
 }
 
 type Balance struct {
-	Amount *string
-	Status string
+	Amount   *string
+	Currency string
+	Status   string
 }
 
-func (s *Service) BalanceUSD(ctx context.Context, providerID int64) (Balance, error) {
-	if err := s.ensureProvider(ctx, providerID); err != nil {
+// Balance 读取 provider 原始币种的余额行（D2：余额永远原币记账）。
+// Status 的 low 阈值只对 USD 生效；非 USD 的低余额判定按 USD 等值口径在 ops 查询层完成（§12.C.5）。
+func (s *Service) Balance(ctx context.Context, providerID int64) (Balance, error) {
+	providerRow, err := s.getProvider(ctx, providerID)
+	if err != nil {
 		return Balance{}, err
 	}
-	row, err := s.store.GetProviderBalance(ctx, sqlc.GetProviderBalanceParams{ProviderID: providerID, Currency: CurrencyUSD})
+	row, err := s.store.GetProviderBalance(ctx, sqlc.GetProviderBalanceParams{ProviderID: providerID, Currency: providerRow.Currency})
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Balance{Status: "unconfigured"}, nil
+		return Balance{Currency: providerRow.Currency, Status: "unconfigured"}, nil
 	}
 	if err != nil {
 		return Balance{}, storeFailed(err, "get provider balance")
 	}
 	amount := opsutil.NumericString(row.Balance)
-	return Balance{Amount: &amount, Status: balanceStatus(row.Balance)}, nil
+	status := balanceStatus(row.Balance)
+	if providerRow.Currency != CurrencyUSD && status == "low" {
+		status = "normal"
+	}
+	return Balance{Amount: &amount, Currency: providerRow.Currency, Status: status}, nil
 }
 
 type ListParams struct {
@@ -184,7 +197,7 @@ func (s *Service) List(ctx context.Context, params ListParams) ([]Entry, int64, 
 	if params.ProviderID <= 0 {
 		return nil, 0, invalidArgument("provider_id", "provider_id must be greater than zero")
 	}
-	if err := s.ensureProvider(ctx, params.ProviderID); err != nil {
+	if _, err := s.getProvider(ctx, params.ProviderID); err != nil {
 		return nil, 0, err
 	}
 	params.EntryType = strings.TrimSpace(params.EntryType)
@@ -244,15 +257,15 @@ func (s *Service) List(ctx context.Context, params ListParams) ([]Entry, int64, 
 	return out, total, nil
 }
 
-func (s *Service) ensureProvider(ctx context.Context, providerID int64) error {
-	_, err := s.store.GetProvider(ctx, providerID)
+func (s *Service) getProvider(ctx context.Context, providerID int64) (sqlc.Provider, error) {
+	row, err := s.store.GetProvider(ctx, providerID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return failure.New(failure.CodeAdminNotFound, failure.WithMessage("provider not found"))
+		return sqlc.Provider{}, failure.New(failure.CodeAdminNotFound, failure.WithMessage("provider not found"))
 	}
 	if err != nil {
-		return storeFailed(err, "get provider")
+		return sqlc.Provider{}, storeFailed(err, "get provider")
 	}
-	return nil
+	return row, nil
 }
 
 func parseMoney(raw string) (pgtype.Numeric, error) {

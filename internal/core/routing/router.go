@@ -13,6 +13,7 @@ import (
 
 	"github.com/ThankCat/unio-gateway/internal/core/billing"
 	"github.com/ThankCat/unio-gateway/internal/core/channel"
+	"github.com/ThankCat/unio-gateway/internal/core/fx"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/logging"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/logfields"
@@ -225,6 +226,12 @@ type Router struct {
 	defaultResponseTimeoutNanos   atomic.Int64
 	defaultFirstTokenTimeoutNanos atomic.Int64
 	logger                        *zap.Logger
+	fxRates                       FxRateSource
+}
+
+// FxRateSource 提供成本币种 → USD 的最新汇率（由 core/fx.Service 实现）。
+type FxRateSource interface {
+	LatestRate(ctx context.Context, quote string) (fx.Rate, error)
 }
 
 // Option 调整 Router 的可选依赖（如日志）。
@@ -236,6 +243,14 @@ func WithLogger(logger *zap.Logger) Option {
 		if logger != nil {
 			r.logger = logger
 		}
+	}
+}
+
+// WithFxRates 注入汇率读取器（多货币候选比价用，D5/D11）。
+// 未注入时跨币种候选一律被剔除（等价于缺汇率），同币种候选不受影响。
+func WithFxRates(rates FxRateSource) Option {
+	return func(r *Router) {
+		r.fxRates = rates
 	}
 }
 
@@ -534,7 +549,20 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindModel
 			fastChannelPriceServiceTierID = fastCostID
 		}
 	}
-	violations, err := billing.ValidateNonNegativeMargin(salePrice, channelCost)
+	// 跨币种候选（绝对成本路径 + provider 币种 ≠ 售价币种）解析一次最新汇率（D5）；
+	// 缺汇率 = 候选剔除（D11：宁可少赚一笔，不算错一分），走与负毛利同一条拒绝路径可观测。
+	fxRate, err := r.resolveCandidateFxRate(ctx, salePrice.Currency, channelCost.Currency)
+	if err != nil {
+		return ChatRouteCandidate{}, failure.Wrap(
+			failure.CodeRoutingNegativeMargin,
+			err,
+			failure.WithMessage("resolve fx rate for cross-currency candidate"),
+			failure.WithField("channel_id", row.ChannelID),
+			failure.WithField("model_id", row.RequestedModelID),
+			failure.WithField("cost_currency", channelCost.Currency),
+		)
+	}
+	violations, err := billing.ValidateNonNegativeMarginFX(salePrice, channelCost, fxRate)
 	if err != nil || len(violations) > 0 {
 		fields := []failure.Option{
 			failure.WithMessage("candidate rejected by negative margin guard"),
@@ -549,7 +577,7 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindModel
 		}
 		return ChatRouteCandidate{}, failure.New(failure.CodeRoutingNegativeMargin, fields...)
 	}
-	costRatio, err := billing.ProviderCostToSaleRatio(salePrice, channelCost)
+	costRatio, err := billing.ProviderCostToSaleRatioFX(salePrice, channelCost, fxRate)
 	if err != nil {
 		return ChatRouteCandidate{}, failure.Wrap(
 			failure.CodeRoutingNegativeMargin,
@@ -601,6 +629,23 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindModel
 	}, nil
 }
 
+// resolveCandidateFxRate 为跨币种候选解析最新汇率（1 售价币种兑多少成本币种）。
+// 同币种返回 nil（不换汇）；跨币种但未注入汇率源或查不到汇率时报错（候选被剔除）。
+// 进程内 fx.Service 自带短 TTL 缓存，单请求多候选的重复解析不放大查库。
+func (r *Router) resolveCandidateFxRate(ctx context.Context, saleCurrency, costCurrency string) (*big.Rat, error) {
+	if costCurrency == "" || costCurrency == saleCurrency {
+		return nil, nil
+	}
+	if r.fxRates == nil {
+		return nil, billing.ErrMissingFxRate
+	}
+	rate, err := r.fxRates.LatestRate(ctx, costCurrency)
+	if err != nil {
+		return nil, err
+	}
+	return rate.Value, nil
+}
+
 // resolveFastCandidateCost 只验证候选是否具备可锁定的 Fast Provider 成本来源。
 // 返回结果不参与路由过滤、排序或负毛利守卫。
 func resolveFastCandidateCost(row sqlc.FindModelCandidatesRow, fastBasePrice billing.CustomerPriceSnapshot) (billing.ProviderCostSnapshot, int64, bool) {
@@ -629,6 +674,10 @@ func resolveFastCandidateCost(row sqlc.FindModelCandidatesRow, fastBasePrice bil
 	scaled, err := billing.ScaleProviderCostByFactors(reference, row.CostMultiplier, rechargeFactorOrDefault(row.RechargeFactor))
 	if err != nil {
 		return billing.ProviderCostSnapshot{}, 0, false
+	}
+	// 倍率路径成本按 provider 结算币种记账（D2 修订），与 resolveCandidateCost 同口径。
+	if row.ProviderCurrency != "" {
+		scaled.Currency = row.ProviderCurrency
 	}
 	return scaled, 0, true
 }
@@ -665,6 +714,11 @@ func resolveCandidateCost(row sqlc.FindModelCandidatesRow, basePrice billing.Cus
 			err,
 			failure.WithMessage("scale provider cost by channel multiplier and recharge factor"),
 		)
+	}
+	// 倍率路径成本按 provider 结算币种记账（D2 修订）：基准价数值 × 倍率 = 原币金额，
+	// 跨币种时由 margin/比价按当日汇率折算。空值防御（旧测试 fixture 未填）回退基准价币种。
+	if row.ProviderCurrency != "" {
+		scaled.Currency = row.ProviderCurrency
 	}
 	return scaled, row.ModelPriceID, row.ChannelCostMultiplierID, row.ChannelRechargeFactorID, nil
 }

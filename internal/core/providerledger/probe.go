@@ -208,6 +208,12 @@ func (s *Service) resolveProbeCost(ctx context.Context, q *sqlc.Queries, channel
 	if err != nil {
 		return billing.ProviderCostSnapshot{}, err
 	}
+	// 倍率路径成本按 provider 结算币种记账（D2 修订）：探测扣款与请求结算同口径。
+	if providerCurrency, currencyErr := q.GetChannelProviderCurrency(ctx, channelID); currencyErr == nil && providerCurrency != "" {
+		scaled.Currency = providerCurrency
+	} else if currencyErr != nil {
+		return billing.ProviderCostSnapshot{}, currencyErr
+	}
 	scaled.UncachedInputCost = numericOrZero(scaled.UncachedInputCost)
 	scaled.OutputCost = numericOrZero(scaled.OutputCost)
 	return scaled, nil

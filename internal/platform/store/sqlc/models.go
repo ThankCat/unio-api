@@ -8,6 +8,18 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type AdminMessage struct {
+	ID        int64
+	Severity  string
+	Topic     string
+	Title     string
+	Body      string
+	Source    string
+	DedupeKey pgtype.Text
+	CreatedAt pgtype.Timestamptz
+	ReadAt    pgtype.Timestamptz
+}
+
 type ApiKey struct {
 	ID   int64
 	Name string
@@ -266,6 +278,19 @@ type CostSnapshot struct {
 	ModelPriceServiceTierID         pgtype.Int8
 	ChannelPriceServiceTierID       pgtype.Int8
 	TierCostSource                  pgtype.Text
+	FxRate                          pgtype.Numeric
+	FxRateDate                      pgtype.Date
+	TotalCostAmountUsd              pgtype.Numeric
+}
+
+type ExchangeRate struct {
+	ID            int64
+	BaseCurrency  string
+	QuoteCurrency string
+	Rate          pgtype.Numeric
+	RateDate      pgtype.Date
+	Source        string
+	FetchedAt     pgtype.Timestamptz
 }
 
 type LedgerBillingException struct {
@@ -516,6 +541,7 @@ type Provider struct {
 	CreatedAt      pgtype.Timestamptz
 	UpdatedAt      pgtype.Timestamptz
 	ArchivedAt     pgtype.Timestamptz
+	Currency       string
 }
 
 type ProviderBalance struct {

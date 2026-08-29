@@ -14,7 +14,9 @@ import (
 
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/capability"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/channel"
+	"github.com/ThankCat/unio-gateway/internal/app/adminapi/exchangerate"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/ledger"
+	"github.com/ThankCat/unio-gateway/internal/app/adminapi/message"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/middleware"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/model"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/overview"
@@ -97,6 +99,12 @@ type RouterDeps struct {
 	RecoveryJobQueryService   system.RecoveryJobQueryService
 	RuntimeDiagnosticsService system.RuntimeDiagnosticsService
 	GatewayLoggingService     system.GatewayLoggingService
+
+	// 站内消息中心（告警通道 MVP）：worker 写入，管理台查看/标记已读。
+	MessageService message.MessageService
+
+	// 汇率管理（多货币）：最新/历史查询、手工录入兜底、API Key 运行时验证。
+	ExchangeRateService exchangerate.ExchangeRateService
 
 	// Provider 全局设置（可编辑）：起步 Anthropic beta 转发策略（app_settings）。
 	ProviderSettingsService system.ProviderSettingsService
@@ -209,6 +217,8 @@ func NewRouter(deps RouterDeps) http.Handler {
 				RoutingTraceService: deps.RoutingTraceService,
 			})
 			ledger.Register(r, ledger.Deps{Service: deps.LedgerQueryService})
+			message.Register(r, message.Deps{Service: deps.MessageService})
+			exchangerate.Register(r, exchangerate.Deps{Service: deps.ExchangeRateService})
 			system.Register(r, system.Deps{
 				RecoveryJobService:        deps.RecoveryJobQueryService,
 				ProviderSettingsService:   deps.ProviderSettingsService,

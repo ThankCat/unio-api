@@ -110,11 +110,14 @@ const (
 
 // BreakdownRow 是各维度表现 Top 精简行。
 type BreakdownRow struct {
-	Label          string
-	RefID          *int64 // channel_id / provider_id（model 维度为 nil）
-	Status         string // enabled/disabled（provider/channel）
-	BalanceUSD     *string
-	BalanceStatus  string
+	Label  string
+	RefID  *int64 // channel_id / provider_id（model 维度为 nil）
+	Status string // enabled/disabled（provider/channel）
+	// 多货币（D2）：Balance/BalanceCurrency 原币记账事实；BalanceUSD 折算展示口径（缺汇率为 nil）。
+	Balance         *string
+	BalanceCurrency string
+	BalanceUSD      *string
+	BalanceStatus   string
 	Terminal       int64
 	Succeeded      int64
 	Failed         int64
@@ -291,9 +294,11 @@ func (s *Service) Breakdown(ctx context.Context, dimension string, from, to time
 		out := make([]BreakdownRow, 0, len(rows))
 		for _, r := range rows {
 			br := BreakdownRow{
-				BalanceUSD:    numericStringPtr(r.BalanceUsd),
-				BalanceStatus: r.BalanceStatus,
-				Tokens:        r.TokensTotal,
+				Balance:         numericStringPtr(r.Balance),
+				BalanceCurrency: r.BalanceCurrency,
+				BalanceUSD:      numericStringPtr(r.BalanceUsd),
+				BalanceStatus:   r.BalanceStatus,
+				Tokens:          r.TokensTotal,
 				Latency: requestLatencyStats(
 					r.LatencyAvg, r.LatencyP50, r.LatencyP90, r.LatencyP95, r.LatencyP99,
 					r.LatencySample, r.SucceededTotal,
