@@ -22,6 +22,8 @@ const (
 	EntryTypeRefund           EntryType = "refund"
 	EntryTypeAdjustmentCredit EntryType = "adjustment_credit"
 	EntryTypeAdjustmentDebit  EntryType = "adjustment_debit"
+	// EntryTypeCDKeyCredit 表示通过 CDKEY 兑换产生的用户充值。
+	EntryTypeCDKeyCredit EntryType = "cdkey_credit"
 )
 
 const (

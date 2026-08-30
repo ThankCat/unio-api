@@ -138,7 +138,7 @@ func TestListDefaultsLimit(t *testing.T) {
 		t.Fatalf("page limit = %d, want default 20", store.listParams.PageLimit)
 	}
 	// 不筛选时默认只查资金往来类型：用量结算的 debit 不属于钱包页。
-	want := []string{"credit", "refund", "adjustment_credit", "adjustment_debit"}
+	want := []string{"credit", "cdkey_credit", "refund", "adjustment_credit", "adjustment_debit"}
 	if len(store.listParams.EntryTypes) != len(want) {
 		t.Fatalf("entry types = %v, want %v", store.listParams.EntryTypes, want)
 	}

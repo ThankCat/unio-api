@@ -20,6 +20,7 @@ type CreateCapabilityKeyInput struct {
 	Domain        string
 	DisplayName   string
 	Description   string
+	IconSVG       string
 	SortOrder     int32
 	Deprecated    bool
 	ProtocolScope string
@@ -31,6 +32,7 @@ type UpdateCapabilityKeyInput struct {
 	Domain        string
 	DisplayName   string
 	Description   string
+	IconSVG       string
 	SortOrder     int32
 	Deprecated    bool
 	ProtocolScope string
@@ -103,6 +105,10 @@ func validateCreateCapabilityKey(in CreateCapabilityKeyInput) (core.CreateCapabi
 		return core.CreateCapabilityKeyParams{}, invalidArgument("display_name", "display_name is required")
 	}
 	description := strings.TrimSpace(in.Description)
+	iconSVG, err := normalizeIconSVG(in.IconSVG)
+	if err != nil {
+		return core.CreateCapabilityKeyParams{}, err
+	}
 	scope := core.NormalizeProtocolScope(in.ProtocolScope)
 	if !core.IsValidProtocolScope(scope) {
 		return core.CreateCapabilityKeyParams{}, invalidArgument("protocol_scope", "protocol_scope must be shared, openai or anthropic")
@@ -112,6 +118,7 @@ func validateCreateCapabilityKey(in CreateCapabilityKeyInput) (core.CreateCapabi
 		Domain:        domain,
 		DisplayName:   displayName,
 		Description:   description,
+		IconSVG:       iconSVG,
 		SortOrder:     in.SortOrder,
 		Deprecated:    in.Deprecated,
 		ProtocolScope: scope,
@@ -132,6 +139,10 @@ func validateUpdateCapabilityKey(in UpdateCapabilityKeyInput) (core.UpdateCapabi
 		return core.UpdateCapabilityKeyParams{}, invalidArgument("display_name", "display_name is required")
 	}
 	description := strings.TrimSpace(in.Description)
+	iconSVG, err := normalizeIconSVG(in.IconSVG)
+	if err != nil {
+		return core.UpdateCapabilityKeyParams{}, err
+	}
 	scope := core.NormalizeProtocolScope(in.ProtocolScope)
 	if !core.IsValidProtocolScope(scope) {
 		return core.UpdateCapabilityKeyParams{}, invalidArgument("protocol_scope", "protocol_scope must be shared, openai or anthropic")
@@ -141,10 +152,24 @@ func validateUpdateCapabilityKey(in UpdateCapabilityKeyInput) (core.UpdateCapabi
 		Domain:        domain,
 		DisplayName:   displayName,
 		Description:   description,
+		IconSVG:       iconSVG,
 		SortOrder:     in.SortOrder,
 		Deprecated:    in.Deprecated,
 		ProtocolScope: scope,
 	}, nil
+}
+
+// normalizeIconSVG 校验能力图标：必填（每个能力都要有图标），且必须是内联 SVG 原文。
+// 只做最小结构校验，不做完整 XML 解析——图标由管理员录入，展示端固定尺寸渲染。
+func normalizeIconSVG(raw string) (string, error) {
+	icon := strings.TrimSpace(raw)
+	if icon == "" {
+		return "", invalidArgument("icon_svg", "icon_svg is required")
+	}
+	if !strings.HasPrefix(icon, "<svg") || !strings.HasSuffix(icon, "</svg>") {
+		return "", invalidArgument("icon_svg", "icon_svg must be an inline <svg>…</svg> document")
+	}
+	return icon, nil
 }
 
 func normalizeDictionaryKey(raw string) (core.Key, error) {

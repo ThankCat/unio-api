@@ -35,6 +35,7 @@ type channelOpsRowDTO struct {
 	ResponseTimeoutMs       *int32                    `json:"response_timeout_ms"`
 	FirstTokenTimeoutMs     *int32                    `json:"first_token_timeout_ms"`
 	ProviderName            string                    `json:"provider_name"`
+	ProviderCurrency        string                    `json:"provider_currency"`
 	Credential              string                    `json:"credential"`
 	AttemptTotal            int64                     `json:"attempt_total"`
 	AttemptSucceeded        int64                     `json:"attempt_succeeded"`
@@ -161,6 +162,7 @@ func (h *channelOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 			ResponseTimeoutMs:       row.ResponseTimeoutMs,
 			FirstTokenTimeoutMs:     row.FirstTokenTimeoutMs,
 			ProviderName:            row.ProviderName,
+			ProviderCurrency:        row.ProviderCurrency,
 			Credential:              row.Credential,
 			AttemptTotal:            row.AttemptTotal,
 			AttemptSucceeded:        row.AttemptSucceeded,

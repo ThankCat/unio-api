@@ -38,12 +38,12 @@ func (q *Queries) CountSyncJobs(ctx context.Context) (int64, error) {
 
 const createCapabilityKey = `-- name: CreateCapabilityKey :one
 INSERT INTO capability_keys (
-    key, domain, display_name, description, sort_order, deprecated, protocol_scope
+    key, domain, display_name, description, icon_svg, sort_order, deprecated, protocol_scope
 ) VALUES (
     $1, $2, $3, $4,
-    $5, $6, $7
+    $5, $6, $7, $8
 )
-RETURNING key, domain, display_name, description, sort_order, deprecated, protocol_scope, created_at, updated_at
+RETURNING key, domain, display_name, description, icon_svg, sort_order, deprecated, protocol_scope, created_at, updated_at
 `
 
 type CreateCapabilityKeyParams struct {
@@ -51,6 +51,7 @@ type CreateCapabilityKeyParams struct {
 	Domain        string
 	DisplayName   string
 	Description   string
+	IconSvg       string
 	SortOrder     int32
 	Deprecated    bool
 	ProtocolScope string
@@ -61,6 +62,7 @@ type CreateCapabilityKeyRow struct {
 	Domain        string
 	DisplayName   string
 	Description   string
+	IconSvg       string
 	SortOrder     int32
 	Deprecated    bool
 	ProtocolScope string
@@ -75,6 +77,7 @@ func (q *Queries) CreateCapabilityKey(ctx context.Context, arg CreateCapabilityK
 		arg.Domain,
 		arg.DisplayName,
 		arg.Description,
+		arg.IconSvg,
 		arg.SortOrder,
 		arg.Deprecated,
 		arg.ProtocolScope,
@@ -85,6 +88,7 @@ func (q *Queries) CreateCapabilityKey(ctx context.Context, arg CreateCapabilityK
 		&i.Domain,
 		&i.DisplayName,
 		&i.Description,
+		&i.IconSvg,
 		&i.SortOrder,
 		&i.Deprecated,
 		&i.ProtocolScope,
@@ -105,7 +109,7 @@ func (q *Queries) DeleteCapabilityKey(ctx context.Context, key string) error {
 }
 
 const getCapabilityKey = `-- name: GetCapabilityKey :one
-SELECT key, domain, display_name, description, sort_order, deprecated, protocol_scope, created_at, updated_at
+SELECT key, domain, display_name, description, icon_svg, sort_order, deprecated, protocol_scope, created_at, updated_at
 FROM capability_keys
 WHERE key = $1
 `
@@ -115,6 +119,7 @@ type GetCapabilityKeyRow struct {
 	Domain        string
 	DisplayName   string
 	Description   string
+	IconSvg       string
 	SortOrder     int32
 	Deprecated    bool
 	ProtocolScope string
@@ -131,6 +136,7 @@ func (q *Queries) GetCapabilityKey(ctx context.Context, key string) (GetCapabili
 		&i.Domain,
 		&i.DisplayName,
 		&i.Description,
+		&i.IconSvg,
 		&i.SortOrder,
 		&i.Deprecated,
 		&i.ProtocolScope,
@@ -141,7 +147,7 @@ func (q *Queries) GetCapabilityKey(ctx context.Context, key string) (GetCapabili
 }
 
 const listCapabilityKeys = `-- name: ListCapabilityKeys :many
-SELECT key, domain, display_name, description, sort_order, deprecated, protocol_scope, created_at, updated_at
+SELECT key, domain, display_name, description, icon_svg, sort_order, deprecated, protocol_scope, created_at, updated_at
 FROM capability_keys
 ORDER BY sort_order, key
 `
@@ -151,6 +157,7 @@ type ListCapabilityKeysRow struct {
 	Domain        string
 	DisplayName   string
 	Description   string
+	IconSvg       string
 	SortOrder     int32
 	Deprecated    bool
 	ProtocolScope string
@@ -158,7 +165,7 @@ type ListCapabilityKeysRow struct {
 	UpdatedAt     pgtype.Timestamptz
 }
 
-// ListCapabilityKeys 列出能力 key 字典（Admin 下拉/矩阵/字典页，含中文描述）。
+// ListCapabilityKeys 列出能力 key 字典（Admin 下拉/矩阵/字典页，含中文描述与图标）。
 func (q *Queries) ListCapabilityKeys(ctx context.Context) ([]ListCapabilityKeysRow, error) {
 	rows, err := q.db.Query(ctx, listCapabilityKeys)
 	if err != nil {
@@ -173,6 +180,7 @@ func (q *Queries) ListCapabilityKeys(ctx context.Context) ([]ListCapabilityKeysR
 			&i.Domain,
 			&i.DisplayName,
 			&i.Description,
+			&i.IconSvg,
 			&i.SortOrder,
 			&i.Deprecated,
 			&i.ProtocolScope,
@@ -255,18 +263,20 @@ SET
     domain = $1,
     display_name = $2,
     description = $3,
-    sort_order = $4,
-    deprecated = $5,
-    protocol_scope = $6,
+    icon_svg = $4,
+    sort_order = $5,
+    deprecated = $6,
+    protocol_scope = $7,
     updated_at = now()
-WHERE key = $7
-RETURNING key, domain, display_name, description, sort_order, deprecated, protocol_scope, created_at, updated_at
+WHERE key = $8
+RETURNING key, domain, display_name, description, icon_svg, sort_order, deprecated, protocol_scope, created_at, updated_at
 `
 
 type UpdateCapabilityKeyParams struct {
 	Domain        string
 	DisplayName   string
 	Description   string
+	IconSvg       string
 	SortOrder     int32
 	Deprecated    bool
 	ProtocolScope string
@@ -278,6 +288,7 @@ type UpdateCapabilityKeyRow struct {
 	Domain        string
 	DisplayName   string
 	Description   string
+	IconSvg       string
 	SortOrder     int32
 	Deprecated    bool
 	ProtocolScope string
@@ -291,6 +302,7 @@ func (q *Queries) UpdateCapabilityKey(ctx context.Context, arg UpdateCapabilityK
 		arg.Domain,
 		arg.DisplayName,
 		arg.Description,
+		arg.IconSvg,
 		arg.SortOrder,
 		arg.Deprecated,
 		arg.ProtocolScope,
@@ -302,6 +314,7 @@ func (q *Queries) UpdateCapabilityKey(ctx context.Context, arg UpdateCapabilityK
 		&i.Domain,
 		&i.DisplayName,
 		&i.Description,
+		&i.IconSvg,
 		&i.SortOrder,
 		&i.Deprecated,
 		&i.ProtocolScope,

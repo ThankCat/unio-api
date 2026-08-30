@@ -7,6 +7,7 @@ import (
 
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/capability"
+	admincdkeyapp "github.com/ThankCat/unio-gateway/internal/app/adminapi/cdkey"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/channel"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/exchangerate"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/ledger"
@@ -17,6 +18,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/provider"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/requests"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/system"
+	"github.com/ThankCat/unio-gateway/internal/app/adminapi/ticket"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/user"
 	"github.com/ThankCat/unio-gateway/internal/platform/config"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
@@ -57,6 +59,7 @@ type adminHTTPDeps struct {
 
 	RequestQueryService requests.RequestQueryService
 	LedgerQueryService  ledger.LedgerQueryService
+	CDKeyService        admincdkeyapp.Service
 
 	UserService        user.UserService
 	APIKeyService      user.APIKeyService
@@ -81,6 +84,9 @@ type adminHTTPDeps struct {
 
 	// 站内消息中心（告警通道 MVP）。
 	MessageService message.MessageService
+
+	// 用户反馈工单；nil 时不挂载（未配置 TICKET_ATTACHMENT_SECRET）。
+	TicketService ticket.TicketService
 
 	// 汇率管理（多货币）。
 	ExchangeRateService exchangerate.ExchangeRateService
@@ -127,6 +133,7 @@ func NewAdminHTTPHandler(deps adminHTTPDeps) http.Handler {
 		RoutingTraceService: deps.RoutingTraceService,
 		RequestQueryService: deps.RequestQueryService,
 		LedgerQueryService:  deps.LedgerQueryService,
+		CDKeyService:        deps.CDKeyService,
 
 		UserService:        deps.UserService,
 		APIKeyService:      deps.APIKeyService,
@@ -147,6 +154,7 @@ func NewAdminHTTPHandler(deps adminHTTPDeps) http.Handler {
 		RuntimeDiagnosticsService: deps.RuntimeDiagnosticsService,
 		GatewayLoggingService:     deps.GatewayLoggingService,
 		MessageService:            deps.MessageService,
+		TicketService:             deps.TicketService,
 		ExchangeRateService:       deps.ExchangeRateService,
 		ProviderSettingsService:   deps.ProviderSettingsService,
 

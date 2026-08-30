@@ -50,6 +50,9 @@ type longContextDTO struct {
 type capabilityDTO struct {
 	Key          string `json:"key"`
 	SupportLevel string `json:"support_level"`
+	// IconSVG / DisplayName 来自能力字典：website 前端不自备图标库，直接渲染后端下发内容。
+	IconSVG     string `json:"icon_svg"`
+	DisplayName string `json:"display_name"`
 }
 
 type modelDTO struct {
@@ -188,7 +191,12 @@ func toModelDTO(m publicmodels.Model) modelDTO {
 	}
 	dto.Capabilities = make([]capabilityDTO, 0, len(m.Capabilities))
 	for _, c := range m.Capabilities {
-		dto.Capabilities = append(dto.Capabilities, capabilityDTO{Key: c.Key, SupportLevel: c.SupportLevel})
+		dto.Capabilities = append(dto.Capabilities, capabilityDTO{
+			Key:          c.Key,
+			SupportLevel: c.SupportLevel,
+			IconSVG:      c.IconSVG,
+			DisplayName:  c.DisplayName,
+		})
 	}
 	return dto
 }

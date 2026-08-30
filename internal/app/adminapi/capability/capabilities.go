@@ -28,12 +28,13 @@ type CapabilityService interface {
 	DeleteModelCapability(ctx context.Context, modelID int64, key string) error
 }
 
-// capabilityKeyDTO 是能力 key 字典响应体（含中文描述与协议归属，供运维区分）。
+// capabilityKeyDTO 是能力 key 字典响应体（含中文描述、图标与协议归属，供运维区分）。
 type capabilityKeyDTO struct {
 	Key           string `json:"key"`
 	Domain        string `json:"domain"`
 	DisplayName   string `json:"display_name"`
 	Description   string `json:"description"`
+	IconSVG       string `json:"icon_svg"`
 	SortOrder     int32  `json:"sort_order"`
 	Deprecated    bool   `json:"deprecated"`
 	ProtocolScope string `json:"protocol_scope"`
@@ -70,6 +71,7 @@ type createCapabilityKeyRequest struct {
 	Domain        string `json:"domain"`
 	DisplayName   string `json:"display_name"`
 	Description   string `json:"description"`
+	IconSVG       string `json:"icon_svg"`
 	SortOrder     int32  `json:"sort_order"`
 	Deprecated    bool   `json:"deprecated"`
 	ProtocolScope string `json:"protocol_scope"`
@@ -79,6 +81,7 @@ type updateCapabilityKeyRequest struct {
 	Domain        string `json:"domain"`
 	DisplayName   string `json:"display_name"`
 	Description   string `json:"description"`
+	IconSVG       string `json:"icon_svg"`
 	SortOrder     int32  `json:"sort_order"`
 	Deprecated    bool   `json:"deprecated"`
 	ProtocolScope string `json:"protocol_scope"`
@@ -90,6 +93,7 @@ func toCapabilityKeyDTO(k corecap.CapabilityKey) capabilityKeyDTO {
 		Domain:        k.Domain,
 		DisplayName:   k.DisplayName,
 		Description:   k.Description,
+		IconSVG:       k.IconSVG,
 		SortOrder:     k.SortOrder,
 		Deprecated:    k.Deprecated,
 		ProtocolScope: string(k.ProtocolScope),
@@ -121,6 +125,7 @@ func (h *capabilitiesHandler) createKey(w http.ResponseWriter, r *http.Request) 
 		Domain:        req.Domain,
 		DisplayName:   req.DisplayName,
 		Description:   req.Description,
+		IconSVG:       req.IconSVG,
 		SortOrder:     req.SortOrder,
 		Deprecated:    req.Deprecated,
 		ProtocolScope: req.ProtocolScope,
@@ -144,6 +149,7 @@ func (h *capabilitiesHandler) updateKey(w http.ResponseWriter, r *http.Request) 
 		Domain:        req.Domain,
 		DisplayName:   req.DisplayName,
 		Description:   req.Description,
+		IconSVG:       req.IconSVG,
 		SortOrder:     req.SortOrder,
 		Deprecated:    req.Deprecated,
 		ProtocolScope: req.ProtocolScope,

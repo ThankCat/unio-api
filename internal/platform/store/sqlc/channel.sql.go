@@ -667,6 +667,7 @@ SELECT
         LIMIT 1
     ) AS recharge_factor,
     pr.name AS provider_name,
+    pr.currency AS provider_currency,
     COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream') AS attempt_total,
     COUNT(a.id) FILTER (WHERE a.status = 'succeeded') AS attempt_succeeded,
     COUNT(a.id) FILTER (WHERE a.status = 'failed' AND (a.error_code ILIKE '%timeout%' OR a.error_code = 'context_deadline_exceeded')) AS timeout_total,
@@ -705,7 +706,7 @@ WHERE ($3::text IS NULL OR c.status = $3::text)
 GROUP BY c.id, c.name, c.status, c.protocols, c.adapter_key, pr.origin, c.priority,
          c.response_timeout_ms, c.first_token_timeout_ms, c.credential,
          c.concurrency_limit, c.created_at, c.last_tested_at, c.last_test_ok,
-         c.last_test_latency_ms, c.last_test_error, c.credential_valid, pr.name
+         c.last_test_latency_ms, c.last_test_error, c.credential_valid, pr.name, pr.currency
 ORDER BY
   CASE WHEN COALESCE($6::text, 'success_rate') IN ('', 'success_rate') AND COALESCE($7::bool, false) THEN (COUNT(a.id) FILTER (WHERE a.status = 'succeeded')::float8 / NULLIF(COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream'), 0)) END DESC NULLS LAST,
   CASE WHEN COALESCE($6::text, 'success_rate') IN ('', 'success_rate') AND NOT COALESCE($7::bool, false) THEN (COUNT(a.id) FILTER (WHERE a.status = 'succeeded')::float8 / NULLIF(COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream'), 0)) END ASC NULLS LAST,
@@ -765,6 +766,7 @@ type ChannelsOpsTableRow struct {
 	CostMultiplierOverrides int64
 	RechargeFactor          pgtype.Numeric
 	ProviderName            string
+	ProviderCurrency        string
 	AttemptTotal            int64
 	AttemptSucceeded        int64
 	TimeoutTotal            int64
@@ -825,6 +827,7 @@ func (q *Queries) ChannelsOpsTable(ctx context.Context, arg ChannelsOpsTablePara
 			&i.CostMultiplierOverrides,
 			&i.RechargeFactor,
 			&i.ProviderName,
+			&i.ProviderCurrency,
 			&i.AttemptTotal,
 			&i.AttemptSucceeded,
 			&i.TimeoutTotal,

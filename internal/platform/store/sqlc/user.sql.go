@@ -971,7 +971,7 @@ SELECT
     ), 0)::numeric AS total_consumption_usd,
     COALESCE((
         SELECT SUM(le.amount) FROM ledger_entries le
-        WHERE le.user_id = u.id AND le.entry_type IN ('credit', 'adjustment_credit') AND le.currency = 'USD'
+        WHERE le.user_id = u.id AND le.entry_type IN ('credit', 'cdkey_credit', 'adjustment_credit') AND le.currency = 'USD'
     ), 0)::numeric AS total_topup_usd,
     (
         SELECT MAX(r2.created_at) FROM request_records r2 WHERE r2.user_id = u.id
@@ -1003,8 +1003,8 @@ ORDER BY
   CASE WHEN $5::text = 'created_at' AND NOT COALESCE($6::bool, false) THEN u.created_at END ASC NULLS LAST,
   CASE WHEN $5::text = 'total_consumption' AND COALESCE($6::bool, false) THEN COALESCE((SELECT SUM(le.amount) FROM ledger_entries le WHERE le.user_id = u.id AND le.entry_type = 'debit' AND le.currency = 'USD'), 0) END DESC NULLS LAST,
   CASE WHEN $5::text = 'total_consumption' AND NOT COALESCE($6::bool, false) THEN COALESCE((SELECT SUM(le.amount) FROM ledger_entries le WHERE le.user_id = u.id AND le.entry_type = 'debit' AND le.currency = 'USD'), 0) END ASC NULLS LAST,
-  CASE WHEN $5::text = 'total_topup' AND COALESCE($6::bool, false) THEN COALESCE((SELECT SUM(le.amount) FROM ledger_entries le WHERE le.user_id = u.id AND le.entry_type IN ('credit', 'adjustment_credit') AND le.currency = 'USD'), 0) END DESC NULLS LAST,
-  CASE WHEN $5::text = 'total_topup' AND NOT COALESCE($6::bool, false) THEN COALESCE((SELECT SUM(le.amount) FROM ledger_entries le WHERE le.user_id = u.id AND le.entry_type IN ('credit', 'adjustment_credit') AND le.currency = 'USD'), 0) END ASC NULLS LAST,
+  CASE WHEN $5::text = 'total_topup' AND COALESCE($6::bool, false) THEN COALESCE((SELECT SUM(le.amount) FROM ledger_entries le WHERE le.user_id = u.id AND le.entry_type IN ('credit', 'cdkey_credit', 'adjustment_credit') AND le.currency = 'USD'), 0) END DESC NULLS LAST,
+  CASE WHEN $5::text = 'total_topup' AND NOT COALESCE($6::bool, false) THEN COALESCE((SELECT SUM(le.amount) FROM ledger_entries le WHERE le.user_id = u.id AND le.entry_type IN ('credit', 'cdkey_credit', 'adjustment_credit') AND le.currency = 'USD'), 0) END ASC NULLS LAST,
   CASE WHEN $5::text = 'display_name' AND COALESCE($6::bool, false) THEN u.display_name END DESC NULLS LAST,
   CASE WHEN $5::text = 'display_name' AND NOT COALESCE($6::bool, false) THEN u.display_name END ASC NULLS LAST,
   u.id

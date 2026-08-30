@@ -84,10 +84,12 @@ type UpsertModelCapabilityParams struct {
 
 // CapabilityKey 是能力 key 字典（capability_keys）的一行，合法 key 的真源（DEC-024）。
 type CapabilityKey struct {
-	Key           Key
-	Domain        string
-	DisplayName   string
-	Description   string
+	Key         Key
+	Domain      string
+	DisplayName string
+	Description string
+	// IconSVG 是能力图标 SVG 原文（24×24 stroke、currentColor）；空串=未配置，前端回退通用图标。
+	IconSVG       string
 	SortOrder     int32
 	Deprecated    bool
 	ProtocolScope ProtocolScope
@@ -101,6 +103,7 @@ type CreateCapabilityKeyParams struct {
 	Domain        string
 	DisplayName   string
 	Description   string
+	IconSVG       string
 	SortOrder     int32
 	Deprecated    bool
 	ProtocolScope ProtocolScope
@@ -112,6 +115,7 @@ type UpdateCapabilityKeyParams struct {
 	Domain        string
 	DisplayName   string
 	Description   string
+	IconSVG       string
 	SortOrder     int32
 	Deprecated    bool
 	ProtocolScope ProtocolScope
@@ -269,6 +273,7 @@ func (s *sqlcStore) CreateCapabilityKey(ctx context.Context, params CreateCapabi
 		Domain:        params.Domain,
 		DisplayName:   params.DisplayName,
 		Description:   params.Description,
+		IconSvg:       params.IconSVG,
 		SortOrder:     params.SortOrder,
 		Deprecated:    params.Deprecated,
 		ProtocolScope: string(params.ProtocolScope),
@@ -285,6 +290,7 @@ func (s *sqlcStore) UpdateCapabilityKey(ctx context.Context, params UpdateCapabi
 		Domain:        params.Domain,
 		DisplayName:   params.DisplayName,
 		Description:   params.Description,
+		IconSvg:       params.IconSVG,
 		SortOrder:     params.SortOrder,
 		Deprecated:    params.Deprecated,
 		ProtocolScope: string(params.ProtocolScope),
@@ -443,7 +449,7 @@ func modelCapabilityFromSQLC(row sqlc.ModelCapability) ModelCapability {
 // capabilityKeyFromSQLC 将 sqlc 行转成领域 CapabilityKey。
 func capabilityKeyFromSQLC(row sqlc.ListCapabilityKeysRow) CapabilityKey {
 	return capabilityKeyFromFields(
-		row.Key, row.Domain, row.DisplayName, row.Description,
+		row.Key, row.Domain, row.DisplayName, row.Description, row.IconSvg,
 		row.SortOrder, row.Deprecated, row.ProtocolScope,
 		row.CreatedAt, row.UpdatedAt,
 	)
@@ -451,7 +457,7 @@ func capabilityKeyFromSQLC(row sqlc.ListCapabilityKeysRow) CapabilityKey {
 
 func capabilityKeyFromGetRow(row sqlc.GetCapabilityKeyRow) CapabilityKey {
 	return capabilityKeyFromFields(
-		row.Key, row.Domain, row.DisplayName, row.Description,
+		row.Key, row.Domain, row.DisplayName, row.Description, row.IconSvg,
 		row.SortOrder, row.Deprecated, row.ProtocolScope,
 		row.CreatedAt, row.UpdatedAt,
 	)
@@ -459,7 +465,7 @@ func capabilityKeyFromGetRow(row sqlc.GetCapabilityKeyRow) CapabilityKey {
 
 func capabilityKeyFromCreateRow(row sqlc.CreateCapabilityKeyRow) CapabilityKey {
 	return capabilityKeyFromFields(
-		row.Key, row.Domain, row.DisplayName, row.Description,
+		row.Key, row.Domain, row.DisplayName, row.Description, row.IconSvg,
 		row.SortOrder, row.Deprecated, row.ProtocolScope,
 		row.CreatedAt, row.UpdatedAt,
 	)
@@ -467,14 +473,14 @@ func capabilityKeyFromCreateRow(row sqlc.CreateCapabilityKeyRow) CapabilityKey {
 
 func capabilityKeyFromUpdateRow(row sqlc.UpdateCapabilityKeyRow) CapabilityKey {
 	return capabilityKeyFromFields(
-		row.Key, row.Domain, row.DisplayName, row.Description,
+		row.Key, row.Domain, row.DisplayName, row.Description, row.IconSvg,
 		row.SortOrder, row.Deprecated, row.ProtocolScope,
 		row.CreatedAt, row.UpdatedAt,
 	)
 }
 
 func capabilityKeyFromFields(
-	key, domain, displayName, description string,
+	key, domain, displayName, description, iconSVG string,
 	sortOrder int32,
 	deprecated bool,
 	protocolScope string,
@@ -485,6 +491,7 @@ func capabilityKeyFromFields(
 		Domain:        domain,
 		DisplayName:   displayName,
 		Description:   description,
+		IconSVG:       iconSVG,
 		SortOrder:     sortOrder,
 		Deprecated:    deprecated,
 		ProtocolScope: NormalizeProtocolScope(protocolScope),

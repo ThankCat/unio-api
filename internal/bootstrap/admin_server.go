@@ -9,6 +9,7 @@ import (
 
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/adminhttp"
 	apichannel "github.com/ThankCat/unio-gateway/internal/app/adminapi/channel"
+	adminticketapp "github.com/ThankCat/unio-gateway/internal/app/adminapi/ticket"
 	anthropicdeepseek "github.com/ThankCat/unio-gateway/internal/core/adapter/anthropic/deepseek/messages"
 	openaideepseek "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/deepseek/chatcompletions"
 	"github.com/ThankCat/unio-gateway/internal/core/adminauth"
@@ -16,6 +17,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/ledger"
 	"github.com/ThankCat/unio-gateway/internal/core/providerledger"
 	"github.com/ThankCat/unio-gateway/internal/core/runtimecontrol"
+	coreticket "github.com/ThankCat/unio-gateway/internal/core/ticket"
 	"github.com/ThankCat/unio-gateway/internal/platform/adminlogin"
 	"github.com/ThankCat/unio-gateway/internal/platform/adminsession"
 	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
@@ -24,7 +26,9 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/tracing"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/adminmessage"
 	capabilityadmin "github.com/ThankCat/unio-gateway/internal/service/admin/capability"
+	admincdkey "github.com/ThankCat/unio-gateway/internal/service/admin/cdkey"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/channel"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/channelcostmultiplier"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/channelmodel"
@@ -36,12 +40,11 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/service/admin/customer"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/customerops"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/dashboard"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/exchangerate"
 	admingatewaylogging "github.com/ThankCat/unio-gateway/internal/service/admin/gatewaylogging"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/model"
 	modelcatalogadmin "github.com/ThankCat/unio-gateway/internal/service/admin/modelcatalog"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/modelops"
-	"github.com/ThankCat/unio-gateway/internal/service/admin/adminmessage"
-	"github.com/ThankCat/unio-gateway/internal/service/admin/exchangerate"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/modelprice"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/modelrouting"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/provider"
@@ -50,6 +53,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/service/admin/query"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/routingtrace"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/runtimediagnostics"
+	adminticket "github.com/ThankCat/unio-gateway/internal/service/admin/ticket"
 	"github.com/ThankCat/unio-gateway/internal/service/appsettings"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/readiness"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/runtimefacts"
@@ -160,6 +164,17 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 	providerBalanceService := providerbalance.NewService(queries, providerLedgerService)
 	adminMessageService := adminmessage.NewService(queries)
 	exchangeRateService := exchangerate.NewService(queries, settingsStore, deps.Config.ExchangeRate.APIKey)
+	// 工单模块：签名密钥未配置时整体不启用（路由不挂载），不阻塞其余 Admin 功能。
+	var adminTicketService adminticketapp.TicketService
+	if secret := deps.Config.Ticket.AttachmentSecret; secret != "" {
+		signer, signerErr := coreticket.NewAttachmentSigner(secret)
+		if signerErr != nil {
+			return nil, signerErr
+		}
+		adminTicketService = adminticket.NewService(deps.DB, queries, signer)
+	} else {
+		deps.Logger.Warn("admin ticket module disabled: TICKET_ATTACHMENT_SECRET is not set")
+	}
 	var providerBreakerRuntime *breakerstore.Store
 	var channelBreakerRuntime apichannel.BreakerRuntime
 	var settingsRuntimePublisher appsettings.RuntimeControlPublisher
@@ -227,6 +242,7 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 
 	// M7 客户管理：用户/项目只读 + API Key 管理；手工调额经由 ledger 写 adjustment_* 流水。
 	ledgerService := ledger.NewService(deps.DB, queries)
+	cdkeyService := admincdkey.NewService(deps.DB, queries)
 	userService := customer.NewUserService(queries)
 	apiKeyService := customer.NewAPIKeyService(queries)
 	adjustmentService := customer.NewAdjustmentService(ledgerService)
@@ -316,6 +332,7 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		RoutingTraceService: routingTraceService,
 		RequestQueryService: requestQueryService,
 		LedgerQueryService:  ledgerQueryService,
+		CDKeyService:        cdkeyService,
 
 		UserService:        userService,
 		APIKeyService:      apiKeyService,
@@ -336,6 +353,7 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		RuntimeDiagnosticsService: runtimeDiagnosticsService,
 		GatewayLoggingService:     gatewayLoggingService,
 		MessageService:            adminMessageService,
+		TicketService:             adminTicketService,
 		ExchangeRateService:       exchangeRateService,
 		ProviderSettingsService:   providerSettingsService,
 

@@ -14,6 +14,7 @@ import (
 const (
 	AdjustmentDirectionCredit = "credit"
 	AdjustmentDirectionDebit  = "debit"
+	AdjustmentCurrencyUSD     = "USD"
 )
 
 // Adjustment 表示一次手工调额的结果视图（金额为十进制字符串）。
@@ -59,9 +60,12 @@ func NewAdjustmentService(ledgerSvc AdjustmentLedger) *AdjustmentService {
 
 // Adjust 对用户余额执行手工充值或扣款，并写入 adjustment_* 账本流水。
 func (s *AdjustmentService) Adjust(ctx context.Context, params AdjustParams) (Adjustment, error) {
-	currency := strings.TrimSpace(params.Currency)
+	currency := strings.ToUpper(strings.TrimSpace(params.Currency))
 	if currency == "" {
 		return Adjustment{}, invalidArgument("currency", "currency must not be empty")
+	}
+	if currency != AdjustmentCurrencyUSD {
+		return Adjustment{}, invalidArgument("currency", "currency must be USD")
 	}
 
 	reason := strings.TrimSpace(params.Reason)

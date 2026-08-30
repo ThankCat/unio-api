@@ -101,6 +101,7 @@ func TestAdjustmentServiceValidation(t *testing.T) {
 		params AdjustParams
 	}{
 		{"empty currency", AdjustParams{UserID: 1, Direction: "credit", Amount: "10", Currency: " ", Reason: "x"}},
+		{"unsupported currency", AdjustParams{UserID: 1, Direction: "credit", Amount: "10", Currency: "123", Reason: "x"}},
 		{"empty reason", AdjustParams{UserID: 1, Direction: "credit", Amount: "10", Currency: "USD", Reason: ""}},
 		{"zero amount", AdjustParams{UserID: 1, Direction: "credit", Amount: "0", Currency: "USD", Reason: "x"}},
 		{"negative amount", AdjustParams{UserID: 1, Direction: "credit", Amount: "-5", Currency: "USD", Reason: "x"}},

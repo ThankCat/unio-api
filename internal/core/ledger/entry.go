@@ -59,6 +59,81 @@ func (s *Service) Credit(ctx context.Context, params CreditParams) (Entry, error
 	return s.creditWithType(ctx, params, EntryTypeCredit)
 }
 
+// CreditWithQueries 在调用方已经开启的事务内执行普通 credit 加款。
+// 调用方必须传入 queries.WithTx(tx)，以便把余额、账本和外部业务事实原子提交。
+func (s *Service) CreditWithQueries(ctx context.Context, queries *sqlc.Queries, params CreditParams) (Entry, error) {
+	return s.CreditWithQueriesType(ctx, queries, params, EntryTypeCredit)
+}
+
+// CreditWithQueriesType 在调用方事务内执行指定正向流水类型的加款。
+// 仅允许正向余额类型，避免把扣款类型误写成充值流水。
+func (s *Service) CreditWithQueriesType(ctx context.Context, queries *sqlc.Queries, params CreditParams, entryType EntryType) (Entry, error) {
+	switch entryType {
+	case EntryTypeCredit, EntryTypeAdjustmentCredit, EntryTypeCDKeyCredit:
+	default:
+		return Entry{}, ledgerFailure(failure.CodeLedgerInvalidAmount, ErrInvalidAmount, "unsupported credit entry type")
+	}
+	return s.creditWithQueriesType(ctx, queries, params, entryType)
+}
+
+// creditWithQueriesType 执行调用方事务内的加款逻辑，不负责提交或回滚事务。
+func (s *Service) creditWithQueriesType(ctx context.Context, txQueries *sqlc.Queries, params CreditParams, entryType EntryType) (Entry, error) {
+	if txQueries == nil {
+		return Entry{}, ledgerFailure(failure.CodeLedgerStoreFailed, errors.New("nil transaction queries"), "ledger transaction queries are required")
+	}
+	if params.UserID <= 0 || !isPositiveNumeric(params.Amount) || params.Currency == "" || params.IdempotencyKey == "" {
+		return Entry{}, ledgerFailure(failure.CodeLedgerInvalidAmount, ErrInvalidAmount, "invalid credit parameters")
+	}
+	if err := lockLedgerEntryIdempotencyKey(ctx, txQueries, params.IdempotencyKey); err != nil {
+		return Entry{}, err
+	}
+
+	// 幂等命中表示这笔加款已经完成，直接返回已有流水，避免重复加余额。
+	existing, err := txQueries.GetLedgerEntryByIdempotencyKey(ctx, params.IdempotencyKey)
+	if err == nil {
+		if err := ensureIdempotentEntryMatches(existing, params.UserID, params.RequestRecordID, entryType, params.Amount, params.Currency); err != nil {
+			return Entry{}, err
+		}
+		return entryFromSQLC(existing), nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return Entry{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "lookup ledger idempotency key")
+	}
+
+	if err := txQueries.EnsureUserBalance(ctx, sqlc.EnsureUserBalanceParams{
+		UserID: params.UserID, Currency: params.Currency,
+	}); err != nil {
+		return Entry{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "ensure user balance")
+	}
+	before, err := txQueries.GetUserBalanceForUpdate(ctx, sqlc.GetUserBalanceForUpdateParams{
+		UserID: params.UserID, Currency: params.Currency,
+	})
+	if err != nil {
+		return Entry{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "lock user balance")
+	}
+	after, err := txQueries.AddUserBalance(ctx, sqlc.AddUserBalanceParams{
+		Amount: params.Amount, UserID: params.UserID, Currency: params.Currency,
+	})
+	if err != nil {
+		return Entry{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "add user balance")
+	}
+	created, err := txQueries.CreateLedgerEntry(ctx, sqlc.CreateLedgerEntryParams{
+		UserID:          params.UserID,
+		RequestRecordID: int64PtrToPgtypeInt8(params.RequestRecordID),
+		EntryType:       string(entryType),
+		Amount:          params.Amount,
+		Currency:        params.Currency,
+		BalanceBefore:   before.Balance,
+		BalanceAfter:    after.Balance,
+		IdempotencyKey:  params.IdempotencyKey,
+		Reason:          params.Reason,
+	})
+	if err != nil {
+		return Entry{}, ledgerFailure(failure.CodeLedgerStoreFailed, err, "create ledger entry")
+	}
+	return entryFromSQLC(created), nil
+}
+
 // AdjustCredit 由 admin 手工给用户加款，写入 adjustment_credit 账本流水（M7）。
 func (s *Service) AdjustCredit(ctx context.Context, params AdjustParams) (Entry, error) {
 	return s.creditWithType(ctx, CreditParams{

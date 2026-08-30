@@ -61,6 +61,34 @@ type CapabilityKey struct {
 	UpdatedAt   pgtype.Timestamptz
 	// 协议归属：shared=OpenAI+Anthropic 通用；openai=OpenAI Chat/Responses 专有；anthropic=Anthropic Messages 专有。
 	ProtocolScope string
+	// 能力图标 SVG 原文（24×24 stroke、currentColor）；空串=未配置，前端回退通用图标。
+	IconSvg string
+}
+
+type Cdkey struct {
+	ID            int64
+	BatchID       pgtype.UUID
+	CodePlaintext string
+	CodeHash      string
+	CodePrefix    string
+	CodeSuffix    string
+	Amount        pgtype.Numeric
+	Currency      string
+	Status        string
+	CreatedAt     pgtype.Timestamptz
+	RedeemedAt    pgtype.Timestamptz
+	RevokedAt     pgtype.Timestamptz
+}
+
+type CdkeyRedemption struct {
+	ID             int64
+	CdkeyID        int64
+	UserID         int64
+	Amount         pgtype.Numeric
+	Currency       string
+	LedgerEntryID  int64
+	IdempotencyKey string
+	RedeemedAt     pgtype.Timestamptz
 }
 
 type Channel struct {
@@ -857,6 +885,45 @@ type SettlementRecoveryJob struct {
 	ServiceTierResolution                 pgtype.Text
 	ModelPriceServiceTierID               pgtype.Int8
 	ChannelPriceServiceTierID             pgtype.Int8
+}
+
+type Ticket struct {
+	ID            int64
+	Uid           pgtype.UUID
+	UserID        int64
+	Subject       string
+	Category      string
+	Status        string
+	UserUnread    bool
+	AdminUnread   bool
+	LastMessageAt pgtype.Timestamptz
+	ResolvedAt    pgtype.Timestamptz
+	ClosedAt      pgtype.Timestamptz
+	CreatedAt     pgtype.Timestamptz
+	UpdatedAt     pgtype.Timestamptz
+}
+
+type TicketAttachment struct {
+	ID           int64
+	Uid          pgtype.UUID
+	TicketID     pgtype.Int8
+	MessageID    pgtype.Int8
+	UserID       pgtype.Int8
+	UploaderType string
+	FileName     string
+	MimeType     string
+	SizeBytes    int32
+	Data         []byte
+	CreatedAt    pgtype.Timestamptz
+}
+
+type TicketMessage struct {
+	ID         int64
+	TicketID   int64
+	AuthorType string
+	Body       []byte
+	BodyText   string
+	CreatedAt  pgtype.Timestamptz
 }
 
 type UsageLineItem struct {

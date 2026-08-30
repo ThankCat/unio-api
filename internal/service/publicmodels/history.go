@@ -43,8 +43,12 @@ func (s *Service) ListDiscountHistory(ctx context.Context, window time.Duration)
 	if window <= 0 {
 		window = 48 * time.Hour
 	}
-	now := time.Now().UTC().Truncate(historySampleInterval)
-	since := now.Add(-window)
+	// 整点网格保证时间轴均匀可读；末尾再补一个「此刻」的精确采样——
+	// 折线右缘标注的是「现在」，Current 也取自最后一个有效点，若只截到整点，
+	// 刚发生的调价要等到下个整点才可见，页面会在最长一小时里报着旧折扣。
+	now := time.Now().UTC()
+	gridEnd := now.Truncate(historySampleInterval)
+	since := gridEnd.Add(-window)
 
 	rows, err := s.store.ListPublicModelPriceWindows(ctx, pgtype.Timestamptz{Time: since, Valid: true})
 	if err != nil {
@@ -56,9 +60,12 @@ func (s *Service) ListDiscountHistory(ctx context.Context, window time.Duration)
 		windowsByModel[row.ModelKey] = append(windowsByModel[row.ModelKey], row)
 	}
 
-	timeline := make([]time.Time, 0, int(window/historySampleInterval)+1)
-	for at := since; !at.After(now); at = at.Add(historySampleInterval) {
+	timeline := make([]time.Time, 0, int(window/historySampleInterval)+2)
+	for at := since; !at.After(gridEnd); at = at.Add(historySampleInterval) {
 		timeline = append(timeline, at)
+	}
+	if now.After(gridEnd) {
+		timeline = append(timeline, now)
 	}
 
 	out := make([]DiscountHistory, 0, len(windowsByModel))
@@ -99,18 +106,28 @@ func buildHistory(
 	return history
 }
 
-// ratioAt 取 at 时刻生效窗口的折扣；同一时刻至多一个 enabled 窗口（DB 排除约束保证）。
+// ratioAt 取 at 时刻生效窗口的折扣。
+//
+// enabled 窗口优先（同一时刻至多一个，DB 排除约束保证）；停用窗口按其真实生效区间
+// 参与回放——被替换/停用前它确实计费过，抹掉会让走势在每次调价时整段消失。
+// 停用窗口的终点（effective_until）已在 SQL 里按停用时刻收口。
 func ratioAt(windows []sqlc.ListPublicModelPriceWindowsRow, at time.Time) *float64 {
+	var fallback *float64
 	for _, w := range windows {
 		if !w.EffectiveFrom.Valid || w.EffectiveFrom.Time.After(at) {
 			continue
 		}
-		if w.EffectiveTo.Valid && !w.EffectiveTo.Time.After(at) {
+		if w.EffectiveUntil.Valid && !w.EffectiveUntil.Time.After(at) {
 			continue
 		}
-		return windowRatio(w)
+		if w.WindowStatus == "enabled" {
+			return windowRatio(w)
+		}
+		if fallback == nil {
+			fallback = windowRatio(w)
+		}
 	}
-	return nil
+	return fallback
 }
 
 // windowRatio 求单个窗口的折扣：绝对售价整组配置时用 售价/牌价，否则直接取倍率。

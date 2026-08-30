@@ -165,6 +165,15 @@ func NewWorkerServerApp(ctx context.Context, deps WorkerServerAppDeps) (*WorkerS
 		workers.NewFxMarginRecheckWorker(deps.DB, adminMessageService, deps.Logger),
 		workers.NewFxReconciliationWorker(queries, adminMessageService, deps.Logger),
 	)
+
+	// 工单维护：resolved 超期自动关闭 + 孤儿附件清理（不依赖附件签名密钥，始终注册）。
+	units = append(units, workers.NewTicketMaintenanceWorker(
+		queries,
+		deps.Logger,
+		deps.Config.Ticket.MaintenanceInterval,
+		deps.Config.Ticket.AutoCloseAfter,
+		deps.Config.Ticket.AttachmentOrphanTTL,
+	))
 	channelTestCfg := appsettings.AdminBackendChannelTest(ctx, settingsStore)
 	deps.Logger.Info("channel test worker registered",
 		zap.Bool("enabled", channelTestCfg.Enabled),

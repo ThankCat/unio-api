@@ -71,37 +71,63 @@ WHERE m.status = 'enabled'
 ORDER BY m.owned_by ASC, m.release_date DESC NULLS LAST, m.model_id ASC;
 
 -- name: ListPublicModelPriceWindows :many
--- ListPublicModelPriceWindows 取 since 之后仍有效过的全部价格窗口，用于重建折扣走势。
+-- ListPublicModelPriceWindows 取 since 之后仍生效过的全部价格窗口，用于重建折扣走势。
 --
 -- 不需要额外的采样任务：改价的实现就是「关闭旧窗口（写 effective_to）+ 新建一条」，
 -- model_prices 本身就是一份逐次调价的完整事实账，按窗口回放即可精确还原任意时刻的价格。
--- 只取 enabled：被撤销的窗口从未对客户生效过，不该出现在对外走势里。
+--
+-- 停用窗口必须参与回放：替换售价会把旧窗口停用，但它在停用前真实计费过，
+-- 只回放 enabled 会让每次调价把之前的走势整段抹掉（图表只剩「上次调价以来」）。
+-- 停用窗口的生效终点取 LEAST(effective_to, updated_at)——updated_at 即停用动作时刻，
+-- 手动停用（不写 effective_to）也能收口；从未开始就被撤销的窗口区间为空，自然不出现。
+WITH windows AS (
+    SELECT
+        mp.model_id,
+        m.model_id AS model_key,
+        mp.status AS window_status,
+        mp.effective_from,
+        (CASE
+            WHEN mp.status = 'enabled' THEN mp.effective_to
+            ELSE LEAST(COALESCE(mp.effective_to, mp.updated_at), mp.updated_at)
+        END)::timestamptz AS effective_until,
+        mp.uncached_input_price,
+        mp.output_price,
+        mp.sale_price_ratio,
+        mp.sale_uncached_input_price,
+        mp.sale_output_price
+    FROM model_prices mp
+    JOIN models m ON m.id = mp.model_id
+    WHERE m.status = 'enabled'
+)
 SELECT
-    mp.model_id,
-    m.model_id AS model_key,
-    mp.effective_from,
-    mp.effective_to,
-    mp.uncached_input_price,
-    mp.output_price,
-    mp.sale_price_ratio,
-    mp.sale_uncached_input_price,
-    mp.sale_output_price
-FROM model_prices mp
-JOIN models m ON m.id = mp.model_id
-WHERE m.status = 'enabled'
-  AND mp.status = 'enabled'
-  AND mp.effective_from < now()
-  AND (mp.effective_to IS NULL OR mp.effective_to > sqlc.arg(since)::timestamptz)
-ORDER BY mp.model_id ASC, mp.effective_from ASC;
+    model_id,
+    model_key,
+    window_status,
+    effective_from,
+    effective_until,
+    uncached_input_price,
+    output_price,
+    sale_price_ratio,
+    sale_uncached_input_price,
+    sale_output_price
+FROM windows
+WHERE effective_from < now()
+  AND (effective_until IS NULL OR effective_until > sqlc.arg(since)::timestamptz)
+ORDER BY model_id ASC, effective_from ASC;
 
 -- name: ListPublicModelCapabilities :many
 -- ListPublicModelCapabilities 列出全部在售模型的能力声明（service 层按 model_id 分组）。
 -- 与 ListPublicModels 相同的在售口径，避免为下架模型搬运能力。
+-- 带出字典图标与展示名：console/website 统一用后端下发的图标 + 文案展示能力，前端不自备图标库。
+-- 排序跟随字典 sort_order（模态在前、功能在后），前端按序直接渲染。
 SELECT
     mc.model_id,
     mc.capability_key,
-    mc.support_level
+    mc.support_level,
+    ck.icon_svg,
+    ck.display_name
 FROM model_capabilities mc
 JOIN models m ON m.id = mc.model_id
+JOIN capability_keys ck ON ck.key = mc.capability_key
 WHERE m.status = 'enabled'
-ORDER BY mc.model_id ASC, mc.capability_key ASC;
+ORDER BY mc.model_id ASC, ck.sort_order ASC, mc.capability_key ASC;

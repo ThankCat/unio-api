@@ -33,6 +33,20 @@ type Config struct {
 	Website          WebsiteConfig
 	TokenEstimate    TokenEstimateConfig
 	ExchangeRate     ExchangeRateConfig
+	Ticket           TicketConfig
+}
+
+// TicketConfig 保存用户反馈工单模块的共享配置（console-server、admin-server、worker-server 都读取）。
+type TicketConfig struct {
+	// AttachmentSecret 来自 TICKET_ATTACHMENT_SECRET；附件签名下载 URL 的 HMAC 密钥（至少 16 字符）。
+	// 留空时 console/admin 不挂载工单路由（模块整体停用），worker 的维护任务不受影响。
+	AttachmentSecret string
+	// AutoCloseAfter 来自 TICKET_AUTO_CLOSE_AFTER（默认 168h）；resolved 工单无新消息超过该时长自动关闭。
+	AutoCloseAfter time.Duration
+	// MaintenanceInterval 来自 TICKET_MAINTENANCE_INTERVAL（默认 10m）；工单维护 worker 的轮询间隔。
+	MaintenanceInterval time.Duration
+	// AttachmentOrphanTTL 来自 TICKET_ATTACHMENT_ORPHAN_TTL（默认 24h）；孤儿附件（编辑中未提交）的保留时长。
+	AttachmentOrphanTTL time.Duration
 }
 
 // ExchangeRateConfig 保存汇率基础设施配置（多货币支持）。
@@ -665,6 +679,24 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	ticketAutoCloseAfter, err := getEnvDuration("TICKET_AUTO_CLOSE_AFTER", 168*time.Hour)
+	if err != nil {
+		return Config{}, err
+	}
+	ticketMaintenanceInterval, err := getEnvDuration("TICKET_MAINTENANCE_INTERVAL", 10*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	ticketAttachmentOrphanTTL, err := getEnvDuration("TICKET_ATTACHMENT_ORPHAN_TTL", 24*time.Hour)
+	if err != nil {
+		return Config{}, err
+	}
+	if ticketAutoCloseAfter <= 0 || ticketMaintenanceInterval <= 0 || ticketAttachmentOrphanTTL <= 0 {
+		return Config{}, failure.New(
+			failure.CodeConfigInvalid,
+			failure.WithMessage("ticket durations must be positive"),
+		)
+	}
 	if consoleAccessTokenTTL <= 0 || consoleRefreshTokenTTL <= 0 || consoleRefreshTokenTTL <= consoleAccessTokenTTL {
 		return Config{}, failure.New(
 			failure.CodeConfigInvalid,
@@ -867,6 +899,12 @@ func Load() (Config, error) {
 		},
 		Website: WebsiteConfig{
 			HTTPAddr: getEnv("WEBSITE_HTTP_ADDR", ":8523"),
+		},
+		Ticket: TicketConfig{
+			AttachmentSecret:    strings.TrimSpace(os.Getenv("TICKET_ATTACHMENT_SECRET")),
+			AutoCloseAfter:      ticketAutoCloseAfter,
+			MaintenanceInterval: ticketMaintenanceInterval,
+			AttachmentOrphanTTL: ticketAttachmentOrphanTTL,
 		},
 		TokenEstimate: TokenEstimateConfig{
 			CountMedia:        tokenEstimateCountMedia,

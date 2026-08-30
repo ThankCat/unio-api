@@ -9,10 +9,12 @@ import (
 
 	consoleapikeys "github.com/ThankCat/unio-gateway/internal/app/consoleapi/apikeys"
 	consoleauth "github.com/ThankCat/unio-gateway/internal/app/consoleapi/auth"
+	consolecdkey "github.com/ThankCat/unio-gateway/internal/app/consoleapi/cdkey"
 	consolemeta "github.com/ThankCat/unio-gateway/internal/app/consoleapi/meta"
 	consolemiddleware "github.com/ThankCat/unio-gateway/internal/app/consoleapi/middleware"
 	consolemodels "github.com/ThankCat/unio-gateway/internal/app/consoleapi/models"
 	consolerequests "github.com/ThankCat/unio-gateway/internal/app/consoleapi/requests"
+	consoleticket "github.com/ThankCat/unio-gateway/internal/app/consoleapi/ticket"
 	"github.com/ThankCat/unio-gateway/internal/app/consoleapi/transport"
 	consoleusage "github.com/ThankCat/unio-gateway/internal/app/consoleapi/usage"
 	consolewallet "github.com/ThankCat/unio-gateway/internal/app/consoleapi/wallet"
@@ -30,10 +32,13 @@ type Deps struct {
 	UsageService   consoleusage.Service
 	APIKeyService  consoleapikeys.Service
 	WalletService  consolewallet.Service
+	CDKeyService   consolecdkey.Service
 	// ModelsService 提供公开模型目录（与 website 共享的查询服务）。
 	ModelsService consolemodels.Service
 	// LabLogos 提供模型出品方图标（公开展示资产）；nil 时不挂图标路由。
 	LabLogos consolemeta.LabLogoStore
+	// TicketService 提供工单自助能力；nil 时不挂工单路由（未配置 TICKET_ATTACHMENT_SECRET）。
+	TicketService consoleticket.Service
 }
 
 // NewRouter 构建公开的 Console API 路由及其公共中间件。
@@ -81,7 +86,15 @@ func NewRouter(deps Deps) (http.Handler, error) {
 			GatewayPublicBaseURL: deps.Config.GatewayPublicBaseURL,
 			LabLogos:             deps.LabLogos,
 		})
-		if deps.RequestService != nil || deps.UsageService != nil || deps.APIKeyService != nil || deps.WalletService != nil || deps.ModelsService != nil {
+		// 工单模块自行管理认证分组：附件下载是签名公开路由，其余路由在模块内套 RequireAuth。
+		if deps.TicketService != nil {
+			consoleticket.Register(r, consoleticket.Deps{
+				Service:     deps.TicketService,
+				AuthService: deps.AuthService,
+				ErrorWriter: errorWriter,
+			})
+		}
+		if deps.RequestService != nil || deps.UsageService != nil || deps.APIKeyService != nil || deps.WalletService != nil || deps.ModelsService != nil || deps.CDKeyService != nil {
 			r.Group(func(r chi.Router) {
 				r.Use(consoleauth.RequireAuth(deps.AuthService, errorWriter))
 				if deps.RequestService != nil {
@@ -107,6 +120,9 @@ func NewRouter(deps Deps) (http.Handler, error) {
 						Service:     deps.WalletService,
 						ErrorWriter: errorWriter,
 					})
+				}
+				if deps.CDKeyService != nil {
+					consolecdkey.Register(r, consolecdkey.Deps{Service: deps.CDKeyService, ErrorWriter: errorWriter})
 				}
 				if deps.ModelsService != nil {
 					consolemodels.Register(r, consolemodels.Deps{

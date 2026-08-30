@@ -8,15 +8,21 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/ThankCat/unio-gateway/internal/app/consoleapi"
+	consoleticketapp "github.com/ThankCat/unio-gateway/internal/app/consoleapi/ticket"
+	"github.com/ThankCat/unio-gateway/internal/core/ledger"
+	coreticket "github.com/ThankCat/unio-gateway/internal/core/ticket"
 	"github.com/ThankCat/unio-gateway/internal/platform/config"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/tracing"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/adminmessage"
 	"github.com/ThankCat/unio-gateway/internal/service/appsettings"
 	consoleservice "github.com/ThankCat/unio-gateway/internal/service/console"
 	consoleapikeys "github.com/ThankCat/unio-gateway/internal/service/console/apikeys"
 	consoleauth "github.com/ThankCat/unio-gateway/internal/service/console/auth"
+	consolecdkey "github.com/ThankCat/unio-gateway/internal/service/console/cdkey"
 	consolerequests "github.com/ThankCat/unio-gateway/internal/service/console/requests"
+	consoleticket "github.com/ThankCat/unio-gateway/internal/service/console/ticket"
 	consoleusage "github.com/ThankCat/unio-gateway/internal/service/console/usage"
 	consolewallet "github.com/ThankCat/unio-gateway/internal/service/console/wallet"
 	"github.com/ThankCat/unio-gateway/internal/service/publicmodels"
@@ -26,6 +32,7 @@ import (
 // ConsoleServerAppDB 定义 console-server 所需的数据库能力。
 type ConsoleServerAppDB interface {
 	consoleservice.DB
+	consoleticket.TxBeginner
 }
 
 // ConsoleServerAppDeps 包含 console-server 的启动依赖。
@@ -69,6 +76,20 @@ func NewConsoleServerApp(ctx context.Context, deps ConsoleServerAppDeps) (*Conso
 	httpx.SetMaxJSONBodyBytes(deps.Config.HTTP.AdminMaxJSONBodyBytes)
 	httpx.SetResponseWriteTimeout(deps.Config.HTTP.WriteTimeout)
 	queries := sqlc.New(deps.DB)
+	ledgerService := ledger.NewService(deps.DB, queries)
+	cdkeyService := consolecdkey.NewService(deps.DB, queries, ledgerService)
+	if deps.Redis != nil {
+		cdkeyLimiter, limiterErr := consolecdkey.NewRateLimiter(
+			deps.Redis,
+			deps.Config.Redis.KeyNamespace,
+			deps.Config.Console.AuthSecret,
+		)
+		if limiterErr != nil {
+			_ = tracerProvider.Shutdown(ctx)
+			return nil, limiterErr
+		}
+		cdkeyService.WithRateLimiter(cdkeyLimiter)
+	}
 	settingsStore := appsettings.NewSettingsStore(
 		queries,
 		deps.Redis,
@@ -122,6 +143,20 @@ func NewConsoleServerApp(ctx context.Context, deps ConsoleServerAppDeps) (*Conso
 		_ = tracerProvider.Shutdown(ctx)
 		return nil, err
 	}
+	// 工单模块：签名密钥未配置时整体不启用（路由不挂载），不阻塞其余 Console 功能。
+	var ticketService consoleticketapp.Service
+	if secret := deps.Config.Ticket.AttachmentSecret; secret != "" {
+		signer, signerErr := coreticket.NewAttachmentSigner(secret)
+		if signerErr != nil {
+			_ = tracerProvider.Shutdown(ctx)
+			return nil, signerErr
+		}
+		// 用户创建/回复工单时写入 Admin 站内消息中心（顶栏铃铛提醒运营）。
+		ticketService = consoleticket.NewService(deps.DB, queries, signer).
+			WithAdminNotifier(adminmessage.NewService(queries), deps.Logger)
+	} else {
+		deps.Logger.Warn("console ticket module disabled: TICKET_ATTACHMENT_SECRET is not set")
+	}
 	handler, err := consoleapi.NewRouter(consoleapi.Deps{
 		Logger:         deps.Logger,
 		Config:         deps.Config.Console,
@@ -130,8 +165,10 @@ func NewConsoleServerApp(ctx context.Context, deps ConsoleServerAppDeps) (*Conso
 		UsageService:   consoleusage.NewService(queries),
 		APIKeyService:  consoleapikeys.NewService(queries),
 		WalletService:  consolewallet.NewService(queries),
+		CDKeyService:   cdkeyService,
 		ModelsService:  publicmodels.NewService(queries),
 		LabLogos:       queries,
+		TicketService:  ticketService,
 	})
 	if err != nil {
 		_ = tracerProvider.Shutdown(ctx)

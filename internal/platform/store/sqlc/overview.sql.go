@@ -593,12 +593,10 @@ func (q *Queries) DashboardChannelSuccessBuckets(ctx context.Context, arg Dashbo
 }
 
 const dashboardCostByCurrency = `-- name: DashboardCostByCurrency :many
-SELECT currency, COALESCE(SUM(total_cost_amount), 0)::numeric AS total
+SELECT 'USD'::text AS currency, COALESCE(SUM(total_cost_amount_usd), 0)::numeric AS total
 FROM cost_snapshots
 WHERE ($1::timestamptz IS NULL OR created_at >= $1::timestamptz)
   AND ($2::timestamptz IS NULL OR created_at < $2::timestamptz)
-GROUP BY currency
-ORDER BY currency
 `
 
 type DashboardCostByCurrencyParams struct {
@@ -611,7 +609,8 @@ type DashboardCostByCurrencyRow struct {
 	Total    pgtype.Numeric
 }
 
-// DashboardCostByCurrency 在区间内按币种汇总平台上游成本（cost_snapshots.total_cost_amount）。
+// DashboardCostByCurrency 汇总 USD 归一后的平台上游成本。
+// total_cost_amount_usd 是结算时按钉定汇率固化的金额，供概览 USD 口径直接求和。
 func (q *Queries) DashboardCostByCurrency(ctx context.Context, arg DashboardCostByCurrencyParams) ([]DashboardCostByCurrencyRow, error) {
 	rows, err := q.db.Query(ctx, dashboardCostByCurrency, arg.FromTime, arg.ToTime)
 	if err != nil {
@@ -635,13 +634,13 @@ func (q *Queries) DashboardCostByCurrency(ctx context.Context, arg DashboardCost
 const dashboardCostTimeseries = `-- name: DashboardCostTimeseries :many
 SELECT
     date_trunc($1::text, created_at)::timestamptz AS bucket,
-    currency,
-    COALESCE(SUM(total_cost_amount), 0)::numeric AS total
+    'USD'::text AS currency,
+    COALESCE(SUM(total_cost_amount_usd), 0)::numeric AS total
 FROM cost_snapshots
 WHERE ($2::timestamptz IS NULL OR created_at >= $2::timestamptz)
   AND ($3::timestamptz IS NULL OR created_at < $3::timestamptz)
-GROUP BY bucket, currency
-ORDER BY bucket, currency
+GROUP BY bucket
+ORDER BY bucket
 `
 
 type DashboardCostTimeseriesParams struct {
@@ -656,9 +655,8 @@ type DashboardCostTimeseriesRow struct {
 	Total    pgtype.Numeric
 }
 
-// DashboardCostTimeseries 按时间桶 + 币种聚合平台实际成本（cost_snapshots.total_cost_amount），
-// 与 spend 同形（多币种各成一线），供前端画成本趋势折线。时间列用 cost_snapshots.created_at
-// （结算写入时刻），与成本 KPI 口径一致。
+// DashboardCostTimeseries 按时间桶聚合 USD 归一后的平台实际成本。
+// total_cost_amount_usd 在结算时按发生时汇率固化，避免双币种成本被前端 USD 口径过滤。
 func (q *Queries) DashboardCostTimeseries(ctx context.Context, arg DashboardCostTimeseriesParams) ([]DashboardCostTimeseriesRow, error) {
 	rows, err := q.db.Query(ctx, dashboardCostTimeseries, arg.Unit, arg.FromTime, arg.ToTime)
 	if err != nil {

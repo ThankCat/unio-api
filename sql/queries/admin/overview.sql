@@ -14,13 +14,12 @@ GROUP BY currency
 ORDER BY currency;
 
 -- name: DashboardCostByCurrency :many
--- DashboardCostByCurrency 在区间内按币种汇总平台上游成本（cost_snapshots.total_cost_amount）。
-SELECT currency, COALESCE(SUM(total_cost_amount), 0)::numeric AS total
+-- DashboardCostByCurrency 汇总 USD 归一后的平台上游成本。
+-- total_cost_amount_usd 是结算时按钉定汇率固化的金额，供概览 USD 口径直接求和。
+SELECT 'USD'::text AS currency, COALESCE(SUM(total_cost_amount_usd), 0)::numeric AS total
 FROM cost_snapshots
 WHERE (sqlc.narg('from_time')::timestamptz IS NULL OR created_at >= sqlc.narg('from_time')::timestamptz)
-  AND (sqlc.narg('to_time')::timestamptz IS NULL OR created_at < sqlc.narg('to_time')::timestamptz)
-GROUP BY currency
-ORDER BY currency;
+  AND (sqlc.narg('to_time')::timestamptz IS NULL OR created_at < sqlc.narg('to_time')::timestamptz);
 
 -- name: DashboardBillingExceptionSummary :many
 -- DashboardBillingExceptionSummary 在区间内按 event_type 聚合计费异常数与平台承担金额。
@@ -79,18 +78,17 @@ GROUP BY bucket, currency
 ORDER BY bucket, currency;
 
 -- name: DashboardCostTimeseries :many
--- DashboardCostTimeseries 按时间桶 + 币种聚合平台实际成本（cost_snapshots.total_cost_amount），
--- 与 spend 同形（多币种各成一线），供前端画成本趋势折线。时间列用 cost_snapshots.created_at
--- （结算写入时刻），与成本 KPI 口径一致。
+-- DashboardCostTimeseries 按时间桶聚合 USD 归一后的平台实际成本。
+-- total_cost_amount_usd 在结算时按发生时汇率固化，避免双币种成本被前端 USD 口径过滤。
 SELECT
     date_trunc(sqlc.arg('unit')::text, created_at)::timestamptz AS bucket,
-    currency,
-    COALESCE(SUM(total_cost_amount), 0)::numeric AS total
+    'USD'::text AS currency,
+    COALESCE(SUM(total_cost_amount_usd), 0)::numeric AS total
 FROM cost_snapshots
 WHERE (sqlc.narg('from_time')::timestamptz IS NULL OR created_at >= sqlc.narg('from_time')::timestamptz)
   AND (sqlc.narg('to_time')::timestamptz IS NULL OR created_at < sqlc.narg('to_time')::timestamptz)
-GROUP BY bucket, currency
-ORDER BY bucket, currency;
+GROUP BY bucket
+ORDER BY bucket;
 
 -- M9+ 概览运营雷达（§3.1 重构）只读聚合。全部纯只读、不引入新业务事实。
 -- 约定同 dashboard.sql：金额走 NUMERIC（service 格式化为十进制字符串，绝不经 float）；

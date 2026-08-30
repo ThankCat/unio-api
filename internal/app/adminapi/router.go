@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/capability"
+	"github.com/ThankCat/unio-gateway/internal/app/adminapi/cdkey"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/channel"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/exchangerate"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/ledger"
@@ -23,6 +24,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/provider"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/requests"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/system"
+	"github.com/ThankCat/unio-gateway/internal/app/adminapi/ticket"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/user"
 	"github.com/ThankCat/unio-gateway/internal/platform/config"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpmw"
@@ -72,6 +74,7 @@ type RouterDeps struct {
 	// M6 只读查询台
 	RequestQueryService requests.RequestQueryService
 	LedgerQueryService  ledger.LedgerQueryService
+	CDKeyService        cdkey.Service
 
 	// M7 客户管理：用户（只读）/API Key（费用上限 + 必填线路）/手工调额
 	UserService        user.UserService
@@ -102,6 +105,9 @@ type RouterDeps struct {
 
 	// 站内消息中心（告警通道 MVP）：worker 写入，管理台查看/标记已读。
 	MessageService message.MessageService
+
+	// 用户反馈工单：队列/详情/回复/状态流转；nil 时不挂载（未配置 TICKET_ATTACHMENT_SECRET）。
+	TicketService ticket.TicketService
 
 	// 汇率管理（多货币）：最新/历史查询、手工录入兜底、API Key 运行时验证。
 	ExchangeRateService exchangerate.ExchangeRateService
@@ -163,6 +169,13 @@ func NewRouter(deps RouterDeps) http.Handler {
 			}
 		})
 
+		// 工单模块自行管理认证分组：附件下载是签名公开路由（<img> 带不了 Bearer），
+		// 其余路由在模块内部套 AdminAuth。
+		ticket.Register(r, ticket.Deps{
+			Service: deps.TicketService,
+			Auth:    middleware.AdminAuth(deps.AdminAuthenticator),
+		})
+
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.AdminAuth(deps.AdminAuthenticator))
 
@@ -217,6 +230,7 @@ func NewRouter(deps RouterDeps) http.Handler {
 				RoutingTraceService: deps.RoutingTraceService,
 			})
 			ledger.Register(r, ledger.Deps{Service: deps.LedgerQueryService})
+			cdkey.Register(r, cdkey.Deps{Service: deps.CDKeyService, Logger: deps.Logger})
 			message.Register(r, message.Deps{Service: deps.MessageService})
 			exchangerate.Register(r, exchangerate.Deps{Service: deps.ExchangeRateService})
 			system.Register(r, system.Deps{

@@ -25,13 +25,14 @@ const walletCurrency = "USD"
 // 赠金这类真正的资金往来淹没——单笔消费明细归请求记录页管。
 var EntryTypes = map[string]struct{}{
 	"credit":            {},
+	"cdkey_credit":      {},
 	"refund":            {},
 	"adjustment_credit": {},
 	"adjustment_debit":  {},
 }
 
 // visibleEntryTypes 是不筛选时的默认类型集合（全部可见类型）。
-var visibleEntryTypes = []string{"credit", "refund", "adjustment_credit", "adjustment_debit"}
+var visibleEntryTypes = []string{"credit", "cdkey_credit", "refund", "adjustment_credit", "adjustment_debit"}
 
 // Store 是钱包流水查询所需的存储能力。
 type Store interface {

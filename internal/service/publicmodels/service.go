@@ -51,10 +51,13 @@ type LongContext struct {
 	OutputMultiplier string
 }
 
-// Capability 是一条能力声明。
+// Capability 是一条能力声明；IconSVG / DisplayName 来自能力字典，
+// console/website 统一用后端下发的图标与文案展示，前端不自备图标库。
 type Capability struct {
 	Key          string
 	SupportLevel string
+	IconSVG      string
+	DisplayName  string
 }
 
 // Model 是公开目录的一个条目。
@@ -112,6 +115,8 @@ func (s *Service) List(ctx context.Context) ([]Model, error) {
 		capsByModel[c.ModelID] = append(capsByModel[c.ModelID], Capability{
 			Key:          c.CapabilityKey,
 			SupportLevel: c.SupportLevel,
+			IconSVG:      c.IconSvg,
+			DisplayName:  c.DisplayName,
 		})
 	}
 

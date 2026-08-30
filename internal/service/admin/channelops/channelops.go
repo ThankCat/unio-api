@@ -49,7 +49,9 @@ type Row struct {
 	ResponseTimeoutMs   *int32
 	FirstTokenTimeoutMs *int32
 	ProviderName        string
-	Credential          string
+	// 服务商结算币种（USD/CNY），列表在服务商名后展示。
+	ProviderCurrency string
+	Credential       string
 	AttemptTotal        int64
 	AttemptSucceeded    int64
 	SuccessRate         float64
@@ -169,6 +171,7 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 			ResponseTimeoutMs:   int4Value(r.ResponseTimeoutMs),
 			FirstTokenTimeoutMs: int4Value(r.FirstTokenTimeoutMs),
 			ProviderName:        r.ProviderName,
+			ProviderCurrency:    r.ProviderCurrency,
 			Credential:          r.Credential,
 			AttemptTotal:        r.AttemptTotal,
 			AttemptSucceeded:    r.AttemptSucceeded,
