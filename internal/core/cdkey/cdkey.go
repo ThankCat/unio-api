@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -17,12 +18,13 @@ import (
 const (
 	Currency    = "USD"
 	MaxQuantity = 1000
+	Prefix      = "UNIO"
 )
 
 var (
 	// Amounts is the only set of values accepted by the generator and database.
 	Amounts     = []string{"5", "10", "30", "50", "100", "200", "500"}
-	codePattern = regexp.MustCompile(`^[A-Z0-9]{4}(?:-[A-Z0-9]{4}){3}$`)
+	codePattern = regexp.MustCompile(`^UNIO-[A-Z0-9]{4}(?:-[A-Z0-9]{4}){3}$`)
 )
 
 // Status values persisted in cdkeys.status.
@@ -33,25 +35,27 @@ const (
 )
 
 // Normalize removes formatting separators and uppercases a user supplied key.
-// It accepts the canonical UNIO-XXXX-XXXX-XXXX representation as well as a
-// compact value, which makes copy/paste from spreadsheets forgiving.
+// It accepts the canonical UNIO-XXXX-XXXX-XXXX-XXXX representation as well as
+// a compact value with the UNIO prefix. Unprefixed legacy keys are rejected.
 func Normalize(raw string) (string, error) {
-	value := strings.ToUpper(strings.TrimSpace(raw))
-	value = strings.ReplaceAll(value, " ", "")
-	value = strings.ReplaceAll(value, "\t", "")
-	value = strings.ReplaceAll(value, "\r", "")
-	value = strings.ReplaceAll(value, "\n", "")
+	value := strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) {
+			return -1
+		}
+		return r
+	}, strings.ToUpper(raw))
 	value = strings.ReplaceAll(value, "-", "")
-	if len(value) != 16 {
+	if len(value) != len(Prefix)+16 || !strings.HasPrefix(value, Prefix) {
 		return "", errors.New("invalid CDKEY")
 	}
 	// Require an alphanumeric compact form before inserting separators.
-	for _, r := range value {
+	for _, r := range value[len(Prefix):] {
 		if !(r >= 'A' && r <= 'Z') && !(r >= '0' && r <= '9') {
 			return "", errors.New("invalid CDKEY")
 		}
 	}
-	canonical := value[:4] + "-" + value[4:8] + "-" + value[8:12] + "-" + value[12:]
+	random := value[len(Prefix):]
+	canonical := Prefix + "-" + random[:4] + "-" + random[4:8] + "-" + random[8:12] + "-" + random[12:]
 	if !codePattern.MatchString(canonical) {
 		return "", errors.New("invalid CDKEY")
 	}
@@ -72,7 +76,7 @@ func Mask(canonical string) string {
 		return "****"
 	}
 	parts := strings.Split(normalized, "-")
-	return parts[0] + "-****-****-" + parts[3]
+	return Prefix + "-" + parts[1] + "-****-****-" + parts[4]
 }
 
 // PrefixSuffix returns the non-sensitive parts persisted for list searching.
@@ -82,7 +86,7 @@ func PrefixSuffix(canonical string) (string, string) {
 		return "", ""
 	}
 	parts := strings.Split(normalized, "-")
-	return parts[0], parts[3]
+	return parts[1], parts[4]
 }
 
 // Generate creates a cryptographically random canonical key.
@@ -97,7 +101,7 @@ func Generate() (string, error) {
 		return "", errors.New("generated CDKEY has invalid length")
 	}
 	compact = compact[:16]
-	return compact[:4] + "-" + compact[4:8] + "-" + compact[8:12] + "-" + compact[12:], nil
+	return Prefix + "-" + compact[:4] + "-" + compact[4:8] + "-" + compact[8:12] + "-" + compact[12:], nil
 }
 
 // AmountNumeric parses one of the fixed USD denominations as pgtype.Numeric.

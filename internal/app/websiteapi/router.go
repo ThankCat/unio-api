@@ -20,6 +20,8 @@ type Deps struct {
 	Logger *zap.Logger
 	// Models 提供公开模型目录（internal/service/publicmodels）。
 	Models ModelsService
+	// Stats 提供营销首页用的运行指标（最快首字等）；nil 时不挂对应路由。
+	Stats ProductionStats
 	// LabLogos 提供出品方图标；nil 时不挂图标路由。
 	LabLogos LabLogoStore
 }
@@ -47,6 +49,11 @@ func NewRouter(deps Deps) http.Handler {
 		mh := &modelsHandler{service: deps.Models, logger: deps.Logger}
 		r.Get("/models", mh.list)
 		r.Get("/models/discount-history", mh.discountHistory)
+		r.Get("/models/min-sale-ratio", mh.minSaleRatio)
+		if deps.Stats != nil {
+			sh := &statsHandler{service: deps.Stats, logger: deps.Logger}
+			r.Get("/stats/min-first-token-ms", sh.minFirstTokenMs)
+		}
 		if deps.LabLogos != nil {
 			r.Get("/labs/{slug}/logo.svg", handleLabLogo(deps.LabLogos))
 		}

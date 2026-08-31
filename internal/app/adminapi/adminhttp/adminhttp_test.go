@@ -68,3 +68,25 @@ func TestWriteServiceErrorFallsBackToMarginMessage(t *testing.T) {
 		t.Fatalf("expected raw guard message, got %s", recorder.Body.String())
 	}
 }
+
+func TestParsePageWithMax(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+		max  int
+		want PageParams
+	}{
+		{name: "default", url: "/cdkeys", max: 500, want: PageParams{Page: 1, PageSize: 20}},
+		{name: "bounded", url: "/cdkeys?page=3&page_size=200", max: 500, want: PageParams{Page: 3, PageSize: 200}},
+		{name: "clamped", url: "/cdkeys?page_size=999", max: 500, want: PageParams{Page: 1, PageSize: 500}},
+		{name: "invalid falls back", url: "/cdkeys?page=0&page_size=nope", max: 500, want: PageParams{Page: 1, PageSize: 20}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ParsePageWithMax(httptest.NewRequest(http.MethodGet, tt.url, nil), tt.max)
+			if got != tt.want {
+				t.Fatalf("ParsePageWithMax(%q, %d) = %+v, want %+v", tt.url, tt.max, got, tt.want)
+			}
+		})
+	}
+}

@@ -11,6 +11,7 @@ package publicmodels
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -129,6 +130,15 @@ func (s *Service) List(ctx context.Context) ([]Model, error) {
 		out = append(out, model)
 	}
 	return out, nil
+}
+
+// MinSaleRatio 返回在售模型里最低的售价/牌价比（0.2 = 2 折）。无有效定价时为 nil。
+func (s *Service) MinSaleRatio(ctx context.Context) (*float64, error) {
+	models, err := s.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return minSaleRatio(models), nil
 }
 
 func buildModel(row sqlc.ListPublicModelsRow, caps []Capability) (Model, error) {
@@ -250,4 +260,47 @@ func datePtr(v pgtype.Date) *time.Time {
 	}
 	out := v.Time
 	return &out
+}
+
+// minSaleRatio 取各模型折扣比的最小值。口径与 website 前端 modelDiscountRatio 一致：
+// 倍率路径用 SaleRatio；绝对售价路径用 售价/牌价（uncached input）。
+func minSaleRatio(models []Model) *float64 {
+	var min *float64
+	for _, m := range models {
+		ratio, ok := modelSaleRatio(m)
+		if !ok {
+			continue
+		}
+		if min == nil || ratio < *min {
+			value := ratio
+			min = &value
+		}
+	}
+	return min
+}
+
+func modelSaleRatio(m Model) (float64, bool) {
+	if m.SaleRatio != nil {
+		ratio, err := strconv.ParseFloat(*m.SaleRatio, 64)
+		if err == nil && ratio > 0 {
+			return ratio, true
+		}
+	}
+	list := parsePrice(m.Standard.List.UncachedInput)
+	sale := parsePrice(m.Standard.Sale.UncachedInput)
+	if list <= 0 || sale <= 0 {
+		return 0, false
+	}
+	return sale / list, true
+}
+
+func parsePrice(value *string) float64 {
+	if value == nil {
+		return 0
+	}
+	parsed, err := strconv.ParseFloat(*value, 64)
+	if err != nil {
+		return 0
+	}
+	return parsed
 }

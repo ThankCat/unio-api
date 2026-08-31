@@ -773,6 +773,7 @@ SELECT
     c.code_suffix,
     r.user_id,
     u.email AS user_email,
+    u.display_name AS user_display_name,
     r.amount,
     r.currency,
     r.ledger_entry_id,
@@ -817,19 +818,20 @@ type ListCDKeyRedemptionsPageParams struct {
 }
 
 type ListCDKeyRedemptionsPageRow struct {
-	ID             int64
-	CdkeyID        int64
-	BatchID        pgtype.UUID
-	CodePrefix     string
-	CodeSuffix     string
-	UserID         int64
-	UserEmail      string
-	Amount         pgtype.Numeric
-	Currency       string
-	LedgerEntryID  int64
-	IdempotencyKey string
-	RedeemedAt     pgtype.Timestamptz
-	TotalCount     int64
+	ID              int64
+	CdkeyID         int64
+	BatchID         pgtype.UUID
+	CodePrefix      string
+	CodeSuffix      string
+	UserID          int64
+	UserEmail       string
+	UserDisplayName string
+	Amount          pgtype.Numeric
+	Currency        string
+	LedgerEntryID   int64
+	IdempotencyKey  string
+	RedeemedAt      pgtype.Timestamptz
+	TotalCount      int64
 }
 
 func (q *Queries) ListCDKeyRedemptionsPage(ctx context.Context, arg ListCDKeyRedemptionsPageParams) ([]ListCDKeyRedemptionsPageRow, error) {
@@ -859,6 +861,7 @@ func (q *Queries) ListCDKeyRedemptionsPage(ctx context.Context, arg ListCDKeyRed
 			&i.CodeSuffix,
 			&i.UserID,
 			&i.UserEmail,
+			&i.UserDisplayName,
 			&i.Amount,
 			&i.Currency,
 			&i.LedgerEntryID,
@@ -891,6 +894,7 @@ SELECT
     r.id AS redemption_id,
     r.user_id AS redemption_user_id,
     u.email AS redemption_user_email,
+    u.display_name AS redemption_user_display_name,
     r.ledger_entry_id AS redemption_ledger_entry_id,
     r.redeemed_at AS redemption_redeemed_at,
     COUNT(*) OVER () AS total_count
@@ -916,6 +920,8 @@ ORDER BY
   CASE WHEN $7::text = 'amount' AND NOT COALESCE($8::bool, false) THEN c.amount END ASC NULLS LAST,
   CASE WHEN $7::text = 'status' AND COALESCE($8::bool, false) THEN c.status END DESC NULLS LAST,
   CASE WHEN $7::text = 'status' AND NOT COALESCE($8::bool, false) THEN c.status END ASC NULLS LAST,
+  CASE WHEN COALESCE($7::text, 'created_at') IN ('', 'created_at') AND COALESCE($8::bool, true) THEN c.id END DESC,
+  CASE WHEN COALESCE($7::text, 'created_at') IN ('', 'created_at') AND NOT COALESCE($8::bool, true) THEN c.id END ASC,
   c.id DESC
 LIMIT $10 OFFSET $9
 `
@@ -934,22 +940,23 @@ type ListCDKeysPageParams struct {
 }
 
 type ListCDKeysPageRow struct {
-	ID                      int64
-	BatchID                 pgtype.UUID
-	CodePrefix              string
-	CodeSuffix              string
-	Amount                  pgtype.Numeric
-	Currency                string
-	Status                  string
-	CreatedAt               pgtype.Timestamptz
-	RedeemedAt              pgtype.Timestamptz
-	RevokedAt               pgtype.Timestamptz
-	RedemptionID            pgtype.Int8
-	RedemptionUserID        pgtype.Int8
-	RedemptionUserEmail     pgtype.Text
-	RedemptionLedgerEntryID pgtype.Int8
-	RedemptionRedeemedAt    pgtype.Timestamptz
-	TotalCount              int64
+	ID                        int64
+	BatchID                   pgtype.UUID
+	CodePrefix                string
+	CodeSuffix                string
+	Amount                    pgtype.Numeric
+	Currency                  string
+	Status                    string
+	CreatedAt                 pgtype.Timestamptz
+	RedeemedAt                pgtype.Timestamptz
+	RevokedAt                 pgtype.Timestamptz
+	RedemptionID              pgtype.Int8
+	RedemptionUserID          pgtype.Int8
+	RedemptionUserEmail       pgtype.Text
+	RedemptionUserDisplayName pgtype.Text
+	RedemptionLedgerEntryID   pgtype.Int8
+	RedemptionRedeemedAt      pgtype.Timestamptz
+	TotalCount                int64
 }
 
 func (q *Queries) ListCDKeysPage(ctx context.Context, arg ListCDKeysPageParams) ([]ListCDKeysPageRow, error) {
@@ -986,6 +993,7 @@ func (q *Queries) ListCDKeysPage(ctx context.Context, arg ListCDKeysPageParams) 
 			&i.RedemptionID,
 			&i.RedemptionUserID,
 			&i.RedemptionUserEmail,
+			&i.RedemptionUserDisplayName,
 			&i.RedemptionLedgerEntryID,
 			&i.RedemptionRedeemedAt,
 			&i.TotalCount,

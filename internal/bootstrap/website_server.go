@@ -51,6 +51,7 @@ func NewWebsiteServerApp(ctx context.Context, deps WebsiteServerAppDeps) (*Websi
 	handler := websiteapi.NewRouter(websiteapi.Deps{
 		Logger:   deps.Logger,
 		Models:   publicmodels.NewService(queries),
+		Stats:    websiteapi.NewSQLProductionStats(queries),
 		LabLogos: queries,
 	})
 

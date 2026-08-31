@@ -16,22 +16,23 @@ import (
 )
 
 type cdkeyDTO struct {
-	ID                  int64   `json:"id"`
-	BatchID             string  `json:"batch_id"`
-	MaskedCode          string  `json:"masked_code"`
-	CodePrefix          string  `json:"code_prefix"`
-	CodeSuffix          string  `json:"code_suffix"`
-	Amount              string  `json:"amount"`
-	Currency            string  `json:"currency"`
-	Status              string  `json:"status"`
-	CreatedAt           string  `json:"created_at"`
-	RedeemedAt          *string `json:"redeemed_at,omitempty"`
-	RevokedAt           *string `json:"revoked_at,omitempty"`
-	RedemptionID        *int64  `json:"redemption_id,omitempty"`
-	RedemptionUserID    *int64  `json:"redemption_user_id,omitempty"`
-	RedemptionUserEmail *string `json:"redemption_user_email,omitempty"`
-	RedemptionLedgerID  *int64  `json:"redemption_ledger_entry_id,omitempty"`
-	RedemptionAt        *string `json:"redemption_redeemed_at,omitempty"`
+	ID                    int64   `json:"id"`
+	BatchID               string  `json:"batch_id"`
+	MaskedCode            string  `json:"masked_code"`
+	CodePrefix            string  `json:"code_prefix"`
+	CodeSuffix            string  `json:"code_suffix"`
+	Amount                string  `json:"amount"`
+	Currency              string  `json:"currency"`
+	Status                string  `json:"status"`
+	CreatedAt             string  `json:"created_at"`
+	RedeemedAt            *string `json:"redeemed_at,omitempty"`
+	RevokedAt             *string `json:"revoked_at,omitempty"`
+	RedemptionID          *int64  `json:"redemption_id,omitempty"`
+	RedemptionUserID      *int64  `json:"redemption_user_id,omitempty"`
+	RedemptionUserEmail   *string `json:"redemption_user_email,omitempty"`
+	RedemptionDisplayName *string `json:"redemption_user_display_name,omitempty"`
+	RedemptionLedgerID    *int64  `json:"redemption_ledger_entry_id,omitempty"`
+	RedemptionAt          *string `json:"redemption_redeemed_at,omitempty"`
 }
 
 type listQuery struct {
@@ -40,7 +41,13 @@ type listQuery struct {
 	PageSize int
 }
 
+const cdkeyInventoryMaxPageSize = 500
+
 type generateRequest struct {
+	Items []generateItemRequest `json:"items"`
+}
+
+type generateItemRequest struct {
 	Amount   string `json:"amount"`
 	Quantity int    `json:"quantity"`
 }
@@ -53,11 +60,9 @@ type bulkRequest struct {
 }
 
 type exportRequest struct {
-	Statuses   []string     `json:"statuses"`
-	Scope      string       `json:"scope"`
-	IDs        []int64      `json:"ids"`
-	Filter     exportFilter `json:"filter"`
-	ExcludeIDs []int64      `json:"exclude_ids"`
+	Statuses []string `json:"statuses"`
+	Scope    string   `json:"scope"`
+	IDs      []int64  `json:"ids"`
 }
 
 type exportFilter struct {
@@ -166,7 +171,7 @@ func (h *handler) redemptions(w http.ResponseWriter, r *http.Request) {
 	for _, item := range result.Items {
 		items = append(items, map[string]any{
 			"id": item.ID, "cdkey_id": item.CDKeyID, "batch_id": item.BatchID,
-			"masked_code": item.MaskedCode, "user_id": item.UserID, "user_email": item.UserEmail,
+			"masked_code": item.MaskedCode, "user_id": item.UserID, "user_display_name": item.UserDisplayName, "user_email": item.UserEmail,
 			"amount": item.Amount, "currency": item.Currency, "ledger_entry_id": item.LedgerEntryID,
 			"redeemed_at": item.RedeemedAt.UTC().Format(time.RFC3339Nano),
 		})
@@ -220,25 +225,19 @@ func (h *handler) generate(w http.ResponseWriter, r *http.Request) {
 		adminhttp.WriteServiceError(w, err)
 		return
 	}
-	result, err := h.service.Generate(r.Context(), admincdkey.GenerateParams{Amount: body.Amount, Quantity: body.Quantity})
+	items := make([]admincdkey.GenerateItem, 0, len(body.Items))
+	for _, item := range body.Items {
+		items = append(items, admincdkey.GenerateItem{Amount: item.Amount, Quantity: item.Quantity})
+	}
+	result, err := h.service.Generate(r.Context(), admincdkey.GenerateParams{Items: items})
 	if err != nil {
 		adminhttp.WriteServiceError(w, err)
 		return
 	}
-	items := make([]cdkeyDTO, 0, len(result.Items))
-	for _, item := range result.Items {
-		items = append(items, cdkeyDTOFrom(item))
-	}
 	adminhttp.WriteData(w, http.StatusCreated, map[string]any{
-		"batch_id": result.BatchID, "amount": result.Amount, "currency": result.Currency,
-		"quantity": result.Quantity, "items": items, "masked_codes": result.MaskedCodes,
-		"ids": func() []int64 {
-			ids := make([]int64, 0, len(result.Items))
-			for _, item := range result.Items {
-				ids = append(ids, item.ID)
-			}
-			return ids
-		}(),
+		"batch_id": result.BatchID, "currency": result.Currency,
+		"total_quantity": result.TotalQuantity, "total_value": result.TotalValue,
+		"lines": result.Lines, "masked_codes": result.MaskedCodes,
 	})
 }
 
@@ -312,22 +311,15 @@ func (h *handler) export(w http.ResponseWriter, r *http.Request) {
 		adminhttp.WriteServiceError(w, err)
 		return
 	}
-	filter, err := filterFromRequest(body.Filter)
-	if err != nil {
-		adminhttp.WriteServiceError(w, err)
-		return
-	}
 	statuses := body.Statuses
-	if len(statuses) == 0 {
-		statuses = filter.Statuses
-	}
-	rows, err := h.service.Export(r.Context(), admincdkey.ExportParams{Statuses: statuses, Scope: body.Scope, IDs: body.IDs, Filter: filter, ExcludeIDs: body.ExcludeIDs})
+	rows, err := h.service.Export(r.Context(), admincdkey.ExportParams{Statuses: statuses, Scope: body.Scope, IDs: body.IDs})
 	if err != nil {
 		adminhttp.WriteServiceError(w, err)
 		return
 	}
 	if h.logger != nil {
-		h.logger.Info("cdkey export",
+		h.logger.Info(
+			"cdkey export",
 			zap.String("event", "cdkey_export"),
 			zap.String("actor", adminhttp.AdminActor(r)),
 			zap.String("scope", strings.TrimSpace(body.Scope)),
@@ -371,7 +363,7 @@ func (h *handler) export(w http.ResponseWriter, r *http.Request) {
 }
 
 func parseListQuery(r *http.Request) (listQuery, error) {
-	page := adminhttp.ParsePage(r)
+	page := adminhttp.ParsePageWithMax(r, cdkeyInventoryMaxPageSize)
 	sort, err := adminhttp.ParseListSort(r, map[string]struct{}{
 		"created_at": {},
 		"amount":     {},
@@ -516,7 +508,25 @@ func summaryTotalsDTOFrom(totals admincdkey.SummaryTotals) summaryTotalsDTO {
 }
 
 func cdkeyDTOFrom(item admincdkey.CDKey) cdkeyDTO {
-	return cdkeyDTO{ID: item.ID, BatchID: item.BatchID, MaskedCode: item.MaskedCode, CodePrefix: item.CodePrefix, CodeSuffix: item.CodeSuffix, Amount: item.Amount, Currency: item.Currency, Status: item.Status, CreatedAt: item.CreatedAt.UTC().Format(time.RFC3339Nano), RedeemedAt: formatTimePtr(item.RedeemedAt), RevokedAt: formatTimePtr(item.RevokedAt), RedemptionID: item.RedemptionID, RedemptionUserID: item.RedemptionUserID, RedemptionUserEmail: item.RedemptionUserEmail, RedemptionLedgerID: item.RedemptionLedgerID, RedemptionAt: formatTimePtr(item.RedemptionAt)}
+	return cdkeyDTO{
+		ID:                    item.ID,
+		BatchID:               item.BatchID,
+		MaskedCode:            item.MaskedCode,
+		CodePrefix:            item.CodePrefix,
+		CodeSuffix:            item.CodeSuffix,
+		Amount:                item.Amount,
+		Currency:              item.Currency,
+		Status:                item.Status,
+		CreatedAt:             item.CreatedAt.UTC().Format(time.RFC3339Nano),
+		RedeemedAt:            formatTimePtr(item.RedeemedAt),
+		RevokedAt:             formatTimePtr(item.RevokedAt),
+		RedemptionID:          item.RedemptionID,
+		RedemptionUserID:      item.RedemptionUserID,
+		RedemptionUserEmail:   item.RedemptionUserEmail,
+		RedemptionDisplayName: item.RedemptionUserDisplayName,
+		RedemptionLedgerID:    item.RedemptionLedgerID,
+		RedemptionAt:          formatTimePtr(item.RedemptionAt),
+	}
 }
 
 func formatTimePtr(value *time.Time) *string {

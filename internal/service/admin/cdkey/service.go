@@ -83,22 +83,23 @@ type ListParams struct {
 
 // CDKey is safe for normal JSON responses; plaintext/hash are deliberately absent.
 type CDKey struct {
-	ID                  int64
-	BatchID             string
-	MaskedCode          string
-	CodePrefix          string
-	CodeSuffix          string
-	Amount              string
-	Currency            string
-	Status              string
-	CreatedAt           time.Time
-	RedeemedAt          *time.Time
-	RevokedAt           *time.Time
-	RedemptionID        *int64
-	RedemptionUserID    *int64
-	RedemptionUserEmail *string
-	RedemptionLedgerID  *int64
-	RedemptionAt        *time.Time
+	ID                        int64
+	BatchID                   string
+	MaskedCode                string
+	CodePrefix                string
+	CodeSuffix                string
+	Amount                    string
+	Currency                  string
+	Status                    string
+	CreatedAt                 time.Time
+	RedeemedAt                *time.Time
+	RevokedAt                 *time.Time
+	RedemptionID              *int64
+	RedemptionUserID          *int64
+	RedemptionUserEmail       *string
+	RedemptionUserDisplayName *string
+	RedemptionLedgerID        *int64
+	RedemptionAt              *time.Time
 }
 
 // ListResult is the paginated masked list.
@@ -109,31 +110,43 @@ type ListResult struct {
 
 // GenerateParams controls one batch generation.
 type GenerateParams struct {
+	Items []GenerateItem
+}
+
+type GenerateItem struct {
 	Amount   string
 	Quantity int
 }
 
+// GenerateLine reports one denomination subtotal in a generated batch.
+type GenerateLine struct {
+	Amount   string `json:"amount"`
+	Quantity int    `json:"quantity"`
+	Value    string `json:"value"`
+}
+
 type GenerateResult struct {
-	BatchID     string
-	Amount      string
-	Currency    string
-	Quantity    int
-	Items       []CDKey
-	MaskedCodes []string
+	BatchID       string
+	Currency      string
+	TotalQuantity int
+	TotalValue    string
+	Lines         []GenerateLine
+	MaskedCodes   []string
 }
 
 // Redemption is an Admin redemption fact view.
 type Redemption struct {
-	ID            int64
-	CDKeyID       int64
-	BatchID       string
-	MaskedCode    string
-	UserID        int64
-	UserEmail     string
-	Amount        string
-	Currency      string
-	LedgerEntryID int64
-	RedeemedAt    time.Time
+	ID              int64
+	CDKeyID         int64
+	BatchID         string
+	MaskedCode      string
+	UserID          int64
+	UserDisplayName string
+	UserEmail       string
+	Amount          string
+	Currency        string
+	LedgerEntryID   int64
+	RedeemedAt      time.Time
 }
 
 type RedemptionsResult struct {
@@ -180,13 +193,11 @@ type BatchSummaryAmount struct {
 	FullyRedeemedBatchCount int64
 }
 
-// ExportParams selects statuses and either explicit IDs or a server-side filter.
+// ExportParams selects statuses and either explicit IDs or all records.
 type ExportParams struct {
-	Statuses   []string
-	Scope      string
-	IDs        []int64
-	Filter     ListParams
-	ExcludeIDs []int64
+	Statuses []string
+	Scope    string
+	IDs      []int64
 }
 
 // Selection describes either an explicit set of rows or a server-side filter.
@@ -261,17 +272,33 @@ func (s *Service) List(ctx context.Context, params ListParams) (ListResult, erro
 	return ListResult{Items: items, Total: total}, nil
 }
 
-// Generate creates one atomic batch. Plaintext is retained only in the DB and
-// is not part of GenerateResult.
+// Generate creates one atomic multi-denomination batch. Plaintext is retained
+// only in the DB and is not part of GenerateResult.
 func (s *Service) Generate(ctx context.Context, params GenerateParams) (GenerateResult, error) {
-	amountText, ok := corecdkey.AmountString(params.Amount)
-	if !ok {
-		return GenerateResult{}, invalidArgument("amount", "amount must be one of 5, 10, 30, 50, 100, 200, 500 USD")
+	if len(params.Items) == 0 {
+		return GenerateResult{}, invalidArgument("items", "at least one denomination is required")
 	}
-	if params.Quantity < 1 || params.Quantity > corecdkey.MaxQuantity {
-		return GenerateResult{}, invalidArgument("quantity", fmt.Sprintf("quantity must be between 1 and %d", corecdkey.MaxQuantity))
+	items := make([]GenerateItem, 0, len(params.Items))
+	seenAmounts := make(map[string]struct{}, len(params.Items))
+	totalQuantity := 0
+	for index, item := range params.Items {
+		amountText, ok := corecdkey.AmountString(item.Amount)
+		if !ok {
+			return GenerateResult{}, invalidArgument("items", fmt.Sprintf("items[%d].amount must be one of 5, 10, 30, 50, 100, 200, 500 USD", index))
+		}
+		if _, exists := seenAmounts[amountText]; exists {
+			return GenerateResult{}, invalidArgument("items", fmt.Sprintf("items[%d].amount is duplicated", index))
+		}
+		if item.Quantity < 1 {
+			return GenerateResult{}, invalidArgument("items", fmt.Sprintf("items[%d].quantity must be a positive integer", index))
+		}
+		seenAmounts[amountText] = struct{}{}
+		items = append(items, GenerateItem{Amount: amountText, Quantity: item.Quantity})
+		totalQuantity += item.Quantity
+		if totalQuantity > corecdkey.MaxQuantity {
+			return GenerateResult{}, invalidArgument("items", fmt.Sprintf("total quantity must not exceed %d", corecdkey.MaxQuantity))
+		}
 	}
-	amount, _ := corecdkey.AmountNumeric(amountText)
 	batchID := uuid.New()
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
@@ -282,36 +309,43 @@ func (s *Service) Generate(ctx context.Context, params GenerateParams) (Generate
 	if queryErr != nil {
 		return GenerateResult{}, queryErr
 	}
-	items := make([]CDKey, 0, params.Quantity)
-	masked := make([]string, 0, params.Quantity)
-	seen := make(map[string]struct{}, params.Quantity)
-	for len(items) < params.Quantity {
-		plain, genErr := corecdkey.Generate()
-		if genErr != nil {
-			return GenerateResult{}, failure.Wrap(failure.CodeAdminStoreFailed, genErr, failure.WithMessage("generate CDKEY"))
+	masked := make([]string, 0, totalQuantity)
+	lines := make([]GenerateLine, 0, len(items))
+	seen := make(map[string]struct{}, totalQuantity)
+	for _, item := range items {
+		amount, _ := corecdkey.AmountNumeric(item.Amount)
+		for generated := 0; generated < item.Quantity; {
+			plain, genErr := corecdkey.Generate()
+			if genErr != nil {
+				return GenerateResult{}, failure.Wrap(failure.CodeAdminStoreFailed, genErr, failure.WithMessage("generate CDKEY"))
+			}
+			hash := corecdkey.Hash(plain)
+			if _, exists := seen[hash]; exists {
+				continue
+			}
+			seen[hash] = struct{}{}
+			prefix, suffix := corecdkey.PrefixSuffix(plain)
+			row, createErr := q.CreateCDKey(ctx, sqlc.CreateCDKeyParams{
+				BatchID: pgUUID(batchID), CodePlaintext: plain, CodeHash: hash,
+				CodePrefix: prefix, CodeSuffix: suffix, Amount: amount,
+				Currency: corecdkey.Currency, Status: corecdkey.StatusUnused,
+			})
+			if createErr != nil {
+				return GenerateResult{}, storeFailed(createErr, "store generated CDKEY")
+			}
+			masked = append(masked, corecdkey.Mask(row.CodePlaintext))
+			generated++
 		}
-		hash := corecdkey.Hash(plain)
-		if _, exists := seen[hash]; exists {
-			continue
-		}
-		seen[hash] = struct{}{}
-		prefix, suffix := corecdkey.PrefixSuffix(plain)
-		row, createErr := q.CreateCDKey(ctx, sqlc.CreateCDKeyParams{
-			BatchID: pgUUID(batchID), CodePlaintext: plain, CodeHash: hash,
-			CodePrefix: prefix, CodeSuffix: suffix, Amount: amount,
-			Currency: corecdkey.Currency, Status: corecdkey.StatusUnused,
-		})
-		if createErr != nil {
-			return GenerateResult{}, storeFailed(createErr, "store generated CDKEY")
-		}
-		item := cdkeyFromModel(row)
-		items = append(items, item)
-		masked = append(masked, item.MaskedCode)
+		lines = append(lines, GenerateLine{Amount: item.Amount, Quantity: item.Quantity, Value: multiplyAmount(item.Amount, item.Quantity)})
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return GenerateResult{}, storeFailed(err, "commit CDKEY generation transaction")
 	}
-	return GenerateResult{BatchID: batchID.String(), Amount: amountText, Currency: corecdkey.Currency, Quantity: params.Quantity, Items: items, MaskedCodes: masked}, nil
+	totalValue := ""
+	for _, line := range lines {
+		totalValue = addDecimal(totalValue, line.Value)
+	}
+	return GenerateResult{BatchID: batchID.String(), Currency: corecdkey.Currency, TotalQuantity: totalQuantity, TotalValue: totalValue, Lines: lines, MaskedCodes: masked}, nil
 }
 
 // Summary computes the four dashboard cards under the supplied filters.
@@ -465,7 +499,7 @@ func (s *Service) ListRedemptions(ctx context.Context, params ListParams) (Redem
 	}
 	items := make([]Redemption, 0, len(rows))
 	for _, row := range rows {
-		items = append(items, Redemption{ID: row.ID, CDKeyID: row.CdkeyID, BatchID: uuidString(row.BatchID), MaskedCode: corecdkey.Mask(row.CodePrefix + "-0000-0000-" + row.CodeSuffix), UserID: row.UserID, UserEmail: row.UserEmail, Amount: opsutil.NumericString(row.Amount), Currency: row.Currency, LedgerEntryID: row.LedgerEntryID, RedeemedAt: row.RedeemedAt.Time})
+		items = append(items, Redemption{ID: row.ID, CDKeyID: row.CdkeyID, BatchID: uuidString(row.BatchID), MaskedCode: corecdkey.Mask("UNIO-" + row.CodePrefix + "-0000-0000-" + row.CodeSuffix), UserID: row.UserID, UserDisplayName: row.UserDisplayName, UserEmail: row.UserEmail, Amount: opsutil.NumericString(row.Amount), Currency: row.Currency, LedgerEntryID: row.LedgerEntryID, RedeemedAt: row.RedeemedAt.Time})
 	}
 	return RedemptionsResult{Items: items, Total: total}, nil
 }
@@ -737,17 +771,8 @@ func (s *Service) Export(ctx context.Context, params ExportParams) ([]ExportRow,
 	if err != nil {
 		return nil, err
 	}
-	filterStatuses, err := normalizeStatuses(params.Filter.Statuses)
-	if err != nil {
-		return nil, err
-	}
 	if len(statuses) == 0 {
 		return nil, invalidArgument("statuses", "at least one status is required")
-	}
-	for _, id := range params.ExcludeIDs {
-		if id <= 0 {
-			return nil, invalidArgument("exclude_ids", "exclude_ids must contain positive integers")
-		}
 	}
 	if params.Scope == "selected" || params.Scope == "page" {
 		for _, id := range params.IDs {
@@ -756,16 +781,8 @@ func (s *Service) Export(ctx context.Context, params ExportParams) ([]ExportRow,
 			}
 		}
 	}
-	if len(filterStatuses) > 0 {
-		statuses = intersectStatuses(statuses, filterStatuses)
-		if len(statuses) == 0 {
-			// A valid but disjoint status intersection is an empty export. The
-			// handler still emits the standard CSV header.
-			return []ExportRow{}, nil
-		}
-	}
 	if params.Scope == "" {
-		params.Scope = "filter"
+		params.Scope = "all"
 	}
 	var rows []ExportRow
 	switch params.Scope {
@@ -773,7 +790,7 @@ func (s *Service) Export(ctx context.Context, params ExportParams) ([]ExportRow,
 		if len(params.IDs) == 0 {
 			return nil, invalidArgument("ids", "ids must not be empty for selected/page export")
 		}
-		got, queryErr := s.store.ExportCDKeysByIDs(ctx, sqlc.ExportCDKeysByIDsParams{Ids: params.IDs, Statuses: statuses, ExcludeIds: nonNilIDs(params.ExcludeIDs)})
+		got, queryErr := s.store.ExportCDKeysByIDs(ctx, sqlc.ExportCDKeysByIDsParams{Ids: params.IDs, Statuses: statuses, ExcludeIds: []int64{}})
 		if queryErr != nil {
 			return nil, storeFailed(queryErr, "export CDKEYs")
 		}
@@ -781,16 +798,8 @@ func (s *Service) Export(ctx context.Context, params ExportParams) ([]ExportRow,
 		for _, row := range got {
 			rows = append(rows, exportFromIDsRow(row))
 		}
-	case "filter":
-		amount, amountErr := amountArg(params.Filter.Amount)
-		if amountErr != nil {
-			return nil, amountErr
-		}
-		batchID, batchErr := uuidArg(params.Filter.BatchID)
-		if batchErr != nil {
-			return nil, batchErr
-		}
-		got, queryErr := s.store.ExportCDKeysByFilter(ctx, sqlc.ExportCDKeysByFilterParams{Statuses: statuses, ExcludeIds: nonNilIDs(params.ExcludeIDs), Amount: amount, BatchID: batchID, Search: opsutil.TextNarg(strings.TrimSpace(params.Filter.Search)), FromTime: opsutil.TsNarg(params.Filter.From), ToTime: opsutil.TsNarg(params.Filter.To)})
+	case "all":
+		got, queryErr := s.store.ExportCDKeysByFilter(ctx, sqlc.ExportCDKeysByFilterParams{Statuses: statuses, ExcludeIds: []int64{}})
 		if queryErr != nil {
 			return nil, storeFailed(queryErr, "export CDKEYs")
 		}
@@ -799,33 +808,9 @@ func (s *Service) Export(ctx context.Context, params ExportParams) ([]ExportRow,
 			rows = append(rows, exportFromFilterRow(row))
 		}
 	default:
-		return nil, invalidArgument("scope", "scope must be selected, page, or filter")
+		return nil, invalidArgument("scope", "scope must be selected, page, or all")
 	}
 	return rows, nil
-}
-
-// nonNilIDs ensures PostgreSQL receives an empty array ({}), not NULL, for
-// ANY(...). A NULL array would make the predicate unknown and suppress every
-// row when no exclusions are supplied.
-func nonNilIDs(ids []int64) []int64 {
-	if ids == nil {
-		return []int64{}
-	}
-	return ids
-}
-
-func intersectStatuses(left, right []string) []string {
-	rightSet := make(map[string]struct{}, len(right))
-	for _, value := range right {
-		rightSet[value] = struct{}{}
-	}
-	out := make([]string, 0, len(left))
-	for _, value := range left {
-		if _, ok := rightSet[value]; ok {
-			out = append(out, value)
-		}
-	}
-	return out
 }
 
 func normalizeStatuses(values []string) ([]string, error) {
@@ -893,9 +878,20 @@ func cdkeyFromModel(row sqlc.Cdkey) CDKey {
 }
 
 func cdkeyFromListRow(row sqlc.ListCDKeysPageRow) CDKey {
-	item := CDKey{ID: row.ID, BatchID: uuidString(row.BatchID), MaskedCode: row.CodePrefix + "-****-****-" + row.CodeSuffix, CodePrefix: row.CodePrefix, CodeSuffix: row.CodeSuffix, Amount: opsutil.NumericString(row.Amount), Currency: row.Currency, Status: row.Status, CreatedAt: row.CreatedAt.Time, RedeemedAt: opsutil.TimeValue(row.RedeemedAt), RevokedAt: opsutil.TimeValue(row.RevokedAt)}
+	item := CDKey{
+		ID:         row.ID,
+		BatchID:    uuidString(row.BatchID),
+		MaskedCode: corecdkey.Prefix + "-" + row.CodePrefix + "-****-****-" + row.CodeSuffix,
+		CodePrefix: row.CodePrefix,
+		CodeSuffix: row.CodeSuffix,
+		Amount:     opsutil.NumericString(row.Amount),
+		Currency:   row.Currency, Status: row.Status,
+		CreatedAt:  row.CreatedAt.Time,
+		RedeemedAt: opsutil.TimeValue(row.RedeemedAt),
+		RevokedAt:  opsutil.TimeValue(row.RevokedAt),
+	}
 	item.RedemptionID, item.RedemptionUserID, item.RedemptionLedgerID = opsutil.Int8Value(row.RedemptionID), opsutil.Int8Value(row.RedemptionUserID), opsutil.Int8Value(row.RedemptionLedgerEntryID)
-	item.RedemptionUserEmail, item.RedemptionAt = opsutil.TextPtr(row.RedemptionUserEmail), opsutil.TimeValue(row.RedemptionRedeemedAt)
+	item.RedemptionUserEmail, item.RedemptionUserDisplayName, item.RedemptionAt = opsutil.TextPtr(row.RedemptionUserEmail), opsutil.TextPtr(row.RedemptionUserDisplayName), opsutil.TimeValue(row.RedemptionRedeemedAt)
 	return item
 }
 
@@ -910,12 +906,15 @@ func exportFromFilterRow(row sqlc.ExportCDKeysByFilterRow) ExportRow {
 func invalidArgument(field, message string) error {
 	return failure.New(failure.CodeAdminInvalidArgument, failure.WithMessage(message), failure.WithField("field", field))
 }
+
 func notFound(message string) error {
 	return failure.New(failure.CodeAdminNotFound, failure.WithMessage(message))
 }
+
 func conflict(message string) error {
 	return failure.New(failure.CodeAdminConflict, failure.WithMessage(message))
 }
+
 func storeFailed(err error, message string) error {
 	return failure.Wrap(failure.CodeAdminStoreFailed, err, failure.WithMessage(message))
 }
@@ -931,6 +930,14 @@ func addDecimal(left, right string) string {
 	_, _ = fmt.Sscan(left, &l)
 	_, _ = fmt.Sscan(right, &r)
 	return fmt.Sprintf("%d", l+r)
+}
+
+func multiplyAmount(amount string, quantity int) string {
+	var value int64
+	if _, err := fmt.Sscan(amount, &value); err != nil {
+		return "0"
+	}
+	return fmt.Sprintf("%d", value*int64(quantity))
 }
 
 func sumSummaryValues(values map[string]SummaryAmount, _ bool) string {

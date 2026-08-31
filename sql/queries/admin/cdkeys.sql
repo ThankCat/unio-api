@@ -35,6 +35,7 @@ SELECT
     r.id AS redemption_id,
     r.user_id AS redemption_user_id,
     u.email AS redemption_user_email,
+    u.display_name AS redemption_user_display_name,
     r.ledger_entry_id AS redemption_ledger_entry_id,
     r.redeemed_at AS redemption_redeemed_at,
     COUNT(*) OVER () AS total_count
@@ -60,6 +61,8 @@ ORDER BY
   CASE WHEN sqlc.narg(sort_field)::text = 'amount' AND NOT COALESCE(sqlc.narg(sort_desc)::bool, false) THEN c.amount END ASC NULLS LAST,
   CASE WHEN sqlc.narg(sort_field)::text = 'status' AND COALESCE(sqlc.narg(sort_desc)::bool, false) THEN c.status END DESC NULLS LAST,
   CASE WHEN sqlc.narg(sort_field)::text = 'status' AND NOT COALESCE(sqlc.narg(sort_desc)::bool, false) THEN c.status END ASC NULLS LAST,
+  CASE WHEN COALESCE(sqlc.narg(sort_field)::text, 'created_at') IN ('', 'created_at') AND COALESCE(sqlc.narg(sort_desc)::bool, true) THEN c.id END DESC,
+  CASE WHEN COALESCE(sqlc.narg(sort_field)::text, 'created_at') IN ('', 'created_at') AND NOT COALESCE(sqlc.narg(sort_desc)::bool, true) THEN c.id END ASC,
   c.id DESC
 LIMIT sqlc.arg(page_limit) OFFSET sqlc.arg(page_offset);
 
@@ -193,6 +196,7 @@ SELECT
     c.code_suffix,
     r.user_id,
     u.email AS user_email,
+    u.display_name AS user_display_name,
     r.amount,
     r.currency,
     r.ledger_entry_id,

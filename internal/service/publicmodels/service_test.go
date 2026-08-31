@@ -209,3 +209,63 @@ func TestListStoreError(t *testing.T) {
 		t.Fatal("want error from store")
 	}
 }
+
+func TestMinSaleRatioPicksLowest(t *testing.T) {
+	t.Parallel()
+	cheap := baseRow(t)
+	cheap.SalePriceRatio = num(t, "0.2")
+
+	mid := baseRow(t)
+	mid.ID = 3
+	mid.ModelID = "claude-opus-4-6"
+	mid.SalePriceRatio = num(t, "0.5")
+
+	svc := NewService(&fakeStore{models: []sqlc.ListPublicModelsRow{mid, cheap}})
+	got, err := svc.MinSaleRatio(context.Background())
+	if err != nil {
+		t.Fatalf("MinSaleRatio: %v", err)
+	}
+	if got == nil {
+		t.Fatal("want min sale ratio, got nil")
+	}
+	if *got != 0.2 {
+		t.Fatalf("min sale ratio = %v, want 0.2", *got)
+	}
+}
+
+func TestMinSaleRatioIncludesAbsoluteSale(t *testing.T) {
+	t.Parallel()
+	// 绝对售价 1.5 / 4 = 0.375，应参与「最低折扣」，且比 0.5 更低。
+	absolute := baseRow(t)
+	absolute.SaleUncachedInputPrice = num(t, "1.5")
+	absolute.SaleOutputPrice = num(t, "7")
+
+	ratio := baseRow(t)
+	ratio.ID = 3
+	ratio.ModelID = "claude-opus-4-6"
+	ratio.SalePriceRatio = num(t, "0.5")
+
+	svc := NewService(&fakeStore{models: []sqlc.ListPublicModelsRow{absolute, ratio}})
+	got, err := svc.MinSaleRatio(context.Background())
+	if err != nil {
+		t.Fatalf("MinSaleRatio: %v", err)
+	}
+	if got == nil {
+		t.Fatal("want min sale ratio, got nil")
+	}
+	if *got != 0.375 {
+		t.Fatalf("min sale ratio = %v, want 0.375", *got)
+	}
+}
+
+func TestMinSaleRatioEmptyCatalog(t *testing.T) {
+	t.Parallel()
+	svc := NewService(&fakeStore{})
+	got, err := svc.MinSaleRatio(context.Background())
+	if err != nil {
+		t.Fatalf("MinSaleRatio: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("empty catalog want nil, got %v", *got)
+	}
+}

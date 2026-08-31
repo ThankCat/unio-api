@@ -259,15 +259,25 @@ func (p PageParams) Offset() int32 { return int32((p.Page - 1) * p.PageSize) }
 
 // ParsePage 从 query 解析 page/page_size；非法或缺省回退默认值，并夹紧上限。
 func ParsePage(r *http.Request) PageParams {
+	return ParsePageWithMax(r, maxPageSize)
+}
+
+// ParsePageWithMax parses page/page_size with a caller-specific upper bound.
+// Most Admin lists retain the shared 100-row limit, while high-volume
+// inventory endpoints can opt into a larger bounded page explicitly.
+func ParsePageWithMax(r *http.Request, maxSize int) PageParams {
 	page := 1
 	pageSize := defaultPageSize
+	if maxSize <= 0 {
+		maxSize = maxPageSize
+	}
 	if n, err := strconv.Atoi(r.URL.Query().Get("page")); err == nil && n > 0 {
 		page = n
 	}
 	if n, err := strconv.Atoi(r.URL.Query().Get("page_size")); err == nil && n > 0 {
 		pageSize = n
-		if pageSize > maxPageSize {
-			pageSize = maxPageSize
+		if pageSize > maxSize {
+			pageSize = maxSize
 		}
 	}
 	return PageParams{Page: page, PageSize: pageSize}

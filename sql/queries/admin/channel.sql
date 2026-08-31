@@ -587,7 +587,10 @@ WHERE id = sqlc.arg(id) AND status = 'archived';
 -- 绝对成本覆盖）及其 Fast 档子行（channel_price_service_tiers）、channel_cost_multipliers（价格倍率，DEC-027）。
 -- 充值汇率归属服务商（provider_recharge_rates），不随渠道删除。
 -- 这些都是「渠道自身配置」（无请求/账务事实），随渠道硬删一并清理；channel_test_logs 与
--- channel_model_discovery/verification 的 runs/items 走 ON DELETE CASCADE 自动清。
+-- channel_model_discovery 的 runs/items 走 ON DELETE CASCADE 自动清。
+-- channel_model_verification 的 items 必须在删 provider_probe_records 之前显式删除：
+-- items.probe_id → probe_records 是 NO ACTION 外键，其约束触发器按入队顺序先于 channels 的
+-- CASCADE（runs → items）执行，只靠级联会在语句末误报 23503「探测仍被验证明细引用」。
 -- provider_probe_records（探测事实）的 channel_id 非空，随渠道一并删除；若某条探测已产生
 -- provider 账务（provider_ledger_entries 引用 probe_record_id/channel_id），语句报 23503 回滚，
 -- 探测花过钱即属账务历史，本就该挡。
@@ -609,6 +612,18 @@ deleted_channel_models AS (
 ),
 deleted_channel_cost_multipliers AS (
     DELETE FROM channel_cost_multipliers WHERE channel_cost_multipliers.channel_id = sqlc.arg(id)
+),
+deleted_channel_model_verification_items AS (
+    DELETE FROM channel_model_verification_items
+    WHERE channel_model_verification_items.run_id IN (
+        SELECT channel_model_verification_runs.id
+        FROM channel_model_verification_runs
+        WHERE channel_model_verification_runs.channel_id = sqlc.arg(id)
+    )
+),
+deleted_channel_model_verification_runs AS (
+    DELETE FROM channel_model_verification_runs
+    WHERE channel_model_verification_runs.channel_id = sqlc.arg(id)
 ),
 deleted_provider_probe_records AS (
     DELETE FROM provider_probe_records WHERE provider_probe_records.channel_id = sqlc.arg(id)

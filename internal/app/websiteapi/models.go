@@ -15,6 +15,7 @@ import (
 type ModelsService interface {
 	List(ctx context.Context) ([]publicmodels.Model, error)
 	ListDiscountHistory(ctx context.Context, window time.Duration) ([]publicmodels.DiscountHistory, error)
+	MinSaleRatio(ctx context.Context) (*float64, error)
 }
 
 // discountHistoryWindow 是折扣走势的回看窗口，与前端「近 48 小时」文案一致。
@@ -155,6 +156,28 @@ func (h *modelsHandler) discountHistory(w http.ResponseWriter, r *http.Request) 
 		WindowHours: int(discountHistoryWindow / time.Hour),
 		Histories:   dtos,
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+	}})
+}
+
+type minSaleRatioData struct {
+	// MinSaleRatio 是在售模型最低售价/牌价比（0.2 = 2 折）；无有效定价时为 null。
+	MinSaleRatio *float64 `json:"min_sale_ratio"`
+	GeneratedAt  string   `json:"generated_at"`
+}
+
+// minSaleRatio 返回目录里最低的当前折扣，供首页「X 折起」使用。
+func (h *modelsHandler) minSaleRatio(w http.ResponseWriter, r *http.Request) {
+	ratio, err := h.service.MinSaleRatio(r.Context())
+	if err != nil {
+		h.logger.Error("website min sale ratio failed", zap.Error(err))
+		_ = httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "failed to load min sale ratio")
+		return
+	}
+
+	w.Header().Set("Cache-Control", modelsCacheControl)
+	_ = httpx.WriteJSON(w, http.StatusOK, map[string]minSaleRatioData{"data": {
+		MinSaleRatio: ratio,
+		GeneratedAt:  time.Now().UTC().Format(time.RFC3339),
 	}})
 }
 
