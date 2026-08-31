@@ -42,7 +42,10 @@ INSERT INTO provider_ledger_entries (
     balance_before,
     balance_after,
     idempotency_key,
-    reason
+    reason,
+    amount_usd,
+    fx_rate,
+    fx_rate_date
 )
 VALUES (
     sqlc.arg(provider_id),
@@ -61,7 +64,10 @@ VALUES (
     sqlc.arg(balance_before),
     sqlc.arg(balance_after),
     sqlc.arg(idempotency_key),
-    sqlc.arg(reason)
+    sqlc.arg(reason),
+    sqlc.narg(amount_usd),
+    sqlc.narg(fx_rate),
+    sqlc.narg(fx_rate_date)
 )
 RETURNING *;
 

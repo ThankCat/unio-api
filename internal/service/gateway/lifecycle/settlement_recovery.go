@@ -175,7 +175,7 @@ func (s *ChatSettlementRecoveryStore) CreatePendingChatSettlementRecoveryJob(ctx
 		PriceID:                               nullableInt8(params.ChannelPriceID),
 		CostBaseModelPriceID:                  nullableInt8(params.CostBaseModelPriceID),
 		ChannelCostMultiplierID:               nullableInt8(params.ChannelCostMultiplierID),
-		ChannelRechargeFactorID:               nullableInt8(params.ChannelRechargeFactorID),
+		ProviderRechargeRateID:                nullableInt8(params.ProviderRechargeRateID),
 		Currency:                              tierSelection.salePrice.Currency,
 		PricingUnit:                           tierSelection.salePrice.PricingUnit,
 		UncachedInputPrice:                    tierSelection.salePrice.UncachedInputPrice,
@@ -356,7 +356,7 @@ func (s *ChatSettlementRecoveryService) chatSettlementParamsFromJob(ctx context.
 		FastChannelPriceServiceTierID: int8OrZero(job.ChannelPriceServiceTierID),
 		CostBaseModelPriceID:          int8OrZero(job.CostBaseModelPriceID),
 		ChannelCostMultiplierID:       int8OrZero(job.ChannelCostMultiplierID),
-		ChannelRechargeFactorID:       int8OrZero(job.ChannelRechargeFactorID),
+		ProviderRechargeRateID:        int8OrZero(job.ProviderRechargeRateID),
 		SalePrice: billing.CustomerPriceSnapshot{
 			Currency:                   job.Currency,
 			PricingUnit:                job.PricingUnit,

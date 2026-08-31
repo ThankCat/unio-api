@@ -119,13 +119,13 @@ type ChatRouteCandidate struct {
 	// ChannelPriceID 是命中的 channel_prices 绝对成本覆盖行 ID（DEC-027：优先级最高，0 表示无覆盖、走倍率路径）。
 	// 供结算 pin 取价，语义与旧版一致但收窄为「覆盖行」。
 	ChannelPriceID int64
-	// CostBaseModelPriceID/ChannelCostMultiplierID/ChannelRechargeFactorID 是倍率路径下算 ChannelCost 用到的
+	// CostBaseModelPriceID/ChannelCostMultiplierID/ProviderRechargeRateID 是倍率路径下算 ChannelCost 用到的
 	// 来源行 id（DEC-031 pin）；透传到结算/恢复，按这些不可改行确定性重算成本，防改倍率漂移。
 	// DEC-031：成本基数复用 model_prices，故 CostBaseModelPriceID == ModelPriceID（同一基准价行，售价成本共用）。
-	// 覆盖路径下三者为 0；充值倍率未配置时 ChannelRechargeFactorID=0（结算按 1.0）。
+	// 覆盖路径下三者为 0；充值汇率归属服务商，D-02 保证候选必有生效汇率（防御性缺省 1.0）。
 	CostBaseModelPriceID    int64
 	ChannelCostMultiplierID int64
-	ChannelRechargeFactorID int64
+	ProviderRechargeRateID  int64
 	// ChannelCost 是命中渠道当前生效的上游真实成本快照（覆盖值 或 基准价×价格倍率×充值倍率）；毛利 = SalePrice − ChannelCost。
 	ChannelCost billing.ProviderCostSnapshot
 	// FastChannelPriceServiceTierID 是绝对成本覆盖路径的 Fast 子记录；倍率路径为 0，
@@ -536,10 +536,10 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindModel
 		maxOutputTokens = row.ModelMaxOutputTokens.Int64
 	}
 
-	// 渠道真实成本（DEC-031）：绝对覆盖优先（channel_prices）；否则基准价（model_prices）× 价格倍率 × 充值倍率。
+	// 渠道真实成本（DEC-031）：绝对覆盖优先（channel_prices）；否则基准价（model_prices）× 价格倍率 × 服务商充值汇率。
 	// 已定价过滤已保证「有覆盖 OR 有价格倍率」，且 base 基准价 INNER JOIN 保证存在，此处不会无成本可解析。
 	// 成本基数复用上面已构造的 basePrice（= model_prices 向量），倍率路径 pin = row.ModelPriceID。
-	channelCost, costBaseModelPriceID, channelCostMultiplierID, channelRechargeFactorID, err := resolveCandidateCost(row, basePrice)
+	channelCost, costBaseModelPriceID, channelCostMultiplierID, providerRechargeRateID, err := resolveCandidateCost(row, basePrice)
 	if err != nil {
 		return ChatRouteCandidate{}, err
 	}
@@ -622,7 +622,7 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindModel
 		ChannelPriceID:                row.ChannelPriceID,
 		CostBaseModelPriceID:          costBaseModelPriceID,
 		ChannelCostMultiplierID:       channelCostMultiplierID,
-		ChannelRechargeFactorID:       channelRechargeFactorID,
+		ProviderRechargeRateID:        providerRechargeRateID,
 		ChannelCost:                   channelCost,
 		FastChannelPriceServiceTierID: fastChannelPriceServiceTierID,
 		CostRatio:                     costRatio,
@@ -671,7 +671,7 @@ func resolveFastCandidateCost(row sqlc.FindModelCandidatesRow, fastBasePrice bil
 		return billing.ProviderCostSnapshot{}, 0, false
 	}
 	reference := billing.ModelPriceToProviderCost(fastBasePrice)
-	scaled, err := billing.ScaleProviderCostByFactors(reference, row.CostMultiplier, rechargeFactorOrDefault(row.RechargeFactor))
+	scaled, err := billing.ScaleProviderCostByFactors(reference, row.CostMultiplier, rechargeRateOrDefault(row.ProviderRechargeRate))
 	if err != nil {
 		return billing.ProviderCostSnapshot{}, 0, false
 	}
@@ -685,11 +685,11 @@ func resolveFastCandidateCost(row sqlc.FindModelCandidatesRow, fastBasePrice bil
 // resolveCandidateCost 从候选行解析渠道真实成本与来源 pin（DEC-027 倍率 + DEC-031 单基数）。
 //   - 绝对覆盖（row.ChannelPriceID != 0）：直接用 channel_prices 成本列，来源 id 归零。
 //   - 倍率路径：成本基数 = 模型基准价（base，DEC-031 复用 model_prices，由 basePrice 映射为成本向量），
-//     真实成本 = 基数 × 价格倍率 × 充值倍率（充值缺省 1.0）；带回成本基数（model_price）/价格倍率/充值倍率行 id 作 pin。
+//     真实成本 = 基数 × 价格倍率 × 服务商充值汇率（防御性缺省 1.0）；带回成本基数（model_price）/价格倍率/充值汇率行 id 作 pin。
 //
 // basePrice 是调用方已从 base(model_prices) 列构造的售价向量（与 SalePrice 同源），此处映射为成本向量作基数，
 // 保证售价与成本共用同一 model_prices 基数（DEC-031 核心不变量）。
-func resolveCandidateCost(row sqlc.FindModelCandidatesRow, basePrice billing.CustomerPriceSnapshot) (cost billing.ProviderCostSnapshot, costBaseModelPriceID, multiplierID, rechargeFactorID int64, err error) {
+func resolveCandidateCost(row sqlc.FindModelCandidatesRow, basePrice billing.CustomerPriceSnapshot) (cost billing.ProviderCostSnapshot, costBaseModelPriceID, multiplierID, rechargeRateID int64, err error) {
 	if row.ChannelPriceID != 0 {
 		return billing.ProviderCostSnapshot{
 			Currency:                  row.CostCurrency,
@@ -707,12 +707,12 @@ func resolveCandidateCost(row sqlc.FindModelCandidatesRow, basePrice billing.Cus
 
 	// DEC-031：成本基数 = 模型基准价（映射为成本向量），不再走独立参考成本表。
 	reference := billing.ModelPriceToProviderCost(basePrice)
-	scaled, err := billing.ScaleProviderCostByFactors(reference, row.CostMultiplier, rechargeFactorOrDefault(row.RechargeFactor))
+	scaled, err := billing.ScaleProviderCostByFactors(reference, row.CostMultiplier, rechargeRateOrDefault(row.ProviderRechargeRate))
 	if err != nil {
 		return billing.ProviderCostSnapshot{}, 0, 0, 0, failure.Wrap(
 			failure.CodeBillingInvalidPrice,
 			err,
-			failure.WithMessage("scale provider cost by channel multiplier and recharge factor"),
+			failure.WithMessage("scale provider cost by channel multiplier and provider recharge rate"),
 		)
 	}
 	// 倍率路径成本按 provider 结算币种记账（D2 修订）：基准价数值 × 倍率 = 原币金额，
@@ -720,13 +720,13 @@ func resolveCandidateCost(row sqlc.FindModelCandidatesRow, basePrice billing.Cus
 	if row.ProviderCurrency != "" {
 		scaled.Currency = row.ProviderCurrency
 	}
-	return scaled, row.ModelPriceID, row.ChannelCostMultiplierID, row.ChannelRechargeFactorID, nil
+	return scaled, row.ModelPriceID, row.ChannelCostMultiplierID, row.ProviderRechargeRateID, nil
 }
 
-// rechargeFactorOrDefault 充值倍率未配置（NULL）时按 1.0（名义即真实，向后兼容）。
-func rechargeFactorOrDefault(factor pgtype.Numeric) pgtype.Numeric {
-	if factor.Valid {
-		return factor
+// rechargeRateOrDefault 充值汇率缺失（NULL，理论上被 D-02 候选过滤拦截）时按 1.0 防御性兜底。
+func rechargeRateOrDefault(rate pgtype.Numeric) pgtype.Numeric {
+	if rate.Valid {
+		return rate
 	}
 	return pgtype.Numeric{Int: big.NewInt(1), Exp: 0, Valid: true}
 }

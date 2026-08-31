@@ -26,40 +26,50 @@ type providerOpsHandler struct {
 }
 
 type providerOpsRowDTO struct {
-	ID             int64   `json:"id"`
-	Slug           string  `json:"slug"`
-	Name           string  `json:"name"`
-	Origin         string  `json:"origin"`
-	OriginRevision int64   `json:"origin_revision"`
-	Status         string  `json:"status"`
-	StatusRevision int64   `json:"status_revision"`
-	CreatedAt      string  `json:"created_at"`
-	Currency       string  `json:"currency"`
-	Balance        *string `json:"balance"`
-	BalanceUSD     *string `json:"balance_usd"`
-	BalanceStatus  string  `json:"balance_status"`
-	ChannelTotal   int64   `json:"channel_total"`
-	ModelsCount    int64   `json:"models_count"`
+	ID                           int64   `json:"id"`
+	Slug                         string  `json:"slug"`
+	Name                         string  `json:"name"`
+	Origin                       string  `json:"origin"`
+	OriginRevision               int64   `json:"origin_revision"`
+	Status                       string  `json:"status"`
+	StatusRevision               int64   `json:"status_revision"`
+	CreatedAt                    string  `json:"created_at"`
+	Currency                     string  `json:"currency"`
+	Balance                      *string `json:"balance"`
+	BalanceUSD                   *string `json:"balance_usd"`
+	BalanceFxRate                *string `json:"balance_fx_rate"`
+	BalanceFxRateDate            *string `json:"balance_fx_rate_date"`
+	BalanceStatus                string  `json:"balance_status"`
+	CurrentRechargeRateID        *int64  `json:"current_recharge_rate_id"`
+	CurrentRechargeRate          *string `json:"current_recharge_rate"`
+	CurrentRechargeEffectiveFrom *string `json:"current_recharge_effective_from"`
+	ChannelTotal                 int64   `json:"channel_total"`
+	ModelsCount                  int64   `json:"models_count"`
 }
 
 type providerOpsDetailDTO struct {
-	Balance          *string                   `json:"balance"`
-	BalanceCurrency  string                    `json:"balance_currency"`
-	BalanceUSD       *string                   `json:"balance_usd"`
-	BalanceStatus    string                    `json:"balance_status"`
-	ChannelTotal     int64                     `json:"channel_total"`
-	ChannelEnabled   int64                     `json:"channel_enabled"`
-	AttemptTotal     int64                     `json:"attempt_total"`
-	AttemptSucceeded int64                     `json:"attempt_succeeded"`
-	SuccessRate      float64                   `json:"success_rate"`
-	TimeoutTotal     int64                     `json:"timeout_total"`
-	Latency          adminhttp.LatencyStatsDTO `json:"latency"`
-	Tokens           int64                     `json:"tokens"`
-	RevenueUSD       string                    `json:"revenue_usd"`
-	CostUSD          string                    `json:"cost_usd"`
-	MarginUSD        string                    `json:"margin_usd"`
-	AvgTPS           float64                   `json:"avg_tps"`
-	Cache            adminhttp.CacheStatsDTO   `json:"cache"`
+	Balance                      *string                   `json:"balance"`
+	BalanceCurrency              string                    `json:"balance_currency"`
+	BalanceUSD                   *string                   `json:"balance_usd"`
+	BalanceFxRate                *string                   `json:"balance_fx_rate"`
+	BalanceFxRateDate            *string                   `json:"balance_fx_rate_date"`
+	BalanceStatus                string                    `json:"balance_status"`
+	CurrentRechargeRateID        *int64                    `json:"current_recharge_rate_id"`
+	CurrentRechargeRate          *string                   `json:"current_recharge_rate"`
+	CurrentRechargeEffectiveFrom *string                   `json:"current_recharge_effective_from"`
+	ChannelTotal                 int64                     `json:"channel_total"`
+	ChannelEnabled               int64                     `json:"channel_enabled"`
+	AttemptTotal                 int64                     `json:"attempt_total"`
+	AttemptSucceeded             int64                     `json:"attempt_succeeded"`
+	SuccessRate                  float64                   `json:"success_rate"`
+	TimeoutTotal                 int64                     `json:"timeout_total"`
+	Latency                      adminhttp.LatencyStatsDTO `json:"latency"`
+	Tokens                       int64                     `json:"tokens"`
+	RevenueUSD                   string                    `json:"revenue_usd"`
+	CostUSD                      string                    `json:"cost_usd"`
+	MarginUSD                    string                    `json:"margin_usd"`
+	AvgTPS                       float64                   `json:"avg_tps"`
+	Cache                        adminhttp.CacheStatsDTO   `json:"cache"`
 }
 
 type providerOpsChannelCatalogDTO struct {
@@ -141,9 +151,24 @@ func providerOpsRowDTOFrom(row providerops.Row) providerOpsRowDTO {
 		OriginRevision: row.OriginRevision, Status: row.Status, StatusRevision: row.StatusRevision,
 		CreatedAt: adminhttp.RFC3339(row.CreatedAt), ChannelTotal: row.ChannelTotal,
 		Currency: row.Currency, Balance: row.Balance,
-		BalanceUSD: row.BalanceUSD, BalanceStatus: row.BalanceStatus,
-		ModelsCount: row.ModelsCount,
+		BalanceUSD:                   row.BalanceUSD,
+		BalanceFxRate:                row.BalanceFxRate,
+		BalanceFxRateDate:            dateStringPtr(row.BalanceFxRateDate),
+		BalanceStatus:                row.BalanceStatus,
+		CurrentRechargeRateID:        row.CurrentRechargeRateID,
+		CurrentRechargeRate:          row.CurrentRechargeRate,
+		CurrentRechargeEffectiveFrom: adminhttp.RFC3339Ptr(row.CurrentRechargeEffectiveFrom),
+		ModelsCount:                  row.ModelsCount,
 	}
+}
+
+// dateStringPtr 把可空日期格式化为 YYYY-MM-DD。
+func dateStringPtr(t *time.Time) *string {
+	if t == nil {
+		return nil
+	}
+	s := t.UTC().Format("2006-01-02")
+	return &s
 }
 
 func (h *providerOpsHandler) detail(w http.ResponseWriter, r *http.Request) {
@@ -163,23 +188,28 @@ func (h *providerOpsHandler) detail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	adminhttp.WriteData(w, http.StatusOK, providerOpsDetailDTO{
-		Balance:          d.Balance,
-		BalanceCurrency:  d.BalanceCurrency,
-		BalanceUSD:       d.BalanceUSD,
-		BalanceStatus:    d.BalanceStatus,
-		ChannelTotal:     d.ChannelTotal,
-		ChannelEnabled:   d.ChannelEnabled,
-		AttemptTotal:     d.AttemptTotal,
-		AttemptSucceeded: d.AttemptSucceeded,
-		SuccessRate:      d.SuccessRate,
-		TimeoutTotal:     d.TimeoutTotal,
-		Latency:          adminhttp.LatencyStatsFrom(d.Latency),
-		Tokens:           d.Tokens,
-		RevenueUSD:       d.RevenueUSD,
-		CostUSD:          d.CostUSD,
-		MarginUSD:        d.MarginUSD,
-		AvgTPS:           d.AvgTPS,
-		Cache:            adminhttp.CacheStatsFrom(d.Cache),
+		Balance:                      d.Balance,
+		BalanceCurrency:              d.BalanceCurrency,
+		BalanceUSD:                   d.BalanceUSD,
+		BalanceFxRate:                d.BalanceFxRate,
+		BalanceFxRateDate:            dateStringPtr(d.BalanceFxRateDate),
+		BalanceStatus:                d.BalanceStatus,
+		CurrentRechargeRateID:        d.CurrentRechargeRateID,
+		CurrentRechargeRate:          d.CurrentRechargeRate,
+		CurrentRechargeEffectiveFrom: adminhttp.RFC3339Ptr(d.CurrentRechargeEffectiveFrom),
+		ChannelTotal:                 d.ChannelTotal,
+		ChannelEnabled:               d.ChannelEnabled,
+		AttemptTotal:                 d.AttemptTotal,
+		AttemptSucceeded:             d.AttemptSucceeded,
+		SuccessRate:                  d.SuccessRate,
+		TimeoutTotal:                 d.TimeoutTotal,
+		Latency:                      adminhttp.LatencyStatsFrom(d.Latency),
+		Tokens:                       d.Tokens,
+		RevenueUSD:                   d.RevenueUSD,
+		CostUSD:                      d.CostUSD,
+		MarginUSD:                    d.MarginUSD,
+		AvgTPS:                       d.AvgTPS,
+		Cache:                        adminhttp.CacheStatsFrom(d.Cache),
 	})
 }
 

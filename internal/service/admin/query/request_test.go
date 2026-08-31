@@ -98,7 +98,7 @@ func newFakeStoreWithDetail() *fakeRequestStore {
 			ChannelID:             4,
 			ChannelName:           "DeepSeek 主渠道",
 			ChannelCostMultiplier: numeric("1.25"),
-			RechargeFactor:        numeric("0.8"),
+			ProviderRechargeRate:  numeric("0.8"),
 			AdapterKey:            "deepseek",
 			UpstreamModel:         "deepseek-chat",
 			UpstreamProtocol:      "openai",
@@ -161,7 +161,7 @@ func TestRequestServiceGetMapsAttemptChannelMetadata(t *testing.T) {
 	}
 	attempt := detail.Attempts[0]
 	if attempt.ChannelName != "DeepSeek 主渠道" || attempt.ChannelCostMultiplier == nil ||
-		*attempt.ChannelCostMultiplier != "1.25" || attempt.RechargeFactor == nil || *attempt.RechargeFactor != "0.8" {
+		*attempt.ChannelCostMultiplier != "1.25" || attempt.ProviderRechargeRate == nil || *attempt.ProviderRechargeRate != "0.8" {
 		t.Fatalf("attempt channel metadata = %+v", attempt)
 	}
 }

@@ -4,10 +4,11 @@ import "github.com/go-chi/chi/v5"
 
 // Deps 是服务商模块的路由依赖。
 type Deps struct {
-	Service        ProviderService
-	OpsService     ProviderOpsService
-	BalanceService ProviderBalanceService
-	Breaker        BreakerRuntime
+	Service             ProviderService
+	OpsService          ProviderOpsService
+	BalanceService      ProviderBalanceService
+	RechargeRateService ProviderRechargeRateService
+	Breaker             BreakerRuntime
 }
 
 // Register 注册服务商模块路由（CRUD + §3.2 服务商聚合视图）。
@@ -27,6 +28,14 @@ func Register(r chi.Router, d Deps) {
 		pbh := &providerBalanceHandler{service: d.BalanceService}
 		r.Post("/providers/{id}/balance-adjustments", pbh.adjust)
 		r.Get("/providers/{id}/ledger-entries", pbh.ledgerEntries)
+	}
+
+	// 服务商充值汇率挂在 provider 下（服务商级，全渠道共享）；数值不可改，PATCH 调窗口/启停用 id 定位。
+	if d.RechargeRateService != nil {
+		prrh := &providerRechargeRatesHandler{service: d.RechargeRateService}
+		r.Get("/providers/{id}/recharge-rates", prrh.list)
+		r.Post("/providers/{id}/recharge-rates", prrh.create)
+		r.Patch("/provider-recharge-rates/{id}", prrh.update)
 	}
 
 	if d.Service != nil {

@@ -102,8 +102,8 @@ SELECT
     fast_cost.reasoning_output_cost AS fast_reasoning_output_cost,
     COALESCE(mult.id, 0)::bigint AS channel_cost_multiplier_id,
     mult.multiplier AS cost_multiplier,
-    COALESCE(recharge.id, 0)::bigint AS channel_recharge_factor_id,
-    recharge.factor AS recharge_factor
+    COALESCE(recharge.id, 0)::bigint AS provider_recharge_rate_id,
+    recharge.rate AS provider_recharge_rate
 FROM channel_models cm
 JOIN models m ON m.id = cm.model_id
 JOIN channels c ON c.id = cm.channel_id
@@ -164,14 +164,14 @@ LEFT JOIN LATERAL (
     LIMIT 1
 ) mult ON TRUE
 LEFT JOIN LATERAL (
-    -- recharge: 渠道当前生效的充值倍率（账户级，可空；缺省 Go 侧按 1.0）。
-    SELECT crf.id, crf.factor
-    FROM channel_recharge_factors crf
-    WHERE crf.channel_id = c.id
-      AND crf.status = 'enabled'
-      AND crf.effective_from <= $2
-      AND (crf.effective_to IS NULL OR crf.effective_to > $2)
-    ORDER BY crf.effective_from DESC, crf.id DESC
+    -- recharge: 服务商当前生效的充值汇率（服务商级，其下所有渠道共享）。
+    SELECT prr.id, prr.rate
+    FROM provider_recharge_rates prr
+    WHERE prr.provider_id = p.id
+      AND prr.status = 'enabled'
+      AND prr.effective_from <= $2
+      AND (prr.effective_to IS NULL OR prr.effective_to > $2)
+    ORDER BY prr.effective_from DESC, prr.id DESC
     LIMIT 1
 ) recharge ON TRUE
 WHERE m.model_id = $3
@@ -183,6 +183,8 @@ WHERE m.model_id = $3
   AND p.status = 'enabled'
   -- 已定价（DEC-031）：base 基准价 INNER JOIN 已保证存在；成本可解析 = 绝对覆盖存在 OR 价格倍率存在。
   AND (cost.id IS NOT NULL OR mult.id IS NOT NULL)
+  -- D-02 严格拦截：服务商未配置当前生效充值汇率时，其渠道不进入路由候选（真实成本口径不明，禁止产生新结算）。
+  AND recharge.id IS NOT NULL
 ORDER BY
     c.priority ASC,
     c.id ASC
@@ -276,8 +278,8 @@ type FindModelCandidatesRow struct {
 	FastReasoningOutputCost            pgtype.Numeric
 	ChannelCostMultiplierID            int64
 	CostMultiplier                     pgtype.Numeric
-	ChannelRechargeFactorID            int64
-	RechargeFactor                     pgtype.Numeric
+	ProviderRechargeRateID             int64
+	ProviderRechargeRate               pgtype.Numeric
 }
 
 // FindModelCandidates 按请求模型与入口协议查找可用 channel 候选。
@@ -383,8 +385,8 @@ func (q *Queries) FindModelCandidates(ctx context.Context, arg FindModelCandidat
 			&i.FastReasoningOutputCost,
 			&i.ChannelCostMultiplierID,
 			&i.CostMultiplier,
-			&i.ChannelRechargeFactorID,
-			&i.RechargeFactor,
+			&i.ProviderRechargeRateID,
+			&i.ProviderRechargeRate,
 		); err != nil {
 			return nil, err
 		}
@@ -394,20 +396,4 @@ func (q *Queries) FindModelCandidates(ctx context.Context, arg FindModelCandidat
 		return nil, err
 	}
 	return items, nil
-}
-
-const getChannelProviderCurrency = `-- name: GetChannelProviderCurrency :one
-SELECT p.currency
-FROM providers p
-JOIN channels c ON c.provider_id = p.id
-WHERE c.id = $1
-`
-
-// GetChannelProviderCurrency 取渠道所属 provider 的结算币种：倍率路径成本按此币种记账（D2 修订），
-// settlement / probe 在构建倍率成本快照时覆写币种用。
-func (q *Queries) GetChannelProviderCurrency(ctx context.Context, channelID int64) (string, error) {
-	row := q.db.QueryRow(ctx, getChannelProviderCurrency, channelID)
-	var currency string
-	err := row.Scan(&currency)
-	return currency, err
 }

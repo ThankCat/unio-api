@@ -53,14 +53,14 @@ func NewWorkerServerApp(ctx context.Context, deps WorkerServerAppDeps) (*WorkerS
 	queries := sqlc.New(deps.DB)
 	permitStore := breakerstore.NewStore(deps.Redis, deps.Config.Redis.KeyNamespace)
 	ledgerService := ledger.NewService(deps.DB, queries)
-	providerLedgerService := providerledger.NewService(deps.DB, queries)
+	providerLedgerService := providerledger.NewService(deps.DB, queries).WithFxRates(fx.NewService(queries, 0))
 	chatSettlementService := lifecycle.NewChatSettlementService(
 		deps.DB,
 		queries,
 		billing.Service{},
 		ledgerService,
 		providerLedgerService,
-	).WithFxRates(fx.NewService(queries, 0))
+	).WithFxRates(fx.NewService(queries, 0)).WithLogger(deps.Logger)
 	chatSettlementRecoveryService := lifecycle.NewChatSettlementRecoveryService(queries, chatSettlementService)
 
 	settlementRecoveryWorker := workers.NewSettlementRecoveryWorker(

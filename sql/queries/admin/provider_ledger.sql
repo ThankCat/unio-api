@@ -23,6 +23,10 @@ SELECT
     e.entry_type,
     e.amount,
     e.currency,
+    -- 事件时锁定的 USD 折算快照（可空：本列上线前的存量行不回填，展示端显示不可折算）。
+    e.amount_usd,
+    e.fx_rate,
+    e.fx_rate_date,
     e.balance_before,
     e.balance_after,
     e.idempotency_key,

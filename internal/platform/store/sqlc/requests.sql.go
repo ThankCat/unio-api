@@ -228,7 +228,7 @@ SELECT
     a.id, a.request_record_id, a.attempt_index, a.provider_id, a.channel_id, a.adapter_key, a.upstream_model, a.upstream_protocol, a.upstream_response_id, a.upstream_response_model, a.upstream_finish_reason, a.finish_class, a.status, a.upstream_status_code, a.upstream_request_id, a.error_code, a.error_message, a.internal_error_detail, a.upstream_timeout_phase, a.gateway_first_token_at, a.final_usage_received, a.usage_mapping_version, a.started_at, a.completed_at, a.created_at, a.upstream_started_at, a.upstream_first_token_at, a.upstream_completed_at, a.provider_origin_revision, a.provider_status_revision, a.channel_config_revision, a.routing_candidate_index, a.upstream_endpoint, a.breaker_provider_disposition, a.breaker_channel_disposition, a.ttft_scoring_sample, a.error_scoring_sample, a.error_scoring_failure, a.fault_party, a.permit_id, a.requested_service_tier, a.upstream_service_tier, a.forwarded_service_tier,
     c.name AS channel_name,
     cs.cost_multiplier AS channel_cost_multiplier,
-    cs.recharge_factor
+    cs.provider_recharge_rate
 FROM request_attempts a
 JOIN channels c ON c.id = a.channel_id
 LEFT JOIN cost_snapshots cs
@@ -291,7 +291,7 @@ type ListAdminRequestAttemptsByRequestRow struct {
 	ForwardedServiceTier       pgtype.Text
 	ChannelName                string
 	ChannelCostMultiplier      pgtype.Numeric
-	RechargeFactor             pgtype.Numeric
+	ProviderRechargeRate       pgtype.Numeric
 }
 
 // ListAdminRequestAttemptsByRequest 为 Admin 请求详情关联当前渠道名称，并把本请求冻结的成本倍率
@@ -351,7 +351,7 @@ func (q *Queries) ListAdminRequestAttemptsByRequest(ctx context.Context, request
 			&i.ForwardedServiceTier,
 			&i.ChannelName,
 			&i.ChannelCostMultiplier,
-			&i.RechargeFactor,
+			&i.ProviderRechargeRate,
 		); err != nil {
 			return nil, err
 		}
@@ -1038,6 +1038,7 @@ SELECT
     -- 多货币（D2 修订）：成本快照按 provider 币种记账，展示/毛利需要币种 + 钉档汇率 + USD 折算。
     cs.currency AS cost_currency,
     cs.fx_rate AS cost_fx_rate,
+    cs.fx_rate_date AS cost_fx_rate_date,
     cs.total_cost_amount_usd,
     cs.uncached_input_cost_amount,
     cs.cache_read_input_cost_amount,
@@ -1054,7 +1055,7 @@ SELECT
     cs.output_cost,
     cs.reasoning_output_cost,
     cs.cost_multiplier AS channel_cost_multiplier,
-    cs.recharge_factor,
+    cs.provider_recharge_rate,
     ps.uncached_input_price,
     ps.cache_read_input_price,
     ps.cache_creation_5m_input_price,
@@ -1228,6 +1229,7 @@ type ListRequestRecordsPageRow struct {
 	TotalCostAmount                 pgtype.Numeric
 	CostCurrency                    pgtype.Text
 	CostFxRate                      pgtype.Numeric
+	CostFxRateDate                  pgtype.Date
 	TotalCostAmountUsd              pgtype.Numeric
 	UncachedInputCostAmount         pgtype.Numeric
 	CacheReadInputCostAmount        pgtype.Numeric
@@ -1244,7 +1246,7 @@ type ListRequestRecordsPageRow struct {
 	OutputCost                      pgtype.Numeric
 	ReasoningOutputCost             pgtype.Numeric
 	ChannelCostMultiplier           pgtype.Numeric
-	RechargeFactor                  pgtype.Numeric
+	ProviderRechargeRate            pgtype.Numeric
 	UncachedInputPrice              pgtype.Numeric
 	CacheReadInputPrice             pgtype.Numeric
 	CacheCreation5mInputPrice       pgtype.Numeric
@@ -1355,6 +1357,7 @@ func (q *Queries) ListRequestRecordsPage(ctx context.Context, arg ListRequestRec
 			&i.TotalCostAmount,
 			&i.CostCurrency,
 			&i.CostFxRate,
+			&i.CostFxRateDate,
 			&i.TotalCostAmountUsd,
 			&i.UncachedInputCostAmount,
 			&i.CacheReadInputCostAmount,
@@ -1371,7 +1374,7 @@ func (q *Queries) ListRequestRecordsPage(ctx context.Context, arg ListRequestRec
 			&i.OutputCost,
 			&i.ReasoningOutputCost,
 			&i.ChannelCostMultiplier,
-			&i.RechargeFactor,
+			&i.ProviderRechargeRate,
 			&i.UncachedInputPrice,
 			&i.CacheReadInputPrice,
 			&i.CacheCreation5mInputPrice,

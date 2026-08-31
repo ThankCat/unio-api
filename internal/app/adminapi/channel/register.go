@@ -4,7 +4,8 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// Deps 是渠道模块的路由依赖（渠道 CRUD/运维/检测/绑定/成本价/成本倍率/充值倍率）。
+// Deps 是渠道模块的路由依赖（渠道 CRUD/运维/检测/绑定/成本价/成本倍率）。
+// 充值汇率归属服务商（provider 模块），渠道侧不再有充值倍率路由。
 type Deps struct {
 	Service               ChannelService
 	OpsService            ChannelOpsService
@@ -13,7 +14,6 @@ type Deps struct {
 	ModelInventoryService ChannelModelInventoryService
 	PriceService          ChannelPriceService
 	CostMultiplierService ChannelCostMultiplierService
-	RechargeFactorService ChannelRechargeFactorService
 	// Breaker 可选：Redis 全局 breaker 只读运行态与复位；nil 时 ops/runtime 与复位返回 503。
 	Breaker BreakerRuntime
 }
@@ -95,13 +95,5 @@ func Register(r chi.Router, d Deps) {
 		r.Get("/channels/{id}/cost-multipliers", ccmh.list)
 		r.Post("/channels/{id}/cost-multipliers", ccmh.create)
 		r.Patch("/channel-cost-multipliers/{id}", ccmh.update)
-	}
-
-	// DEC-027：渠道充值倍率挂在 channel 下（账户级）；数值不可改，PATCH 调窗口/启停用 id 定位。
-	if d.RechargeFactorService != nil {
-		crfh := &channelRechargeFactorsHandler{service: d.RechargeFactorService}
-		r.Get("/channels/{id}/recharge-factors", crfh.list)
-		r.Post("/channels/{id}/recharge-factors", crfh.create)
-		r.Patch("/channel-recharge-factors/{id}", crfh.update)
 	}
 }

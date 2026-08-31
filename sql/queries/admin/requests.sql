@@ -92,6 +92,7 @@ SELECT
     -- 多货币（D2 修订）：成本快照按 provider 币种记账，展示/毛利需要币种 + 钉档汇率 + USD 折算。
     cs.currency AS cost_currency,
     cs.fx_rate AS cost_fx_rate,
+    cs.fx_rate_date AS cost_fx_rate_date,
     cs.total_cost_amount_usd,
     cs.uncached_input_cost_amount,
     cs.cache_read_input_cost_amount,
@@ -108,7 +109,7 @@ SELECT
     cs.output_cost,
     cs.reasoning_output_cost,
     cs.cost_multiplier AS channel_cost_multiplier,
-    cs.recharge_factor,
+    cs.provider_recharge_rate,
     ps.uncached_input_price,
     ps.cache_read_input_price,
     ps.cache_creation_5m_input_price,
@@ -299,7 +300,7 @@ SELECT
     a.*,
     c.name AS channel_name,
     cs.cost_multiplier AS channel_cost_multiplier,
-    cs.recharge_factor
+    cs.provider_recharge_rate
 FROM request_attempts a
 JOIN channels c ON c.id = a.channel_id
 LEFT JOIN cost_snapshots cs

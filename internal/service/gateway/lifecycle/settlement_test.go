@@ -194,6 +194,7 @@ func (d *chatSettlementDBDeps) cleanup() {
 	}
 	if d.providerID != 0 {
 		_, _ = d.pool.Exec(ctx, `DELETE FROM provider_balances WHERE provider_id = $1`, d.providerID)
+		_, _ = d.pool.Exec(ctx, `DELETE FROM provider_recharge_rates WHERE provider_id = $1`, d.providerID)
 		_, _ = d.pool.Exec(ctx, `DELETE FROM providers WHERE id = $1`, d.providerID)
 	}
 	if d.modelID != 0 {
@@ -1393,16 +1394,18 @@ func TestChatSettlementMultiplierPathComputesAndPinsCost(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create channel cost multiplier: %v", err)
 	}
-	// 渠道充值倍率 0.5。
-	recharge, err := deps.queries.CreateChannelRechargeFactor(deps.ctx, sqlc.CreateChannelRechargeFactorParams{
-		ChannelID:     deps.channelID,
-		Factor:        testNumeric(5, -1), // 0.5
-		Status:        "enabled",
-		EffectiveFrom: pgtype.Timestamptz{Time: time.Now().Add(-time.Hour), Valid: true},
-		EffectiveTo:   pgtype.Timestamptz{Valid: false},
+	// 服务商充值汇率 0.5（服务商级，全渠道共享）。
+	recharge, err := deps.queries.CreateProviderRechargeRate(deps.ctx, sqlc.CreateProviderRechargeRateParams{
+		ProviderID:       deps.providerID,
+		ProviderCurrency: "USD",
+		Rate:             testNumeric(5, -1), // 0.5
+		Status:           "enabled",
+		Source:           "manual",
+		EffectiveFrom:    pgtype.Timestamptz{Time: time.Now().Add(-time.Hour), Valid: true},
+		EffectiveTo:      pgtype.Timestamptz{Valid: false},
 	})
 	if err != nil {
-		t.Fatalf("create channel recharge factor: %v", err)
+		t.Fatalf("create provider recharge rate: %v", err)
 	}
 
 	billingCalculator := chatSettlementBilling(testNumeric(61_000000, -10))
@@ -1414,7 +1417,7 @@ func TestChatSettlementMultiplierPathComputesAndPinsCost(t *testing.T) {
 	params.ChannelPriceID = 0
 	params.CostBaseModelPriceID = basePrice.ID
 	params.ChannelCostMultiplierID = mult.ID
-	params.ChannelRechargeFactorID = recharge.ID
+	params.ProviderRechargeRateID = recharge.ID
 
 	if err := service.SettleSuccessfulChat(deps.ctx, params); err != nil {
 		t.Fatalf("settle successful chat (multiplier path): %v", err)
@@ -1434,11 +1437,11 @@ func TestChatSettlementMultiplierPathComputesAndPinsCost(t *testing.T) {
 	if !costSnapshot.ChannelCostMultiplierID.Valid || costSnapshot.ChannelCostMultiplierID.Int64 != mult.ID {
 		t.Fatalf("expected channel_cost_multiplier_id %d, got valid=%v value=%d", mult.ID, costSnapshot.ChannelCostMultiplierID.Valid, costSnapshot.ChannelCostMultiplierID.Int64)
 	}
-	if !costSnapshot.ChannelRechargeFactorID.Valid || costSnapshot.ChannelRechargeFactorID.Int64 != recharge.ID {
-		t.Fatalf("expected channel_recharge_factor_id %d, got valid=%v value=%d", recharge.ID, costSnapshot.ChannelRechargeFactorID.Valid, costSnapshot.ChannelRechargeFactorID.Int64)
+	if !costSnapshot.ProviderRechargeRateID.Valid || costSnapshot.ProviderRechargeRateID.Int64 != recharge.ID {
+		t.Fatalf("expected provider_recharge_rate_id %d, got valid=%v value=%d", recharge.ID, costSnapshot.ProviderRechargeRateID.Valid, costSnapshot.ProviderRechargeRateID.Int64)
 	}
-	assertNumericEqual(t, costSnapshot.CostMultiplier, testNumeric(12, -2)) // 0.12
-	assertNumericEqual(t, costSnapshot.RechargeFactor, testNumeric(5, -1))  // 0.5
+	assertNumericEqual(t, costSnapshot.CostMultiplier, testNumeric(12, -2))      // 0.12
+	assertNumericEqual(t, costSnapshot.ProviderRechargeRate, testNumeric(5, -1)) // 0.5
 
 	// 真实成本单价 = 基准价（model_prices） × 0.12 × 0.5（= ×0.06）。
 	assertNumericEqual(t, costSnapshot.UncachedInputCost, testNumeric(6_0000000000, -10)) // 100.0 × 0.06

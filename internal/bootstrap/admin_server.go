@@ -14,6 +14,7 @@ import (
 	openaideepseek "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/deepseek/chatcompletions"
 	"github.com/ThankCat/unio-gateway/internal/core/adminauth"
 	"github.com/ThankCat/unio-gateway/internal/core/capability"
+	"github.com/ThankCat/unio-gateway/internal/core/fx"
 	"github.com/ThankCat/unio-gateway/internal/core/ledger"
 	"github.com/ThankCat/unio-gateway/internal/core/providerledger"
 	"github.com/ThankCat/unio-gateway/internal/core/runtimecontrol"
@@ -35,7 +36,6 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/service/admin/channelmodelinventory"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/channelops"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/channelprice"
-	"github.com/ThankCat/unio-gateway/internal/service/admin/channelrechargefactor"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/channeltest"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/customer"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/customerops"
@@ -50,6 +50,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/service/admin/provider"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/providerbalance"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/providerops"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/providerrechargerate"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/query"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/routingtrace"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/runtimediagnostics"
@@ -160,7 +161,7 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 
 	providerService := provider.NewService(queries)
 	providerOpsService := providerops.NewService(queries)
-	providerLedgerService := providerledger.NewService(deps.DB, queries)
+	providerLedgerService := providerledger.NewService(deps.DB, queries).WithFxRates(fx.NewService(queries, 0))
 	providerBalanceService := providerbalance.NewService(queries, providerLedgerService)
 	adminMessageService := adminmessage.NewService(queries)
 	exchangeRateService := exchangerate.NewService(queries, settingsStore, deps.Config.ExchangeRate.APIKey)
@@ -231,9 +232,9 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 	)
 	channelPriceService := channelprice.NewService(queries)
 	modelPriceService := modelprice.NewService(queries, deps.DB, queries)
-	// DEC-027 渠道成本倍率：渠道价格倍率 / 渠道充值倍率，均复用同一 sqlc Queries。
+	// DEC-027 渠道价格倍率 + 服务商充值汇率，均复用同一 sqlc Queries。
 	channelCostMultiplierService := channelcostmultiplier.NewService(queries)
-	channelRechargeFactorService := channelrechargefactor.NewService(queries)
+	providerRechargeRateService := providerrechargerate.NewService(queries)
 	routingTraceService := routingtrace.NewService(queries)
 
 	// M6 只读查询台：请求记录 / 账本，只读 service 共用同一 sqlc Queries。
@@ -327,7 +328,7 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		ModelPriceService:            modelPriceService,
 
 		ChannelCostMultiplierService: channelCostMultiplierService,
-		ChannelRechargeFactorService: channelRechargeFactorService,
+		ProviderRechargeRateService:  providerRechargeRateService,
 
 		RoutingTraceService: routingTraceService,
 		RequestQueryService: requestQueryService,

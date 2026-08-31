@@ -239,17 +239,6 @@ type ChannelPriceServiceTier struct {
 	CreatedAt                 pgtype.Timestamptz
 }
 
-type ChannelRechargeFactor struct {
-	ID            int64
-	ChannelID     int64
-	Factor        pgtype.Numeric
-	Status        string
-	EffectiveFrom pgtype.Timestamptz
-	EffectiveTo   pgtype.Timestamptz
-	CreatedAt     pgtype.Timestamptz
-	UpdatedAt     pgtype.Timestamptz
-}
-
 type ChannelTestLog struct {
 	ID                   int64
 	ChannelID            int64
@@ -299,8 +288,6 @@ type CostSnapshot struct {
 	CostBaseModelPriceID            pgtype.Int8
 	ChannelCostMultiplierID         pgtype.Int8
 	CostMultiplier                  pgtype.Numeric
-	ChannelRechargeFactorID         pgtype.Int8
-	RechargeFactor                  pgtype.Numeric
 	LongContextApplied              bool
 	ServiceTier                     pgtype.Text
 	ModelPriceServiceTierID         pgtype.Int8
@@ -309,6 +296,8 @@ type CostSnapshot struct {
 	FxRate                          pgtype.Numeric
 	FxRateDate                      pgtype.Date
 	TotalCostAmountUsd              pgtype.Numeric
+	ProviderRechargeRateID          pgtype.Int8
+	ProviderRechargeRate            pgtype.Numeric
 }
 
 type ExchangeRate struct {
@@ -601,6 +590,9 @@ type ProviderLedgerEntry struct {
 	Reason                string
 	CreatedAt             pgtype.Timestamptz
 	UsageSource           pgtype.Text
+	AmountUsd             pgtype.Numeric
+	FxRate                pgtype.Numeric
+	FxRateDate            pgtype.Date
 }
 
 type ProviderProbeRecord struct {
@@ -624,6 +616,22 @@ type ProviderProbeRecord struct {
 	FormulaVersion pgtype.Text
 	IdempotencyKey string
 	CreatedAt      pgtype.Timestamptz
+}
+
+type ProviderRechargeRate struct {
+	ID               int64
+	ProviderID       int64
+	ProviderCurrency string
+	NominalCurrency  string
+	Rate             pgtype.Numeric
+	Status           string
+	Source           string
+	Reason           pgtype.Text
+	CreatedBy        pgtype.Text
+	EffectiveFrom    pgtype.Timestamptz
+	EffectiveTo      pgtype.Timestamptz
+	CreatedAt        pgtype.Timestamptz
+	UpdatedAt        pgtype.Timestamptz
 }
 
 type ProviderRoutingOperation struct {
@@ -868,7 +876,7 @@ type SettlementRecoveryJob struct {
 	CacheCreation30mInputPrice            pgtype.Numeric
 	CostBaseModelPriceID                  pgtype.Int8
 	ChannelCostMultiplierID               pgtype.Int8
-	ChannelRechargeFactorID               pgtype.Int8
+	ProviderRechargeRateID                pgtype.Int8
 	RequestFinalStatus                    string
 	AttemptFinalStatus                    string
 	SettlementErrorCode                   string

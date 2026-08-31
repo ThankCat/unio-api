@@ -45,34 +45,46 @@ type Row struct {
 	StatusRevision int64
 	CreatedAt      time.Time
 	// 多货币（D2）：Balance/Currency 是原币记账事实；BalanceUSD 是按最新汇率折算的展示口径（缺汇率为 nil）。
-	Currency      string
-	Balance       *string
-	BalanceUSD    *string
-	BalanceStatus string
-	ChannelTotal  int64
-	ModelsCount   int64
+	Currency          string
+	Balance           *string
+	BalanceUSD        *string
+	BalanceFxRate     *string
+	BalanceFxRateDate *time.Time
+	BalanceStatus     string
+	// 服务商当前生效充值汇率（服务商级，全渠道共享；未配置为 nil，渠道不可启用/不进路由）。
+	CurrentRechargeRateID        *int64
+	CurrentRechargeRate          *string
+	CurrentRechargeEffectiveFrom *time.Time
+	ChannelTotal                 int64
+	ModelsCount                  int64
 }
 
 // Detail 是详情页概览（含 attempt/延迟/Token/利润/TPS 等运维指标）。
 type Detail struct {
 	// 多货币（D2）：Balance/BalanceCurrency 原币事实，BalanceUSD 折算展示口径（缺汇率为 nil）。
-	Balance          *string
-	BalanceCurrency  string
-	BalanceUSD       *string
-	BalanceStatus    string
-	ChannelTotal     int64
-	ChannelEnabled   int64
-	AttemptTotal     int64
-	AttemptSucceeded int64
-	SuccessRate      float64
-	TimeoutTotal     int64
-	Latency          opsutil.LatencyStats
-	Tokens           int64
-	RevenueUSD       string
-	CostUSD          string
-	MarginUSD        string
-	AvgTPS           float64
-	Cache            opsutil.CacheStats
+	Balance           *string
+	BalanceCurrency   string
+	BalanceUSD        *string
+	BalanceFxRate     *string
+	BalanceFxRateDate *time.Time
+	BalanceStatus     string
+	// 服务商当前生效充值汇率（未配置为 nil）。
+	CurrentRechargeRateID        *int64
+	CurrentRechargeRate          *string
+	CurrentRechargeEffectiveFrom *time.Time
+	ChannelTotal                 int64
+	ChannelEnabled               int64
+	AttemptTotal                 int64
+	AttemptSucceeded             int64
+	SuccessRate                  float64
+	TimeoutTotal                 int64
+	Latency                      opsutil.LatencyStats
+	Tokens                       int64
+	RevenueUSD                   string
+	CostUSD                      string
+	MarginUSD                    string
+	AvgTPS                       float64
+	Cache                        opsutil.CacheStats
 }
 
 // ChannelCatalogRow 是列表 Tip 渠道行。
@@ -159,20 +171,25 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 	out := make([]Row, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, Row{
-			ID:             r.ID,
-			Slug:           r.Slug,
-			Name:           r.Name,
-			Status:         r.Status,
-			Origin:         r.Origin,
-			OriginRevision: r.OriginRevision,
-			StatusRevision: r.StatusRevision,
-			CreatedAt:      r.CreatedAt.Time,
-			Currency:       r.Currency,
-			Balance:        opsutil.NumericStringPtr(r.Balance),
-			BalanceUSD:     opsutil.NumericStringPtr(r.BalanceUsd),
-			BalanceStatus:  r.BalanceStatus,
-			ChannelTotal:   r.ChannelTotal,
-			ModelsCount:    r.ModelsCount,
+			ID:                           r.ID,
+			Slug:                         r.Slug,
+			Name:                         r.Name,
+			Status:                       r.Status,
+			Origin:                       r.Origin,
+			OriginRevision:               r.OriginRevision,
+			StatusRevision:               r.StatusRevision,
+			CreatedAt:                    r.CreatedAt.Time,
+			Currency:                     r.Currency,
+			Balance:                      opsutil.NumericStringPtr(r.Balance),
+			BalanceUSD:                   opsutil.NumericStringPtr(r.BalanceUsd),
+			BalanceFxRate:                opsutil.NumericStringPtr(r.FxRate),
+			BalanceFxRateDate:            datePtr(r.FxRateDate),
+			BalanceStatus:                r.BalanceStatus,
+			CurrentRechargeRateID:        zeroableID(r.CurrentRechargeRateID),
+			CurrentRechargeRate:          opsutil.NumericStringPtr(r.CurrentRechargeRate),
+			CurrentRechargeEffectiveFrom: tsPtr(r.CurrentRechargeEffectiveFrom),
+			ChannelTotal:                 r.ChannelTotal,
+			ModelsCount:                  r.ModelsCount,
 		})
 	}
 	return out, total, nil
@@ -187,16 +204,21 @@ func (s *Service) Detail(ctx context.Context, providerID int64, from, to time.Ti
 	revenue := opsutil.NumericString(r.RevenueUsd)
 	cost := opsutil.NumericString(r.CostUsd)
 	return Detail{
-		Balance:          opsutil.NumericStringPtr(r.Balance),
-		BalanceCurrency:  r.BalanceCurrency,
-		BalanceUSD:       opsutil.NumericStringPtr(r.BalanceUsd),
-		BalanceStatus:    r.BalanceStatus,
-		ChannelTotal:     r.ChannelTotal,
-		ChannelEnabled:   r.ChannelEnabled,
-		AttemptTotal:     r.AttemptTotal,
-		AttemptSucceeded: r.AttemptSucceeded,
-		SuccessRate:      opsutil.SuccessRate(r.AttemptSucceeded, r.AttemptTotal),
-		TimeoutTotal:     r.TimeoutTotal,
+		Balance:                      opsutil.NumericStringPtr(r.Balance),
+		BalanceCurrency:              r.BalanceCurrency,
+		BalanceUSD:                   opsutil.NumericStringPtr(r.BalanceUsd),
+		BalanceFxRate:                opsutil.NumericStringPtr(r.BalanceFxRate),
+		BalanceFxRateDate:            datePtr(r.BalanceFxRateDate),
+		BalanceStatus:                r.BalanceStatus,
+		CurrentRechargeRateID:        zeroableID(r.CurrentRechargeRateID),
+		CurrentRechargeRate:          opsutil.NumericStringPtr(r.CurrentRechargeRate),
+		CurrentRechargeEffectiveFrom: tsPtr(r.CurrentRechargeEffectiveFrom),
+		ChannelTotal:                 r.ChannelTotal,
+		ChannelEnabled:               r.ChannelEnabled,
+		AttemptTotal:                 r.AttemptTotal,
+		AttemptSucceeded:             r.AttemptSucceeded,
+		SuccessRate:                  opsutil.SuccessRate(r.AttemptSucceeded, r.AttemptTotal),
+		TimeoutTotal:                 r.TimeoutTotal,
 		Latency: opsutil.AttemptLatency(
 			r.LatencyAvg, r.LatencyP50, r.LatencyP90, r.LatencyP95, r.LatencyP99,
 			r.LatencySample, r.AttemptSucceeded,
@@ -318,4 +340,31 @@ func (s *Service) Errors(ctx context.Context, providerID int64, from, to time.Ti
 		})
 	}
 	return out, total, nil
+}
+
+// datePtr 把可空 DATE 转成 *time.Time。
+func datePtr(v pgtype.Date) *time.Time {
+	if !v.Valid {
+		return nil
+	}
+	t := v.Time
+	return &t
+}
+
+// tsPtr 把可空 TIMESTAMPTZ 转成 *time.Time。
+func tsPtr(v pgtype.Timestamptz) *time.Time {
+	if !v.Valid {
+		return nil
+	}
+	t := v.Time
+	return &t
+}
+
+// zeroableID 把「COALESCE 归一为 0 的可空 id」转回 *int64（0 = 未配置 → nil）。
+func zeroableID(v int64) *int64 {
+	if v == 0 {
+		return nil
+	}
+	n := v
+	return &n
 }

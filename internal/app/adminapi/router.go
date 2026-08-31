@@ -67,9 +67,10 @@ type RouterDeps struct {
 	// 模型定价：客户售价 = 模型绝对售价，或基准价 × 该模型的售价倍率。
 	ModelPriceService model.ModelPriceService
 
-	// DEC-027：渠道成本倍率（渠道真实成本 = 模型上游参考成本 × 价格倍率 × 充值倍率）。
+	// DEC-027：渠道价格倍率（渠道真实成本 = 模型基准价 × 价格倍率 × 服务商充值汇率）。
 	ChannelCostMultiplierService channel.ChannelCostMultiplierService
-	ChannelRechargeFactorService channel.ChannelRechargeFactorService
+	// 服务商充值汇率（服务商级，全渠道共享）。
+	ProviderRechargeRateService provider.ProviderRechargeRateService
 
 	// M6 只读查询台
 	RequestQueryService requests.RequestQueryService
@@ -191,10 +192,11 @@ func NewRouter(deps RouterDeps) http.Handler {
 				LiveTraffic: deps.LiveTrafficService,
 			})
 			provider.Register(r, provider.Deps{
-				Service:        deps.ProviderService,
-				OpsService:     deps.ProviderOpsService,
-				BalanceService: deps.ProviderBalanceService,
-				Breaker:        deps.ProviderBreaker,
+				Service:             deps.ProviderService,
+				OpsService:          deps.ProviderOpsService,
+				BalanceService:      deps.ProviderBalanceService,
+				RechargeRateService: deps.ProviderRechargeRateService,
+				Breaker:             deps.ProviderBreaker,
 			})
 			channel.Register(r, channel.Deps{
 				Service:               deps.ChannelService,
@@ -204,7 +206,6 @@ func NewRouter(deps RouterDeps) http.Handler {
 				ModelInventoryService: deps.ChannelModelInventoryService,
 				PriceService:          deps.ChannelPriceService,
 				CostMultiplierService: deps.ChannelCostMultiplierService,
-				RechargeFactorService: deps.ChannelRechargeFactorService,
 				Breaker:               deps.ChannelBreaker,
 			})
 			model.Register(r, model.Deps{

@@ -53,7 +53,7 @@ INSERT INTO settlement_recovery_jobs (
     price_id,
     cost_base_model_price_id,
     channel_cost_multiplier_id,
-    channel_recharge_factor_id,
+    provider_recharge_rate_id,
     currency,
     pricing_unit,
     uncached_input_price,
@@ -126,7 +126,7 @@ SELECT
            sqlc.narg(price_id),
            sqlc.narg(cost_base_model_price_id),
            sqlc.narg(channel_cost_multiplier_id),
-           sqlc.narg(channel_recharge_factor_id),
+           sqlc.narg(provider_recharge_rate_id),
            sqlc.arg(currency),
            sqlc.arg(pricing_unit),
            sqlc.arg(uncached_input_price),
@@ -199,7 +199,7 @@ WHERE settlement_recovery_jobs.user_id = EXCLUDED.user_id
   AND settlement_recovery_jobs.price_id IS NOT DISTINCT FROM EXCLUDED.price_id
   AND settlement_recovery_jobs.cost_base_model_price_id IS NOT DISTINCT FROM EXCLUDED.cost_base_model_price_id
   AND settlement_recovery_jobs.channel_cost_multiplier_id IS NOT DISTINCT FROM EXCLUDED.channel_cost_multiplier_id
-  AND settlement_recovery_jobs.channel_recharge_factor_id IS NOT DISTINCT FROM EXCLUDED.channel_recharge_factor_id
+  AND settlement_recovery_jobs.provider_recharge_rate_id IS NOT DISTINCT FROM EXCLUDED.provider_recharge_rate_id
   AND settlement_recovery_jobs.currency = EXCLUDED.currency
   AND settlement_recovery_jobs.pricing_unit = EXCLUDED.pricing_unit
   AND settlement_recovery_jobs.uncached_input_price = EXCLUDED.uncached_input_price

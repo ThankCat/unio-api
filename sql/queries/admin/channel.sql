@@ -244,57 +244,6 @@ SET effective_to = sqlc.arg(effective_to),
 WHERE id = sqlc.arg(id)
 RETURNING *;
 
--- name: CreateChannelRechargeFactor :one
--- CreateChannelRechargeFactor 创建一条渠道充值倍率（DEC-027）。渠道真实成本 = 上游名义成本 × 本充值倍率。
--- 启用窗口重叠由 ex_channel_recharge_factors_enabled_window 保证，违反报 23P01。
-INSERT INTO channel_recharge_factors (
-    channel_id,
-    factor,
-    status,
-    effective_from,
-    effective_to
-)
-VALUES (
-    sqlc.arg(channel_id),
-    sqlc.arg(factor),
-    sqlc.arg(status),
-    sqlc.arg(effective_from),
-    sqlc.arg(effective_to)
-)
-RETURNING *;
-
--- name: ListChannelRechargeFactorsByChannel :many
--- ListChannelRechargeFactorsByChannel 列出某 channel 的全部充值倍率（含历史与停用），供 admin 管理台展示。
-SELECT
-    id,
-    channel_id,
-    factor,
-    status,
-    effective_from,
-    effective_to,
-    created_at,
-    updated_at
-FROM channel_recharge_factors
-WHERE channel_id = sqlc.arg(channel_id)
-ORDER BY effective_from DESC, id DESC;
-
--- name: ListEnabledChannelRechargeFactorWindows :many
--- ListEnabledChannelRechargeFactorWindows 取某 channel 全部启用中的充值倍率生效窗口，供「窗口不重叠」校验；exclude_id 用于更新时排除自身（创建时传 0）。
-SELECT id, effective_from, effective_to
-FROM channel_recharge_factors
-WHERE channel_id = sqlc.arg(channel_id)
-    AND status = 'enabled'
-    AND id <> sqlc.arg(exclude_id);
-
--- name: UpdateChannelRechargeFactorWindow :one
--- UpdateChannelRechargeFactorWindow 调整生效结束时间与启停状态；倍率数值不可改（改倍率请新建一条），账务可复算。
-UPDATE channel_recharge_factors
-SET effective_to = sqlc.arg(effective_to),
-    status = sqlc.arg(status),
-    updated_at = now()
-WHERE id = sqlc.arg(id)
-RETURNING *;
-
 -- name: ListChannelTestLogsByChannel :many
 -- ListChannelTestLogsByChannel 按渠道倒序分页返回检测日志（详情页「检测日志」区块）。
 SELECT id, channel_id, created_at, source, success, error_code, http_status, latency_ms, tested_model, credential_valid_after, message, upstream_error, tested_origin_revision, tested_status_revision, tested_config_revision, state_change_applied
@@ -635,8 +584,8 @@ WHERE id = sqlc.arg(id) AND status = 'archived';
 -- name: DeleteChannelCascade :execrows
 -- DeleteChannelCascade 物理删除 channel，用于清理录错且从未使用的脏数据，并在同一条语句内
 -- 级联清理 channel 自身的全部配置子表：channel_models（模型绑定）、channel_prices（渠道-模型价，
--- 绝对成本覆盖）及其 Fast 档子行（channel_price_service_tiers）、channel_cost_multipliers（价格倍率，DEC-027）、
--- channel_recharge_factors（充值倍率，DEC-027）。
+-- 绝对成本覆盖）及其 Fast 档子行（channel_price_service_tiers）、channel_cost_multipliers（价格倍率，DEC-027）。
+-- 充值汇率归属服务商（provider_recharge_rates），不随渠道删除。
 -- 这些都是「渠道自身配置」（无请求/账务事实），随渠道硬删一并清理；channel_test_logs 与
 -- channel_model_discovery/verification 的 runs/items 走 ON DELETE CASCADE 自动清。
 -- provider_probe_records（探测事实）的 channel_id 非空，随渠道一并删除；若某条探测已产生
@@ -660,9 +609,6 @@ deleted_channel_models AS (
 ),
 deleted_channel_cost_multipliers AS (
     DELETE FROM channel_cost_multipliers WHERE channel_cost_multipliers.channel_id = sqlc.arg(id)
-),
-deleted_channel_recharge_factors AS (
-    DELETE FROM channel_recharge_factors WHERE channel_recharge_factors.channel_id = sqlc.arg(id)
 ),
 deleted_provider_probe_records AS (
     DELETE FROM provider_probe_records WHERE provider_probe_records.channel_id = sqlc.arg(id)
@@ -715,16 +661,18 @@ SELECT
           AND ccm.effective_from <= now()
           AND (ccm.effective_to IS NULL OR ccm.effective_to > now())
     ) AS cost_multiplier_overrides,
+    -- 服务商当前生效充值汇率（服务商级，全渠道共享，渠道侧只读展示；未配置为 NULL）。
     (
-        SELECT crf.factor
-        FROM channel_recharge_factors crf
-        WHERE crf.channel_id = c.id
-          AND crf.status = 'enabled'
-          AND crf.effective_from <= now()
-          AND (crf.effective_to IS NULL OR crf.effective_to > now())
-        ORDER BY crf.effective_from DESC, crf.id DESC
+        SELECT prr.rate
+        FROM provider_recharge_rates prr
+        WHERE prr.provider_id = c.provider_id
+          AND prr.status = 'enabled'
+          AND prr.effective_from <= now()
+          AND (prr.effective_to IS NULL OR prr.effective_to > now())
+        ORDER BY prr.effective_from DESC, prr.id DESC
         LIMIT 1
-    ) AS recharge_factor,
+    ) AS provider_recharge_rate,
+    c.provider_id,
     pr.name AS provider_name,
     pr.currency AS provider_currency,
     COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream') AS attempt_total,

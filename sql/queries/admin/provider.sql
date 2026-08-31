@@ -115,6 +115,58 @@ WHERE id = sqlc.arg(id)
 -- name: CountNonArchivedChannelsByProvider :one
 SELECT COUNT(*) FROM channels WHERE provider_id = sqlc.arg(provider_id) AND status <> 'archived';
 
+-- name: CreateProviderRechargeRate :one
+-- CreateProviderRechargeRate 创建一条服务商充值汇率版本。provider_currency 由服务端从 providers.currency
+-- 快照写入，不受客户端控制；启用窗口重叠由 ex_provider_recharge_rates_enabled_window 保证，违反报 23P01。
+INSERT INTO provider_recharge_rates (
+    provider_id,
+    provider_currency,
+    rate,
+    status,
+    source,
+    reason,
+    created_by,
+    effective_from,
+    effective_to
+)
+VALUES (
+    sqlc.arg(provider_id),
+    sqlc.arg(provider_currency),
+    sqlc.arg(rate),
+    sqlc.arg(status),
+    sqlc.arg(source),
+    sqlc.narg(reason),
+    sqlc.narg(created_by),
+    sqlc.arg(effective_from),
+    sqlc.arg(effective_to)
+)
+RETURNING *;
+
+-- name: ListProviderRechargeRatesByProvider :many
+-- ListProviderRechargeRatesByProvider 列出某 provider 的全部充值汇率版本（含历史与停用），供服务商详情展示。
+SELECT *
+FROM provider_recharge_rates
+WHERE provider_id = sqlc.arg(provider_id)
+ORDER BY effective_from DESC, id DESC;
+
+-- name: ListEnabledProviderRechargeRateWindows :many
+-- ListEnabledProviderRechargeRateWindows 取某 provider 全部启用中的充值汇率生效窗口，供「窗口不重叠」校验；
+-- exclude_id 用于更新时排除自身（创建时传 0）。
+SELECT id, effective_from, effective_to
+FROM provider_recharge_rates
+WHERE provider_id = sqlc.arg(provider_id)
+    AND status = 'enabled'
+    AND id <> sqlc.arg(exclude_id);
+
+-- name: UpdateProviderRechargeRateWindow :one
+-- UpdateProviderRechargeRateWindow 调整生效结束时间与启停状态；汇率数值不可改（改汇率请新建一条），账务可复算。
+UPDATE provider_recharge_rates
+SET effective_to = sqlc.arg(effective_to),
+    status = sqlc.arg(status),
+    updated_at = now()
+WHERE id = sqlc.arg(id)
+RETURNING *;
+
 -- name: CountEnabledChannelsByProvider :one
 SELECT COUNT(*) FROM channels WHERE provider_id = sqlc.arg(provider_id) AND status = 'enabled';
 
@@ -138,6 +190,11 @@ SELECT
     pb.balance AS balance,
     (CASE WHEN p.currency = 'USD' THEN pb.balance ELSE pb.balance / fx.rate END)::numeric AS balance_usd,
     fx.rate AS fx_rate,
+    fx.rate_date AS fx_rate_date,
+    -- 服务商当前生效充值汇率（服务商级，其下所有渠道共享；未配置时 rate 为 NULL、id 为 0，渠道不可启用/不进路由）。
+    COALESCE(prr.id, 0)::bigint AS current_recharge_rate_id,
+    prr.rate AS current_recharge_rate,
+    prr.effective_from AS current_recharge_effective_from,
     -- 低余额判定按 USD 等值口径（§12.C.5）；缺汇率时比较为 NULL，落到 normal 不误报。
     CASE
         WHEN pb.balance IS NULL THEN 'unconfigured'
@@ -155,12 +212,22 @@ SELECT
 FROM providers p
 LEFT JOIN provider_balances pb ON pb.provider_id = p.id AND pb.currency = p.currency
 LEFT JOIN LATERAL (
-    SELECT er.rate
+    SELECT er.rate, er.rate_date
     FROM exchange_rates er
     WHERE er.base_currency = 'USD' AND er.quote_currency = p.currency
     ORDER BY er.rate_date DESC, er.fetched_at DESC
     LIMIT 1
 ) fx ON p.currency <> 'USD'
+LEFT JOIN LATERAL (
+    SELECT r.id, r.rate, r.effective_from
+    FROM provider_recharge_rates r
+    WHERE r.provider_id = p.id
+      AND r.status = 'enabled'
+      AND r.effective_from <= now()
+      AND (r.effective_to IS NULL OR r.effective_to > now())
+    ORDER BY r.effective_from DESC, r.id DESC
+    LIMIT 1
+) prr ON TRUE
 WHERE (sqlc.narg('status')::text IS NULL OR p.status = sqlc.narg('status')::text)
   AND (sqlc.narg('search')::text IS NULL OR p.name ILIKE '%' || sqlc.narg('search')::text || '%' OR p.slug ILIKE '%' || sqlc.narg('search')::text || '%')
   AND (
@@ -243,18 +310,33 @@ WITH money AS (
       AND (sqlc.narg('to_time')::timestamptz IS NULL OR r.created_at < sqlc.narg('to_time')::timestamptz)
 ),
 balance AS (
-    -- 余额按 provider 原始币种行读取（D2），折算列供展示。
+    -- 余额按 provider 原始币种行读取（D2），折算列供展示；同时带出估值汇率与当前充值汇率。
     SELECT pb.balance, p.currency,
-        (CASE WHEN p.currency = 'USD' THEN pb.balance ELSE pb.balance / fx.rate END)::numeric AS balance_usd
+        (CASE WHEN p.currency = 'USD' THEN pb.balance ELSE pb.balance / fx.rate END)::numeric AS balance_usd,
+        fx.rate AS fx_rate,
+        fx.rate_date AS fx_rate_date,
+        COALESCE(prr.id, 0)::bigint AS current_recharge_rate_id,
+        prr.rate AS current_recharge_rate,
+        prr.effective_from AS current_recharge_effective_from
     FROM providers p
     LEFT JOIN provider_balances pb ON pb.provider_id = p.id AND pb.currency = p.currency
     LEFT JOIN LATERAL (
-        SELECT er.rate
+        SELECT er.rate, er.rate_date
         FROM exchange_rates er
         WHERE er.base_currency = 'USD' AND er.quote_currency = p.currency
         ORDER BY er.rate_date DESC, er.fetched_at DESC
         LIMIT 1
     ) fx ON p.currency <> 'USD'
+    LEFT JOIN LATERAL (
+        SELECT r.id, r.rate, r.effective_from
+        FROM provider_recharge_rates r
+        WHERE r.provider_id = p.id
+          AND r.status = 'enabled'
+          AND r.effective_from <= now()
+          AND (r.effective_to IS NULL OR r.effective_to > now())
+        ORDER BY r.effective_from DESC, r.id DESC
+        LIMIT 1
+    ) prr ON TRUE
     WHERE p.id = sqlc.arg('provider_id')
 ),
 tps AS (
@@ -354,6 +436,11 @@ SELECT
     (SELECT balance FROM balance) AS balance,
     (SELECT currency FROM balance) AS balance_currency,
     (SELECT balance_usd FROM balance) AS balance_usd,
+    (SELECT fx_rate FROM balance) AS balance_fx_rate,
+    (SELECT fx_rate_date FROM balance) AS balance_fx_rate_date,
+    (SELECT current_recharge_rate_id FROM balance) AS current_recharge_rate_id,
+    (SELECT current_recharge_rate FROM balance) AS current_recharge_rate,
+    (SELECT current_recharge_effective_from FROM balance) AS current_recharge_effective_from,
     CASE
         WHEN (SELECT balance FROM balance) IS NULL THEN 'unconfigured'
         WHEN (SELECT balance FROM balance) < 0 THEN 'negative'

@@ -51,6 +51,7 @@ type Store interface {
 	ArchiveChannel(ctx context.Context, id int64) (int64, error)
 	CountEnabledBindingsByChannel(ctx context.Context, channelID int64) (int64, error)
 	RestoreChannel(ctx context.Context, id int64) (int64, error)
+	FindActiveProviderRechargeRate(ctx context.Context, arg sqlc.FindActiveProviderRechargeRateParams) (sqlc.ProviderRechargeRate, error)
 }
 
 // TxBeginner 提供事务能力（由 pgxpool 满足），用于 Channel 实体停用时的
@@ -454,6 +455,11 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Channel, error) {
 	if status == StatusEnabled && provider.Status != StatusEnabled {
 		return Channel{}, conflict("enabled channel requires an enabled provider")
 	}
+	if status == StatusEnabled {
+		if err := s.ensureProviderRechargeRateConfigured(ctx, provider.ID); err != nil {
+			return Channel{}, err
+		}
+	}
 
 	row, err := s.store.CreateChannel(ctx, sqlc.CreateChannelParams{
 		ProviderID:          in.ProviderID,
@@ -542,6 +548,11 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Channel, error) {
 	}
 	if status == StatusEnabled && provider.Status != StatusEnabled {
 		return Channel{}, conflict("enabled channel requires an enabled provider")
+	}
+	if status == StatusEnabled && cur.Status != StatusEnabled {
+		if err := s.ensureProviderRechargeRateConfigured(ctx, provider.ID); err != nil {
+			return Channel{}, err
+		}
 	}
 	// 暂停 Channel 只改变运行流量状态；影响预览用于说明哪些 Offering 可能转为 503。
 	disabling := cur.Status == StatusEnabled && status == StatusDisabled
@@ -924,6 +935,22 @@ func (s *Service) Restore(ctx context.Context, id int64) error {
 		return notFound("channel not found or not archived")
 	}
 	return nil
+}
+
+// ensureProviderRechargeRateConfigured 校验 provider 存在当前生效充值汇率（D-02 严格拦截）：
+// 服务商未配置充值汇率时真实成本口径不明，其渠道不可启用（路由候选查询同样过滤）。
+func (s *Service) ensureProviderRechargeRateConfigured(ctx context.Context, providerID int64) error {
+	_, err := s.store.FindActiveProviderRechargeRate(ctx, sqlc.FindActiveProviderRechargeRateParams{
+		ProviderID: providerID,
+		AtTime:     pgtype.Timestamptz{Time: time.Now(), Valid: true},
+	})
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		return conflict("provider has no active recharge rate; configure it in the provider settings before enabling channels")
+	}
+	return storeFailed(err, "find active provider recharge rate")
 }
 
 func toChannel(c sqlc.Channel) Channel {

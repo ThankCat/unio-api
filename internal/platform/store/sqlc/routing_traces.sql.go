@@ -590,8 +590,8 @@ SELECT
     cost.reasoning_output_cost,
     COALESCE(mult.id, 0)::bigint AS channel_cost_multiplier_id,
     mult.multiplier AS cost_multiplier,
-    COALESCE(recharge.id, 0)::bigint AS channel_recharge_factor_id,
-    recharge.factor AS recharge_factor
+    COALESCE(recharge.id, 0)::bigint AS provider_recharge_rate_id,
+    recharge.rate AS provider_recharge_rate
 FROM channels c
 JOIN providers p ON p.id = c.provider_id
 LEFT JOIN models m
@@ -637,13 +637,13 @@ LEFT JOIN LATERAL (
     LIMIT 1
 ) mult ON TRUE
 LEFT JOIN LATERAL (
-    SELECT crf.id, crf.factor
-    FROM channel_recharge_factors crf
-    WHERE crf.channel_id = c.id
-      AND crf.status = 'enabled'
-      AND crf.effective_from <= $2
-      AND (crf.effective_to IS NULL OR crf.effective_to > $2)
-    ORDER BY crf.effective_from DESC, crf.id DESC
+    SELECT prr.id, prr.rate
+    FROM provider_recharge_rates prr
+    WHERE prr.provider_id = p.id
+      AND prr.status = 'enabled'
+      AND prr.effective_from <= $2
+      AND (prr.effective_to IS NULL OR prr.effective_to > $2)
+    ORDER BY prr.effective_from DESC, prr.id DESC
     LIMIT 1
 ) recharge ON TRUE
 WHERE c.status <> 'archived'
@@ -702,8 +702,8 @@ type ModelRuntimePoolRow struct {
 	ReasoningOutputCost        pgtype.Numeric
 	ChannelCostMultiplierID    int64
 	CostMultiplier             pgtype.Numeric
-	ChannelRechargeFactorID    int64
-	RechargeFactor             pgtype.Numeric
+	ProviderRechargeRateID     int64
+	ProviderRechargeRate       pgtype.Numeric
 }
 
 // ModelRuntimePool 返回全部未归档渠道及其数据库硬过滤事实，供选路诊断解释
@@ -768,8 +768,8 @@ func (q *Queries) ModelRuntimePool(ctx context.Context, arg ModelRuntimePoolPara
 			&i.ReasoningOutputCost,
 			&i.ChannelCostMultiplierID,
 			&i.CostMultiplier,
-			&i.ChannelRechargeFactorID,
-			&i.RechargeFactor,
+			&i.ProviderRechargeRateID,
+			&i.ProviderRechargeRate,
 		); err != nil {
 			return nil, err
 		}

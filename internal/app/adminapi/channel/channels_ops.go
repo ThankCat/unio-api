@@ -52,7 +52,8 @@ type channelOpsRowDTO struct {
 	CredentialValid         bool                      `json:"credential_valid"`
 	CostMultiplier          *string                   `json:"cost_multiplier"`
 	CostMultiplierOverrides int64                     `json:"cost_multiplier_overrides"`
-	RechargeFactor          *string                   `json:"recharge_factor"`
+	ProviderRechargeRate    *string                   `json:"provider_recharge_rate"`
+	ProviderID              int64                     `json:"provider_id"`
 }
 
 type channelOpsDetailDTO struct {
@@ -179,7 +180,8 @@ func (h *channelOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 			CredentialValid:         row.CredentialValid,
 			CostMultiplier:          row.CostMultiplier,
 			CostMultiplierOverrides: row.CostMultiplierOverrides,
-			RechargeFactor:          row.RechargeFactor,
+			ProviderRechargeRate:    row.ProviderRechargeRate,
+			ProviderID:              row.ProviderID,
 		}
 		dtos = append(dtos, dto)
 	}

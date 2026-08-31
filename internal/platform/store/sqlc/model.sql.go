@@ -1611,14 +1611,14 @@ LEFT JOIN LATERAL (
             abs.uncached_input_cost,
             CASE
                 WHEN base.uncached_input_price IS NOT NULL AND mult.multiplier IS NOT NULL
-                THEN base.uncached_input_price * mult.multiplier * COALESCE(recharge.factor, 1::numeric)
+                THEN base.uncached_input_price * mult.multiplier * COALESCE(recharge.rate, 1::numeric)
             END
         ) AS uncached_input_cost,
         COALESCE(
             abs.output_cost,
             CASE
                 WHEN base.output_price IS NOT NULL AND mult.multiplier IS NOT NULL
-                THEN base.output_price * mult.multiplier * COALESCE(recharge.factor, 1::numeric)
+                THEN base.output_price * mult.multiplier * COALESCE(recharge.rate, 1::numeric)
             END
         ) AS output_cost,
         -- Fast 成本：渠道 Fast 绝对覆盖优先，否则 Fast 基准价 × 同一组倍率。
@@ -1627,14 +1627,14 @@ LEFT JOIN LATERAL (
             abs.fast_uncached_input_cost,
             CASE
                 WHEN base.fast_uncached_input_price IS NOT NULL AND mult.multiplier IS NOT NULL
-                THEN base.fast_uncached_input_price * mult.multiplier * COALESCE(recharge.factor, 1::numeric)
+                THEN base.fast_uncached_input_price * mult.multiplier * COALESCE(recharge.rate, 1::numeric)
             END
         ) AS fast_uncached_input_cost,
         COALESCE(
             abs.fast_output_cost,
             CASE
                 WHEN base.fast_output_price IS NOT NULL AND mult.multiplier IS NOT NULL
-                THEN base.fast_output_price * mult.multiplier * COALESCE(recharge.factor, 1::numeric)
+                THEN base.fast_output_price * mult.multiplier * COALESCE(recharge.rate, 1::numeric)
             END
         ) AS fast_output_cost
     FROM (SELECT 1) AS _
@@ -1680,13 +1680,15 @@ LEFT JOIN LATERAL (
         LIMIT 1
     ) mult ON TRUE
     LEFT JOIN LATERAL (
-        SELECT crf.factor
-        FROM channel_recharge_factors crf
-        WHERE crf.channel_id = c.id
-          AND crf.status = 'enabled'
-          AND crf.effective_from <= now()
-          AND (crf.effective_to IS NULL OR crf.effective_to > now())
-        ORDER BY crf.effective_from DESC, crf.id DESC
+        -- 充值汇率归属服务商（provider_recharge_rates）；嵌套 LATERAL 不能引用外层 providers 别名，
+        -- 用 c.provider_id 定位。
+        SELECT prr.rate
+        FROM provider_recharge_rates prr
+        WHERE prr.provider_id = c.provider_id
+          AND prr.status = 'enabled'
+          AND prr.effective_from <= now()
+          AND (prr.effective_to IS NULL OR prr.effective_to > now())
+        ORDER BY prr.effective_from DESC, prr.id DESC
         LIMIT 1
     ) recharge ON TRUE
 ) price ON TRUE

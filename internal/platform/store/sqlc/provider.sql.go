@@ -137,6 +137,77 @@ func (q *Queries) CreateProvider(ctx context.Context, arg CreateProviderParams) 
 	return i, err
 }
 
+const createProviderRechargeRate = `-- name: CreateProviderRechargeRate :one
+INSERT INTO provider_recharge_rates (
+    provider_id,
+    provider_currency,
+    rate,
+    status,
+    source,
+    reason,
+    created_by,
+    effective_from,
+    effective_to
+)
+VALUES (
+    $1,
+    $2,
+    $3,
+    $4,
+    $5,
+    $6,
+    $7,
+    $8,
+    $9
+)
+RETURNING id, provider_id, provider_currency, nominal_currency, rate, status, source, reason, created_by, effective_from, effective_to, created_at, updated_at
+`
+
+type CreateProviderRechargeRateParams struct {
+	ProviderID       int64
+	ProviderCurrency string
+	Rate             pgtype.Numeric
+	Status           string
+	Source           string
+	Reason           pgtype.Text
+	CreatedBy        pgtype.Text
+	EffectiveFrom    pgtype.Timestamptz
+	EffectiveTo      pgtype.Timestamptz
+}
+
+// CreateProviderRechargeRate 创建一条服务商充值汇率版本。provider_currency 由服务端从 providers.currency
+// 快照写入，不受客户端控制；启用窗口重叠由 ex_provider_recharge_rates_enabled_window 保证，违反报 23P01。
+func (q *Queries) CreateProviderRechargeRate(ctx context.Context, arg CreateProviderRechargeRateParams) (ProviderRechargeRate, error) {
+	row := q.db.QueryRow(ctx, createProviderRechargeRate,
+		arg.ProviderID,
+		arg.ProviderCurrency,
+		arg.Rate,
+		arg.Status,
+		arg.Source,
+		arg.Reason,
+		arg.CreatedBy,
+		arg.EffectiveFrom,
+		arg.EffectiveTo,
+	)
+	var i ProviderRechargeRate
+	err := row.Scan(
+		&i.ID,
+		&i.ProviderID,
+		&i.ProviderCurrency,
+		&i.NominalCurrency,
+		&i.Rate,
+		&i.Status,
+		&i.Source,
+		&i.Reason,
+		&i.CreatedBy,
+		&i.EffectiveFrom,
+		&i.EffectiveTo,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const deleteProvider = `-- name: DeleteProvider :execrows
 WITH deleted_terminal_ops AS (
     DELETE FROM provider_routing_operations
@@ -202,6 +273,89 @@ func (q *Queries) GetProvider(ctx context.Context, id int64) (Provider, error) {
 		&i.Currency,
 	)
 	return i, err
+}
+
+const listEnabledProviderRechargeRateWindows = `-- name: ListEnabledProviderRechargeRateWindows :many
+SELECT id, effective_from, effective_to
+FROM provider_recharge_rates
+WHERE provider_id = $1
+    AND status = 'enabled'
+    AND id <> $2
+`
+
+type ListEnabledProviderRechargeRateWindowsParams struct {
+	ProviderID int64
+	ExcludeID  int64
+}
+
+type ListEnabledProviderRechargeRateWindowsRow struct {
+	ID            int64
+	EffectiveFrom pgtype.Timestamptz
+	EffectiveTo   pgtype.Timestamptz
+}
+
+// ListEnabledProviderRechargeRateWindows 取某 provider 全部启用中的充值汇率生效窗口，供「窗口不重叠」校验；
+// exclude_id 用于更新时排除自身（创建时传 0）。
+func (q *Queries) ListEnabledProviderRechargeRateWindows(ctx context.Context, arg ListEnabledProviderRechargeRateWindowsParams) ([]ListEnabledProviderRechargeRateWindowsRow, error) {
+	rows, err := q.db.Query(ctx, listEnabledProviderRechargeRateWindows, arg.ProviderID, arg.ExcludeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListEnabledProviderRechargeRateWindowsRow
+	for rows.Next() {
+		var i ListEnabledProviderRechargeRateWindowsRow
+		if err := rows.Scan(&i.ID, &i.EffectiveFrom, &i.EffectiveTo); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProviderRechargeRatesByProvider = `-- name: ListProviderRechargeRatesByProvider :many
+SELECT id, provider_id, provider_currency, nominal_currency, rate, status, source, reason, created_by, effective_from, effective_to, created_at, updated_at
+FROM provider_recharge_rates
+WHERE provider_id = $1
+ORDER BY effective_from DESC, id DESC
+`
+
+// ListProviderRechargeRatesByProvider 列出某 provider 的全部充值汇率版本（含历史与停用），供服务商详情展示。
+func (q *Queries) ListProviderRechargeRatesByProvider(ctx context.Context, providerID int64) ([]ProviderRechargeRate, error) {
+	rows, err := q.db.Query(ctx, listProviderRechargeRatesByProvider, providerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ProviderRechargeRate
+	for rows.Next() {
+		var i ProviderRechargeRate
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProviderID,
+			&i.ProviderCurrency,
+			&i.NominalCurrency,
+			&i.Rate,
+			&i.Status,
+			&i.Source,
+			&i.Reason,
+			&i.CreatedBy,
+			&i.EffectiveFrom,
+			&i.EffectiveTo,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listProviders = `-- name: ListProviders :many
@@ -548,18 +702,33 @@ WITH money AS (
       AND ($3::timestamptz IS NULL OR r.created_at < $3::timestamptz)
 ),
 balance AS (
-    -- 余额按 provider 原始币种行读取（D2），折算列供展示。
+    -- 余额按 provider 原始币种行读取（D2），折算列供展示；同时带出估值汇率与当前充值汇率。
     SELECT pb.balance, p.currency,
-        (CASE WHEN p.currency = 'USD' THEN pb.balance ELSE pb.balance / fx.rate END)::numeric AS balance_usd
+        (CASE WHEN p.currency = 'USD' THEN pb.balance ELSE pb.balance / fx.rate END)::numeric AS balance_usd,
+        fx.rate AS fx_rate,
+        fx.rate_date AS fx_rate_date,
+        COALESCE(prr.id, 0)::bigint AS current_recharge_rate_id,
+        prr.rate AS current_recharge_rate,
+        prr.effective_from AS current_recharge_effective_from
     FROM providers p
     LEFT JOIN provider_balances pb ON pb.provider_id = p.id AND pb.currency = p.currency
     LEFT JOIN LATERAL (
-        SELECT er.rate
+        SELECT er.rate, er.rate_date
         FROM exchange_rates er
         WHERE er.base_currency = 'USD' AND er.quote_currency = p.currency
         ORDER BY er.rate_date DESC, er.fetched_at DESC
         LIMIT 1
     ) fx ON p.currency <> 'USD'
+    LEFT JOIN LATERAL (
+        SELECT r.id, r.rate, r.effective_from
+        FROM provider_recharge_rates r
+        WHERE r.provider_id = p.id
+          AND r.status = 'enabled'
+          AND r.effective_from <= now()
+          AND (r.effective_to IS NULL OR r.effective_to > now())
+        ORDER BY r.effective_from DESC, r.id DESC
+        LIMIT 1
+    ) prr ON TRUE
     WHERE p.id = $1
 ),
 tps AS (
@@ -659,6 +828,11 @@ SELECT
     (SELECT balance FROM balance) AS balance,
     (SELECT currency FROM balance) AS balance_currency,
     (SELECT balance_usd FROM balance) AS balance_usd,
+    (SELECT fx_rate FROM balance) AS balance_fx_rate,
+    (SELECT fx_rate_date FROM balance) AS balance_fx_rate_date,
+    (SELECT current_recharge_rate_id FROM balance) AS current_recharge_rate_id,
+    (SELECT current_recharge_rate FROM balance) AS current_recharge_rate,
+    (SELECT current_recharge_effective_from FROM balance) AS current_recharge_effective_from,
     CASE
         WHEN (SELECT balance FROM balance) IS NULL THEN 'unconfigured'
         WHEN (SELECT balance FROM balance) < 0 THEN 'negative'
@@ -709,6 +883,11 @@ type ProviderOpsDetailRow struct {
 	Balance                       pgtype.Numeric
 	BalanceCurrency               string
 	BalanceUsd                    pgtype.Numeric
+	BalanceFxRate                 pgtype.Numeric
+	BalanceFxRateDate             pgtype.Date
+	CurrentRechargeRateID         int64
+	CurrentRechargeRate           pgtype.Numeric
+	CurrentRechargeEffectiveFrom  pgtype.Timestamptz
 	BalanceStatus                 string
 	ChannelTotal                  int64
 	ChannelEnabled                int64
@@ -744,6 +923,11 @@ func (q *Queries) ProviderOpsDetail(ctx context.Context, arg ProviderOpsDetailPa
 		&i.Balance,
 		&i.BalanceCurrency,
 		&i.BalanceUsd,
+		&i.BalanceFxRate,
+		&i.BalanceFxRateDate,
+		&i.CurrentRechargeRateID,
+		&i.CurrentRechargeRate,
+		&i.CurrentRechargeEffectiveFrom,
 		&i.BalanceStatus,
 		&i.ChannelTotal,
 		&i.ChannelEnabled,
@@ -976,6 +1160,11 @@ SELECT
     pb.balance AS balance,
     (CASE WHEN p.currency = 'USD' THEN pb.balance ELSE pb.balance / fx.rate END)::numeric AS balance_usd,
     fx.rate AS fx_rate,
+    fx.rate_date AS fx_rate_date,
+    -- 服务商当前生效充值汇率（服务商级，其下所有渠道共享；未配置时 rate 为 NULL、id 为 0，渠道不可启用/不进路由）。
+    COALESCE(prr.id, 0)::bigint AS current_recharge_rate_id,
+    prr.rate AS current_recharge_rate,
+    prr.effective_from AS current_recharge_effective_from,
     -- 低余额判定按 USD 等值口径（§12.C.5）；缺汇率时比较为 NULL，落到 normal 不误报。
     CASE
         WHEN pb.balance IS NULL THEN 'unconfigured'
@@ -993,12 +1182,22 @@ SELECT
 FROM providers p
 LEFT JOIN provider_balances pb ON pb.provider_id = p.id AND pb.currency = p.currency
 LEFT JOIN LATERAL (
-    SELECT er.rate
+    SELECT er.rate, er.rate_date
     FROM exchange_rates er
     WHERE er.base_currency = 'USD' AND er.quote_currency = p.currency
     ORDER BY er.rate_date DESC, er.fetched_at DESC
     LIMIT 1
 ) fx ON p.currency <> 'USD'
+LEFT JOIN LATERAL (
+    SELECT r.id, r.rate, r.effective_from
+    FROM provider_recharge_rates r
+    WHERE r.provider_id = p.id
+      AND r.status = 'enabled'
+      AND r.effective_from <= now()
+      AND (r.effective_to IS NULL OR r.effective_to > now())
+    ORDER BY r.effective_from DESC, r.id DESC
+    LIMIT 1
+) prr ON TRUE
 WHERE ($1::text IS NULL OR p.status = $1::text)
   AND ($2::text IS NULL OR p.name ILIKE '%' || $2::text || '%' OR p.slug ILIKE '%' || $2::text || '%')
   AND (
@@ -1049,21 +1248,25 @@ type ProvidersOpsTableParams struct {
 }
 
 type ProvidersOpsTableRow struct {
-	ID             int64
-	Slug           string
-	Name           string
-	Status         string
-	Origin         string
-	OriginRevision int64
-	StatusRevision int64
-	Currency       string
-	CreatedAt      pgtype.Timestamptz
-	Balance        pgtype.Numeric
-	BalanceUsd     pgtype.Numeric
-	FxRate         pgtype.Numeric
-	BalanceStatus  string
-	ChannelTotal   int64
-	ModelsCount    int64
+	ID                           int64
+	Slug                         string
+	Name                         string
+	Status                       string
+	Origin                       string
+	OriginRevision               int64
+	StatusRevision               int64
+	Currency                     string
+	CreatedAt                    pgtype.Timestamptz
+	Balance                      pgtype.Numeric
+	BalanceUsd                   pgtype.Numeric
+	FxRate                       pgtype.Numeric
+	FxRateDate                   pgtype.Date
+	CurrentRechargeRateID        int64
+	CurrentRechargeRate          pgtype.Numeric
+	CurrentRechargeEffectiveFrom pgtype.Timestamptz
+	BalanceStatus                string
+	ChannelTotal                 int64
+	ModelsCount                  int64
 }
 
 // §3.2 服务商聚合视图只读运维聚合。轻聚合：无 12 卡，表 + 4 Tab 抽屉。
@@ -1100,6 +1303,10 @@ func (q *Queries) ProvidersOpsTable(ctx context.Context, arg ProvidersOpsTablePa
 			&i.Balance,
 			&i.BalanceUsd,
 			&i.FxRate,
+			&i.FxRateDate,
+			&i.CurrentRechargeRateID,
+			&i.CurrentRechargeRate,
+			&i.CurrentRechargeEffectiveFrom,
 			&i.BalanceStatus,
 			&i.ChannelTotal,
 			&i.ModelsCount,
@@ -1197,6 +1404,43 @@ func (q *Queries) UpdateProvider(ctx context.Context, arg UpdateProviderParams) 
 		&i.UpdatedAt,
 		&i.ArchivedAt,
 		&i.Currency,
+	)
+	return i, err
+}
+
+const updateProviderRechargeRateWindow = `-- name: UpdateProviderRechargeRateWindow :one
+UPDATE provider_recharge_rates
+SET effective_to = $1,
+    status = $2,
+    updated_at = now()
+WHERE id = $3
+RETURNING id, provider_id, provider_currency, nominal_currency, rate, status, source, reason, created_by, effective_from, effective_to, created_at, updated_at
+`
+
+type UpdateProviderRechargeRateWindowParams struct {
+	EffectiveTo pgtype.Timestamptz
+	Status      string
+	ID          int64
+}
+
+// UpdateProviderRechargeRateWindow 调整生效结束时间与启停状态；汇率数值不可改（改汇率请新建一条），账务可复算。
+func (q *Queries) UpdateProviderRechargeRateWindow(ctx context.Context, arg UpdateProviderRechargeRateWindowParams) (ProviderRechargeRate, error) {
+	row := q.db.QueryRow(ctx, updateProviderRechargeRateWindow, arg.EffectiveTo, arg.Status, arg.ID)
+	var i ProviderRechargeRate
+	err := row.Scan(
+		&i.ID,
+		&i.ProviderID,
+		&i.ProviderCurrency,
+		&i.NominalCurrency,
+		&i.Rate,
+		&i.Status,
+		&i.Source,
+		&i.Reason,
+		&i.CreatedBy,
+		&i.EffectiveFrom,
+		&i.EffectiveTo,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }

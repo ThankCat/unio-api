@@ -95,6 +95,7 @@ type RequestListItem struct {
 	UserChargeUSD                   *string
 	CostCurrency                    *string
 	CostFxRate                      *string
+	CostFxRateDate                  *string
 	TotalCostUSD                    *string
 	TotalCostAmount                 *string
 	UncachedInputCostAmount         *string
@@ -106,13 +107,13 @@ type RequestListItem struct {
 	ReasoningOutputCostAmount       *string
 
 	// 计费单价快照（十进制字符串，per_1m_tokens）。成本单价 *CostUnit 为原币（CostCurrency），售价单价 *PriceUnitUSD 为 USD。
-	UncachedInputCostUnit          *string
-	CacheReadInputCostUnit         *string
-	CacheCreation5mInputCostUnit   *string
-	CacheCreation1hInputCostUnit   *string
-	CacheCreation30mInputCostUnit  *string
-	OutputCostUnit                 *string
-	ReasoningOutputCostUnit        *string
+	UncachedInputCostUnit             *string
+	CacheReadInputCostUnit            *string
+	CacheCreation5mInputCostUnit      *string
+	CacheCreation1hInputCostUnit      *string
+	CacheCreation30mInputCostUnit     *string
+	OutputCostUnit                    *string
+	ReasoningOutputCostUnit           *string
 	UncachedInputPriceUnitUSD         *string
 	CacheReadInputPriceUnitUSD        *string
 	CacheCreation5mInputPriceUnitUSD  *string
@@ -126,9 +127,9 @@ type RequestListItem struct {
 	ChannelPriceServiceTierID         *int64
 	TierCostSource                    *string
 
-	// DEC-027 成本来源倍率快照（倍率路径有值，覆盖/旧数据为 nil）：价格倍率 + 充值倍率。
+	// DEC-027 成本来源倍率快照（倍率路径有值，覆盖/旧数据为 nil）：价格倍率 + 服务商充值汇率。
 	ChannelCostMultiplier *string
-	RechargeFactor        *string
+	ProviderRechargeRate  *string
 
 	// LongContextApplied 售价/成本快照是否已应用长上下文倍率（列表费用列标识）。
 	LongContextApplied bool
@@ -178,7 +179,7 @@ type Attempt struct {
 	ChannelID             int64
 	ChannelName           string
 	ChannelCostMultiplier *string
-	RechargeFactor        *string
+	ProviderRechargeRate  *string
 	AdapterKey            string
 	UpstreamModel         string
 	UpstreamProtocol      string
@@ -237,9 +238,10 @@ type RequestDetail struct {
 // CostSnapshotView 是平台成本快照的展示视图：每分项成本单价（per_1m_tokens）+ 实际金额 + 总额。
 // 金额按 provider 结算币种记账（Currency，D2 修订）；TotalCostAmountUSD 为结算钉档汇率（FxRate）折算的 USD 总额。
 type CostSnapshotView struct {
-	Currency           *string
-	FxRate             *string
-	TotalCostAmountUSD *string
+	Currency                        *string
+	FxRate                          *string
+	FxRateDate                      *string
+	TotalCostAmountUSD              *string
 	UncachedInputCostUnit           *string
 	CacheReadInputCostUnit          *string
 	CacheCreation5mInputCostUnit    *string
@@ -255,9 +257,9 @@ type CostSnapshotView struct {
 	OutputCostAmount                *string
 	ReasoningOutputCostAmount       *string
 	TotalCostAmount                 *string
-	// DEC-027 成本来源倍率（倍率路径有值，覆盖/旧数据为 null）：价格倍率 + 充值倍率，供请求详情费用处展示新旧倍率。
+	// DEC-027 成本来源倍率（倍率路径有值，覆盖/旧数据为 null）：价格倍率 + 服务商充值汇率，供请求详情费用处展示新旧倍率。
 	ChannelCostMultiplier     *string
-	RechargeFactor            *string
+	ProviderRechargeRate      *string
 	ServiceTier               *string
 	ModelPriceServiceTierID   *int64
 	ChannelPriceServiceTierID *int64
@@ -281,6 +283,7 @@ func toCostSnapshotView(c sqlc.CostSnapshot) CostSnapshotView {
 	return CostSnapshotView{
 		Currency:                        &c.Currency,
 		FxRate:                          opsutil.NumericStringPtr(c.FxRate),
+		FxRateDate:                      dateStringPtr(c.FxRateDate),
 		TotalCostAmountUSD:              opsutil.NumericStringPtr(c.TotalCostAmountUsd),
 		UncachedInputCostUnit:           opsutil.NumericStringPtr(c.UncachedInputCost),
 		CacheReadInputCostUnit:          opsutil.NumericStringPtr(c.CacheReadInputCost),
@@ -298,7 +301,7 @@ func toCostSnapshotView(c sqlc.CostSnapshot) CostSnapshotView {
 		ReasoningOutputCostAmount:       opsutil.NumericStringPtr(c.ReasoningOutputCostAmount),
 		TotalCostAmount:                 opsutil.NumericStringPtr(c.TotalCostAmount),
 		ChannelCostMultiplier:           opsutil.NumericStringPtr(c.CostMultiplier),
-		RechargeFactor:                  opsutil.NumericStringPtr(c.RechargeFactor),
+		ProviderRechargeRate:            opsutil.NumericStringPtr(c.ProviderRechargeRate),
 		ServiceTier:                     textPtr(c.ServiceTier),
 		ModelPriceServiceTierID:         int8Ptr(c.ModelPriceServiceTierID),
 		ChannelPriceServiceTierID:       int8Ptr(c.ChannelPriceServiceTierID),
@@ -528,6 +531,7 @@ func toRequestListItem(r sqlc.ListRequestRecordsPageRow) RequestListItem {
 		UserChargeUSD:                   opsutil.NumericStringPtr(r.UserChargeAmount),
 		CostCurrency:                    textPtr(r.CostCurrency),
 		CostFxRate:                      opsutil.NumericStringPtr(r.CostFxRate),
+		CostFxRateDate:                  dateStringPtr(r.CostFxRateDate),
 		TotalCostUSD:                    opsutil.NumericStringPtr(r.TotalCostAmountUsd),
 		TotalCostAmount:                 opsutil.NumericStringPtr(r.TotalCostAmount),
 		UncachedInputCostAmount:         opsutil.NumericStringPtr(r.UncachedInputCostAmount),
@@ -538,13 +542,13 @@ func toRequestListItem(r sqlc.ListRequestRecordsPageRow) RequestListItem {
 		OutputCostAmount:                opsutil.NumericStringPtr(r.OutputCostAmount),
 		ReasoningOutputCostAmount:       opsutil.NumericStringPtr(r.ReasoningOutputCostAmount),
 
-		UncachedInputCostUnit:         opsutil.NumericStringPtr(r.UncachedInputCost),
-		CacheReadInputCostUnit:        opsutil.NumericStringPtr(r.CacheReadInputCost),
-		CacheCreation5mInputCostUnit:  opsutil.NumericStringPtr(r.CacheCreation5mInputCost),
-		CacheCreation1hInputCostUnit:  opsutil.NumericStringPtr(r.CacheCreation1hInputCost),
-		CacheCreation30mInputCostUnit: opsutil.NumericStringPtr(r.CacheCreation30mInputCost),
-		OutputCostUnit:                opsutil.NumericStringPtr(r.OutputCost),
-		ReasoningOutputCostUnit:       opsutil.NumericStringPtr(r.ReasoningOutputCost),
+		UncachedInputCostUnit:             opsutil.NumericStringPtr(r.UncachedInputCost),
+		CacheReadInputCostUnit:            opsutil.NumericStringPtr(r.CacheReadInputCost),
+		CacheCreation5mInputCostUnit:      opsutil.NumericStringPtr(r.CacheCreation5mInputCost),
+		CacheCreation1hInputCostUnit:      opsutil.NumericStringPtr(r.CacheCreation1hInputCost),
+		CacheCreation30mInputCostUnit:     opsutil.NumericStringPtr(r.CacheCreation30mInputCost),
+		OutputCostUnit:                    opsutil.NumericStringPtr(r.OutputCost),
+		ReasoningOutputCostUnit:           opsutil.NumericStringPtr(r.ReasoningOutputCost),
 		UncachedInputPriceUnitUSD:         opsutil.NumericStringPtr(r.UncachedInputPrice),
 		CacheReadInputPriceUnitUSD:        opsutil.NumericStringPtr(r.CacheReadInputPrice),
 		CacheCreation5mInputPriceUnitUSD:  opsutil.NumericStringPtr(r.CacheCreation5mInputPrice),
@@ -559,7 +563,7 @@ func toRequestListItem(r sqlc.ListRequestRecordsPageRow) RequestListItem {
 		TierCostSource:                    textPtr(r.TierCostSource),
 
 		ChannelCostMultiplier: opsutil.NumericStringPtr(r.ChannelCostMultiplier),
-		RechargeFactor:        opsutil.NumericStringPtr(r.RechargeFactor),
+		ProviderRechargeRate:  opsutil.NumericStringPtr(r.ProviderRechargeRate),
 		LongContextApplied:    r.LongContextApplied,
 
 		APIKeyName:   textPtr(r.ApiKeyName),
@@ -676,7 +680,7 @@ func toAttempt(a sqlc.ListAdminRequestAttemptsByRequestRow, includeInternal, str
 		ChannelID:             a.ChannelID,
 		ChannelName:           a.ChannelName,
 		ChannelCostMultiplier: opsutil.NumericStringPtr(a.ChannelCostMultiplier),
-		RechargeFactor:        opsutil.NumericStringPtr(a.RechargeFactor),
+		ProviderRechargeRate:  opsutil.NumericStringPtr(a.ProviderRechargeRate),
 		AdapterKey:            a.AdapterKey,
 		UpstreamModel:         a.UpstreamModel,
 		UpstreamProtocol:      a.UpstreamProtocol,
@@ -723,4 +727,13 @@ func toAttempt(a sqlc.ListAdminRequestAttemptsByRequestRow, includeInternal, str
 
 func serviceTierDowngraded(requested, actual pgtype.Text) bool {
 	return requested.Valid && requested.String == "fast" && actual.Valid && actual.String == "standard"
+}
+
+// dateStringPtr 把可空 DATE 格式化为 YYYY-MM-DD（结算钉档汇率所属日）。
+func dateStringPtr(v pgtype.Date) *string {
+	if !v.Valid {
+		return nil
+	}
+	s := v.Time.UTC().Format("2006-01-02")
+	return &s
 }

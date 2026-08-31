@@ -26,13 +26,17 @@ type createProviderBalanceAdjustmentRequest struct {
 }
 
 type providerBalanceAdjustmentDTO struct {
-	EntryID      int64  `json:"entry_id"`
-	ProviderID   int64  `json:"provider_id"`
-	EntryType    string `json:"entry_type"`
-	Amount       string `json:"amount"`
-	Currency     string `json:"currency"`
-	BalanceAfter string `json:"balance_after"`
-	Reason       string `json:"reason"`
+	EntryID    int64  `json:"entry_id"`
+	ProviderID int64  `json:"provider_id"`
+	EntryType  string `json:"entry_type"`
+	Amount     string `json:"amount"`
+	Currency   string `json:"currency"`
+	// 本次变化在事件时锁定的 USD 折算快照（不可折算时为 null）。
+	AmountUSD    *string `json:"amount_usd"`
+	FxRate       *string `json:"fx_rate"`
+	FxRateDate   *string `json:"fx_rate_date"`
+	BalanceAfter string  `json:"balance_after"`
+	Reason       string  `json:"reason"`
 }
 
 type providerLedgerEntryDTO struct {
@@ -50,6 +54,9 @@ type providerLedgerEntryDTO struct {
 	EntryType             string  `json:"entry_type"`
 	Amount                string  `json:"amount"`
 	Currency              string  `json:"currency"`
+	AmountUSD             *string `json:"amount_usd"`
+	FxRate                *string `json:"fx_rate"`
+	FxRateDate            *string `json:"fx_rate_date"`
 	BalanceBefore         string  `json:"balance_before"`
 	BalanceAfter          string  `json:"balance_after"`
 	IdempotencyKey        string  `json:"idempotency_key"`
@@ -83,7 +90,9 @@ func (h *providerBalanceHandler) adjust(w http.ResponseWriter, r *http.Request) 
 	}
 	adminhttp.WriteData(w, http.StatusCreated, providerBalanceAdjustmentDTO{
 		EntryID: result.EntryID, ProviderID: result.ProviderID, EntryType: result.EntryType,
-		Amount: result.Amount, Currency: result.Currency, BalanceAfter: result.BalanceAfter, Reason: result.Reason,
+		Amount: result.Amount, Currency: result.Currency,
+		AmountUSD: result.AmountUSD, FxRate: result.FxRate, FxRateDate: dateStringPtr(result.FxRateDate),
+		BalanceAfter: result.BalanceAfter, Reason: result.Reason,
 	})
 }
 
@@ -138,6 +147,7 @@ func providerLedgerEntryDTOFrom(entry providerbalance.Entry) providerLedgerEntry
 		ProviderProbeRecordID: entry.ProviderProbeRecordID,
 		UsageSource:           entry.UsageSource,
 		EntryType:             entry.EntryType, Amount: entry.Amount, Currency: entry.Currency,
+		AmountUSD: entry.AmountUSD, FxRate: entry.FxRate, FxRateDate: dateStringPtr(entry.FxRateDate),
 		BalanceBefore: entry.BalanceBefore, BalanceAfter: entry.BalanceAfter,
 		IdempotencyKey: entry.IdempotencyKey, Reason: entry.Reason,
 		CreatedAt: entry.CreatedAt.UTC().Format(time.RFC3339),

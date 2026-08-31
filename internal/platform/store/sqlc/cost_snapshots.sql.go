@@ -18,8 +18,8 @@ INSERT INTO cost_snapshots (
     cost_base_model_price_id,
     channel_cost_multiplier_id,
     cost_multiplier,
-    channel_recharge_factor_id,
-    recharge_factor,
+    provider_recharge_rate_id,
+    provider_recharge_rate,
     provider_id,
     channel_id,
     model_id,
@@ -91,7 +91,7 @@ VALUES (
     $36,
     $37
 )
-RETURNING id, request_record_id, cost_price_id, provider_id, channel_id, model_id, upstream_model, currency, pricing_unit, uncached_input_cost, cache_read_input_cost, cache_creation_5m_input_cost, cache_creation_1h_input_cost, output_cost, reasoning_output_cost, uncached_input_cost_amount, cache_read_input_cost_amount, cache_creation_5m_input_cost_amount, cache_creation_1h_input_cost_amount, output_cost_amount, reasoning_output_cost_amount, total_cost_amount, formula_version, created_at, cache_creation_30m_input_cost, cache_creation_30m_input_cost_amount, cost_base_model_price_id, channel_cost_multiplier_id, cost_multiplier, channel_recharge_factor_id, recharge_factor, long_context_applied, service_tier, model_price_service_tier_id, channel_price_service_tier_id, tier_cost_source, fx_rate, fx_rate_date, total_cost_amount_usd
+RETURNING id, request_record_id, cost_price_id, provider_id, channel_id, model_id, upstream_model, currency, pricing_unit, uncached_input_cost, cache_read_input_cost, cache_creation_5m_input_cost, cache_creation_1h_input_cost, output_cost, reasoning_output_cost, uncached_input_cost_amount, cache_read_input_cost_amount, cache_creation_5m_input_cost_amount, cache_creation_1h_input_cost_amount, output_cost_amount, reasoning_output_cost_amount, total_cost_amount, formula_version, created_at, cache_creation_30m_input_cost, cache_creation_30m_input_cost_amount, cost_base_model_price_id, channel_cost_multiplier_id, cost_multiplier, long_context_applied, service_tier, model_price_service_tier_id, channel_price_service_tier_id, tier_cost_source, fx_rate, fx_rate_date, total_cost_amount_usd, provider_recharge_rate_id, provider_recharge_rate
 `
 
 type CreateCostSnapshotParams struct {
@@ -100,8 +100,8 @@ type CreateCostSnapshotParams struct {
 	CostBaseModelPriceID            pgtype.Int8
 	ChannelCostMultiplierID         pgtype.Int8
 	CostMultiplier                  pgtype.Numeric
-	ChannelRechargeFactorID         pgtype.Int8
-	RechargeFactor                  pgtype.Numeric
+	ProviderRechargeRateID          pgtype.Int8
+	ProviderRechargeRate            pgtype.Numeric
 	ProviderID                      int64
 	ChannelID                       int64
 	ModelID                         int64
@@ -142,8 +142,8 @@ func (q *Queries) CreateCostSnapshot(ctx context.Context, arg CreateCostSnapshot
 		arg.CostBaseModelPriceID,
 		arg.ChannelCostMultiplierID,
 		arg.CostMultiplier,
-		arg.ChannelRechargeFactorID,
-		arg.RechargeFactor,
+		arg.ProviderRechargeRateID,
+		arg.ProviderRechargeRate,
 		arg.ProviderID,
 		arg.ChannelID,
 		arg.ModelID,
@@ -206,8 +206,6 @@ func (q *Queries) CreateCostSnapshot(ctx context.Context, arg CreateCostSnapshot
 		&i.CostBaseModelPriceID,
 		&i.ChannelCostMultiplierID,
 		&i.CostMultiplier,
-		&i.ChannelRechargeFactorID,
-		&i.RechargeFactor,
 		&i.LongContextApplied,
 		&i.ServiceTier,
 		&i.ModelPriceServiceTierID,
@@ -216,12 +214,14 @@ func (q *Queries) CreateCostSnapshot(ctx context.Context, arg CreateCostSnapshot
 		&i.FxRate,
 		&i.FxRateDate,
 		&i.TotalCostAmountUsd,
+		&i.ProviderRechargeRateID,
+		&i.ProviderRechargeRate,
 	)
 	return i, err
 }
 
 const getCostSnapshotByRequest = `-- name: GetCostSnapshotByRequest :one
-SELECT id, request_record_id, cost_price_id, provider_id, channel_id, model_id, upstream_model, currency, pricing_unit, uncached_input_cost, cache_read_input_cost, cache_creation_5m_input_cost, cache_creation_1h_input_cost, output_cost, reasoning_output_cost, uncached_input_cost_amount, cache_read_input_cost_amount, cache_creation_5m_input_cost_amount, cache_creation_1h_input_cost_amount, output_cost_amount, reasoning_output_cost_amount, total_cost_amount, formula_version, created_at, cache_creation_30m_input_cost, cache_creation_30m_input_cost_amount, cost_base_model_price_id, channel_cost_multiplier_id, cost_multiplier, channel_recharge_factor_id, recharge_factor, long_context_applied, service_tier, model_price_service_tier_id, channel_price_service_tier_id, tier_cost_source, fx_rate, fx_rate_date, total_cost_amount_usd
+SELECT id, request_record_id, cost_price_id, provider_id, channel_id, model_id, upstream_model, currency, pricing_unit, uncached_input_cost, cache_read_input_cost, cache_creation_5m_input_cost, cache_creation_1h_input_cost, output_cost, reasoning_output_cost, uncached_input_cost_amount, cache_read_input_cost_amount, cache_creation_5m_input_cost_amount, cache_creation_1h_input_cost_amount, output_cost_amount, reasoning_output_cost_amount, total_cost_amount, formula_version, created_at, cache_creation_30m_input_cost, cache_creation_30m_input_cost_amount, cost_base_model_price_id, channel_cost_multiplier_id, cost_multiplier, long_context_applied, service_tier, model_price_service_tier_id, channel_price_service_tier_id, tier_cost_source, fx_rate, fx_rate_date, total_cost_amount_usd, provider_recharge_rate_id, provider_recharge_rate
 FROM cost_snapshots
 WHERE request_record_id = $1
 `
@@ -260,8 +260,6 @@ func (q *Queries) GetCostSnapshotByRequest(ctx context.Context, requestRecordID 
 		&i.CostBaseModelPriceID,
 		&i.ChannelCostMultiplierID,
 		&i.CostMultiplier,
-		&i.ChannelRechargeFactorID,
-		&i.RechargeFactor,
 		&i.LongContextApplied,
 		&i.ServiceTier,
 		&i.ModelPriceServiceTierID,
@@ -270,6 +268,8 @@ func (q *Queries) GetCostSnapshotByRequest(ctx context.Context, requestRecordID 
 		&i.FxRate,
 		&i.FxRateDate,
 		&i.TotalCostAmountUsd,
+		&i.ProviderRechargeRateID,
+		&i.ProviderRechargeRate,
 	)
 	return i, err
 }

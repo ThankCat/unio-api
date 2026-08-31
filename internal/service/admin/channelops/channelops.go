@@ -52,13 +52,13 @@ type Row struct {
 	// 服务商结算币种（USD/CNY），列表在服务商名后展示。
 	ProviderCurrency string
 	Credential       string
-	AttemptTotal        int64
-	AttemptSucceeded    int64
-	SuccessRate         float64
-	TimeoutTotal        int64
-	Latency             opsutil.LatencyStats
-	BoundModels         int64
-	RecentErrorCode     string
+	AttemptTotal     int64
+	AttemptSucceeded int64
+	SuccessRate      float64
+	TimeoutTotal     int64
+	Latency          opsutil.LatencyStats
+	BoundModels      int64
+	RecentErrorCode  string
 	// 渠道级限流上限（P2-8）：nil=继承渠道默认限流，0=不限，>0=具体上限。
 	// 渠道在途并发上限（DEC-029）：nil=继承并发默认 channel_limit，0=不限，>0=具体上限。
 	ConcurrencyLimit  *int32
@@ -71,8 +71,10 @@ type Row struct {
 	CostMultiplier *string
 	// 当前生效的逐模型价格倍率覆盖条数。
 	CostMultiplierOverrides int64
-	// 当前生效的充值倍率；nil=未配置（结算按 1.0）。
-	RechargeFactor *string
+	// 服务商当前生效充值汇率（服务商级只读展示；nil=未配置，渠道不可启用/不进路由）。
+	ProviderRechargeRate *string
+	// 渠道所属服务商 ID（前端跳转服务商详情维护充值汇率用）。
+	ProviderID int64
 }
 
 // Detail 是抽屉概览 attempt 指标。
@@ -190,7 +192,8 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 			CredentialValid:         r.CredentialValid,
 			CostMultiplier:          opsutil.NumericStringPtr(r.CostMultiplier),
 			CostMultiplierOverrides: r.CostMultiplierOverrides,
-			RechargeFactor:          opsutil.NumericStringPtr(r.RechargeFactor),
+			ProviderRechargeRate:    opsutil.NumericStringPtr(r.ProviderRechargeRate),
+			ProviderID:              r.ProviderID,
 		}
 		if r.AttemptTotal > 0 {
 			row.SuccessRate = float64(r.AttemptSucceeded) / float64(r.AttemptTotal)

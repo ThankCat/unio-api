@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"strings"
 
+	"github.com/ThankCat/unio-gateway/internal/core/fx"
 	"github.com/ThankCat/unio-gateway/internal/core/usage"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
@@ -32,6 +33,19 @@ type TxBeginner interface {
 	Begin(ctx context.Context) (pgx.Tx, error)
 }
 
+// FxRateSource 提供原币 → USD 的最新汇率（由 core/fx.Service 实现），
+// 用于分录落库时锁定「事件时 USD 折算快照」（amount_usd/fx_rate/fx_rate_date）。
+type FxRateSource interface {
+	LatestRate(ctx context.Context, quote string) (fx.Rate, error)
+}
+
+// entryFx 是一条分录的事件时 USD 折算快照三列（全零值 = 不可折算，落 NULL）。
+type entryFx struct {
+	amountUsd  pgtype.Numeric
+	fxRate     pgtype.Numeric
+	fxRateDate pgtype.Date
+}
+
 // Entry 是 Provider 账本流水的领域视图。
 type Entry struct {
 	ID                    int64
@@ -48,10 +62,14 @@ type Entry struct {
 	EntryType             string
 	Amount                pgtype.Numeric
 	Currency              string
-	BalanceBefore         pgtype.Numeric
-	BalanceAfter          pgtype.Numeric
-	IdempotencyKey        string
-	Reason                string
+	// AmountUsd/FxRate/FxRateDate 是事件时锁定的 USD 折算快照（可空：不可折算时为 NULL）。
+	AmountUsd      pgtype.Numeric
+	FxRate         pgtype.Numeric
+	FxRateDate     pgtype.Date
+	BalanceBefore  pgtype.Numeric
+	BalanceAfter   pgtype.Numeric
+	IdempotencyKey string
+	Reason         string
 }
 
 // UsageDebitParams 描述一笔由可靠成本快照产生的 Provider 消费。
@@ -67,8 +85,13 @@ type UsageDebitParams struct {
 	UsageSource      usage.Source
 	Amount           pgtype.Numeric
 	Currency         string
-	IdempotencyKey   string
-	Reason           string
+	// AmountUsd/FxRate/FxRateDate 由结算传入（与 cost_snapshots 钉档同源，字节可比）；
+	// AmountUsd 无效时由本包按最新汇率解析（防御性回退）。
+	AmountUsd      pgtype.Numeric
+	FxRate         pgtype.Numeric
+	FxRateDate     pgtype.Date
+	IdempotencyKey string
+	Reason         string
 }
 
 // AdjustParams 描述一次手工加款或扣款。amount 始终为正数，方向由方法决定。
@@ -93,6 +116,7 @@ type TargetParams struct {
 type Service struct {
 	db      TxBeginner
 	queries *sqlc.Queries
+	fxRates FxRateSource
 }
 
 func NewService(db TxBeginner, queries *sqlc.Queries) *Service {
@@ -105,6 +129,34 @@ func NewService(db TxBeginner, queries *sqlc.Queries) *Service {
 	return &Service{db: db, queries: queries}
 }
 
+// WithFxRates 注入汇率读取器：调额/探测等分录在落库时锁定事件时 USD 折算快照。
+// 未注入时非 USD 分录 USD 快照列为 NULL（展示端显示不可折算），不阻塞写入。
+func (s *Service) WithFxRates(rates FxRateSource) *Service {
+	s.fxRates = rates
+	return s
+}
+
+// resolveEntryFx 解出分录的事件时 USD 折算快照。USD：usd=amount、fx 列 NULL（CHECK 形态）；
+// 非 USD：按最新汇率钉档；未注入/缺汇率/金额异常时整组 NULL（legacy 形态），不阻塞账本写入。
+func (s *Service) resolveEntryFx(ctx context.Context, currency string, amount pgtype.Numeric) entryFx {
+	if currency == fx.BaseCurrency {
+		return entryFx{amountUsd: amount}
+	}
+	if s.fxRates == nil {
+		return entryFx{}
+	}
+	rate, err := s.fxRates.LatestRate(ctx, currency)
+	if err != nil {
+		return entryFx{}
+	}
+	amountRat, convErr := fx.RatFromNumeric(amount)
+	if convErr != nil {
+		return entryFx{}
+	}
+	usd := fx.NumericFromRat(fx.UsdFromOriginal(amountRat, rate.Value), 10)
+	return entryFx{amountUsd: usd, fxRate: rate.Numeric, fxRateDate: pgtype.Date{Time: rate.Date, Valid: true}}
+}
+
 // DebitUsageWithQueries 在调用方结算事务中扣减 Provider 余额并写入消费流水。
 func (s *Service) DebitUsageWithQueries(ctx context.Context, queries *sqlc.Queries, params UsageDebitParams) (Entry, error) {
 	if queries == nil {
@@ -113,7 +165,11 @@ func (s *Service) DebitUsageWithQueries(ctx context.Context, queries *sqlc.Queri
 	if err := validateUsage(params); err != nil {
 		return Entry{}, err
 	}
-	return s.debitWithQueries(ctx, queries, EntryTypeUsageDebit, params.ProviderID, params.Amount, params.Currency, params.IdempotencyKey, params.Reason, &source{
+	efx := entryFx{amountUsd: params.AmountUsd, fxRate: params.FxRate, fxRateDate: params.FxRateDate}
+	if !efx.amountUsd.Valid {
+		efx = s.resolveEntryFx(ctx, params.Currency, params.Amount)
+	}
+	return s.debitWithQueries(ctx, queries, EntryTypeUsageDebit, params.ProviderID, params.Amount, params.Currency, efx, params.IdempotencyKey, params.Reason, &source{
 		requestRecordID:  params.RequestRecordID,
 		requestAttemptID: params.RequestAttemptID,
 		costSnapshotID:   params.CostSnapshotID,
@@ -181,8 +237,10 @@ func (s *Service) SetTargetBalance(ctx context.Context, params TargetParams) (En
 	if err != nil {
 		return Entry{}, storeFailed(err, "apply provider target balance")
 	}
+	efx := s.resolveEntryFx(ctx, params.Currency, amount)
 	created, err := txQueries.CreateProviderLedgerEntry(ctx, sqlc.CreateProviderLedgerEntryParams{
 		ProviderID: params.ProviderID, EntryType: entryType, Amount: amount, Currency: params.Currency,
+		AmountUsd: efx.amountUsd, FxRate: efx.fxRate, FxRateDate: efx.fxRateDate,
 		BalanceBefore: before.Balance, BalanceAfter: after.Balance, IdempotencyKey: params.IdempotencyKey, Reason: params.Reason,
 	})
 	if err != nil {
@@ -205,11 +263,12 @@ func (s *Service) adjust(ctx context.Context, params AdjustParams, entryType str
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	txQueries := s.queries.WithTx(tx)
+	efx := s.resolveEntryFx(ctx, params.Currency, params.Amount)
 	var entry Entry
 	if entryType == EntryTypeAdjustmentCredit {
-		entry, err = s.creditWithQueries(ctx, txQueries, entryType, params.ProviderID, params.Amount, params.Currency, params.IdempotencyKey, params.Reason)
+		entry, err = s.creditWithQueries(ctx, txQueries, entryType, params.ProviderID, params.Amount, params.Currency, efx, params.IdempotencyKey, params.Reason)
 	} else {
-		entry, err = s.debitWithQueries(ctx, txQueries, entryType, params.ProviderID, params.Amount, params.Currency, params.IdempotencyKey, params.Reason, nil)
+		entry, err = s.debitWithQueries(ctx, txQueries, entryType, params.ProviderID, params.Amount, params.Currency, efx, params.IdempotencyKey, params.Reason, nil)
 	}
 	if err != nil {
 		return Entry{}, err
@@ -220,7 +279,7 @@ func (s *Service) adjust(ctx context.Context, params AdjustParams, entryType str
 	return entry, nil
 }
 
-func (s *Service) creditWithQueries(ctx context.Context, queries *sqlc.Queries, entryType string, providerID int64, amount pgtype.Numeric, currency, idempotencyKey, reason string) (Entry, error) {
+func (s *Service) creditWithQueries(ctx context.Context, queries *sqlc.Queries, entryType string, providerID int64, amount pgtype.Numeric, currency string, efx entryFx, idempotencyKey, reason string) (Entry, error) {
 	if err := lockIdempotency(ctx, queries, idempotencyKey); err != nil {
 		return Entry{}, err
 	}
@@ -243,6 +302,7 @@ func (s *Service) creditWithQueries(ctx context.Context, queries *sqlc.Queries, 
 	}
 	created, err := queries.CreateProviderLedgerEntry(ctx, sqlc.CreateProviderLedgerEntryParams{
 		ProviderID: providerID, EntryType: entryType, Amount: amount, Currency: currency,
+		AmountUsd: efx.amountUsd, FxRate: efx.fxRate, FxRateDate: efx.fxRateDate,
 		BalanceBefore: before.Balance, BalanceAfter: after.Balance, IdempotencyKey: idempotencyKey, Reason: reason,
 	})
 	if err != nil {
@@ -251,7 +311,7 @@ func (s *Service) creditWithQueries(ctx context.Context, queries *sqlc.Queries, 
 	return entryFromSQLC(created), nil
 }
 
-func (s *Service) debitWithQueries(ctx context.Context, queries *sqlc.Queries, entryType string, providerID int64, amount pgtype.Numeric, currency, idempotencyKey, reason string, src *source) (Entry, error) {
+func (s *Service) debitWithQueries(ctx context.Context, queries *sqlc.Queries, entryType string, providerID int64, amount pgtype.Numeric, currency string, efx entryFx, idempotencyKey, reason string, src *source) (Entry, error) {
 	if err := lockIdempotency(ctx, queries, idempotencyKey); err != nil {
 		return Entry{}, err
 	}
@@ -274,6 +334,7 @@ func (s *Service) debitWithQueries(ctx context.Context, queries *sqlc.Queries, e
 	}
 	arg := sqlc.CreateProviderLedgerEntryParams{
 		ProviderID: providerID, EntryType: entryType, Amount: amount, Currency: currency,
+		AmountUsd: efx.amountUsd, FxRate: efx.fxRate, FxRateDate: efx.fxRateDate,
 		BalanceBefore: before.Balance, BalanceAfter: after.Balance, IdempotencyKey: idempotencyKey, Reason: reason,
 	}
 	if src != nil {
@@ -316,10 +377,12 @@ func (s *Service) debitProbeWithQueries(ctx context.Context, queries *sqlc.Queri
 	if err != nil {
 		return Entry{}, storeFailed(err, "subtract provider balance for probe")
 	}
+	efx := s.resolveEntryFx(ctx, currency, amount)
 	created, err := queries.CreateProviderLedgerEntry(ctx, sqlc.CreateProviderLedgerEntryParams{
 		ProviderID: providerID, ProviderProbeRecordID: pgtype.Int8{Int64: probeRecordID, Valid: true},
 		UsageSource: pgtype.Text{String: string(usageSource), Valid: true},
 		EntryType:   EntryTypeProbeDebit, Amount: amount, Currency: currency,
+		AmountUsd: efx.amountUsd, FxRate: efx.fxRate, FxRateDate: efx.fxRateDate,
 		BalanceBefore: before.Balance, BalanceAfter: after.Balance, IdempotencyKey: idempotencyKey, Reason: reason,
 	})
 	if err != nil {
@@ -402,7 +465,9 @@ func entryFromSQLC(row sqlc.ProviderLedgerEntry) Entry {
 		RequestID: optionalString(row.RequestID), ChannelName: optionalString(row.ChannelName), UpstreamModel: optionalString(row.UpstreamModel),
 		ProviderProbeRecordID: optionalInt64(row.ProviderProbeRecordID),
 		UsageSource:           usage.Source(row.UsageSource.String),
-		EntryType:             row.EntryType, Amount: row.Amount, Currency: row.Currency, BalanceBefore: row.BalanceBefore, BalanceAfter: row.BalanceAfter,
+		EntryType:             row.EntryType, Amount: row.Amount, Currency: row.Currency,
+		AmountUsd: row.AmountUsd, FxRate: row.FxRate, FxRateDate: row.FxRateDate,
+		BalanceBefore: row.BalanceBefore, BalanceAfter: row.BalanceAfter,
 		IdempotencyKey: row.IdempotencyKey, Reason: row.Reason,
 	}
 }

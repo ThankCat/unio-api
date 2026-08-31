@@ -192,11 +192,16 @@ func (s *Service) resolveProbeCost(ctx context.Context, q *sqlc.Queries, channel
 	if err != nil {
 		return billing.ProviderCostSnapshot{}, err
 	}
+	// 充值汇率按渠道所属 provider 解析（服务商级）；未配置时按 1.0 兜底（探测不因缺汇率失败）。
+	providerBilling, billingErr := q.GetChannelProviderBilling(ctx, channelID)
+	if billingErr != nil {
+		return billing.ProviderCostSnapshot{}, billingErr
+	}
 	recharge := pgtype.Numeric{Int: big.NewInt(1), Exp: 0, Valid: true}
-	if factor, factorErr := q.FindActiveChannelRechargeFactor(ctx, sqlc.FindActiveChannelRechargeFactorParams{ChannelID: channelID, AtTime: t}); factorErr == nil {
-		recharge = factor.Factor
-	} else if !errors.Is(factorErr, pgx.ErrNoRows) {
-		return billing.ProviderCostSnapshot{}, factorErr
+	if rate, rateErr := q.FindActiveProviderRechargeRate(ctx, sqlc.FindActiveProviderRechargeRateParams{ProviderID: providerBilling.ProviderID, AtTime: t}); rateErr == nil {
+		recharge = rate.Rate
+	} else if !errors.Is(rateErr, pgx.ErrNoRows) {
+		return billing.ProviderCostSnapshot{}, rateErr
 	}
 	baseSnapshot := billing.ModelPriceToProviderCost(billing.CustomerPriceSnapshot{
 		Currency: base.Currency, PricingUnit: base.PricingUnit, UncachedInputPrice: base.UncachedInputPrice,
@@ -209,10 +214,8 @@ func (s *Service) resolveProbeCost(ctx context.Context, q *sqlc.Queries, channel
 		return billing.ProviderCostSnapshot{}, err
 	}
 	// 倍率路径成本按 provider 结算币种记账（D2 修订）：探测扣款与请求结算同口径。
-	if providerCurrency, currencyErr := q.GetChannelProviderCurrency(ctx, channelID); currencyErr == nil && providerCurrency != "" {
-		scaled.Currency = providerCurrency
-	} else if currencyErr != nil {
-		return billing.ProviderCostSnapshot{}, currencyErr
+	if providerBilling.Currency != "" {
+		scaled.Currency = providerBilling.Currency
 	}
 	scaled.UncachedInputCost = numericOrZero(scaled.UncachedInputCost)
 	scaled.OutputCost = numericOrZero(scaled.OutputCost)

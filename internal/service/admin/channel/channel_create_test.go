@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/channel"
@@ -16,6 +18,8 @@ type createStore struct {
 	createCalls int
 	updateParam sqlc.UpdateChannelParams
 	updateCalls int
+	// rechargeRateMissing 模拟服务商未配置当前生效充值汇率（D-02 闸门场景）。
+	rechargeRateMissing bool
 }
 
 func (s *createStore) GetProvider(context.Context, int64) (sqlc.Provider, error) {
@@ -76,6 +80,13 @@ func (s *createStore) CountEnabledBindingsByChannel(context.Context, int64) (int
 
 func (s *createStore) RestoreChannel(context.Context, int64) (int64, error) {
 	return 0, nil
+}
+
+func (s *createStore) FindActiveProviderRechargeRate(_ context.Context, arg sqlc.FindActiveProviderRechargeRateParams) (sqlc.ProviderRechargeRate, error) {
+	if s.rechargeRateMissing {
+		return sqlc.ProviderRechargeRate{}, pgx.ErrNoRows
+	}
+	return sqlc.ProviderRechargeRate{ID: 11, ProviderID: arg.ProviderID, Status: "enabled"}, nil
 }
 
 type createRegistry struct{}
@@ -140,6 +151,67 @@ func TestCreateEnabledRequiresEnabledProvider(t *testing.T) {
 	if store.createCalls != 0 {
 		t.Fatalf("CreateChannel calls = %d, want 0", store.createCalls)
 	}
+}
+
+// D-02 严格拦截：服务商未配置当前生效充值汇率时，渠道不可启用（创建 enabled 与 disabled→enabled 均拒绝）。
+func TestEnableChannelRequiresProviderRechargeRate(t *testing.T) {
+	t.Run("create enabled rejected", func(t *testing.T) {
+		store := &createStore{
+			provider:            sqlc.Provider{ID: 1, Name: "Provider", Origin: "https://example.test", Status: channel.StatusEnabled},
+			rechargeRateMissing: true,
+		}
+		svc := channel.NewService(store, createRegistry{})
+
+		_, err := svc.Create(context.Background(), channel.CreateInput{
+			ProviderID: 1, Name: "primary", Protocols: []string{channel.ProtocolOpenAI},
+			AdapterKey: channel.ProtocolOpenAI, Credential: "test-credential",
+			Status: channel.StatusEnabled,
+		})
+		if got := failure.CodeOf(err); got != failure.CodeAdminConflict {
+			t.Fatalf("error code = %q, want %q (err=%v)", got, failure.CodeAdminConflict, err)
+		}
+		if store.createCalls != 0 {
+			t.Fatalf("CreateChannel calls = %d, want 0", store.createCalls)
+		}
+	})
+
+	t.Run("create disabled allowed", func(t *testing.T) {
+		store := &createStore{
+			provider:            sqlc.Provider{ID: 1, Name: "Provider", Origin: "https://example.test", Status: channel.StatusEnabled},
+			rechargeRateMissing: true,
+		}
+		svc := channel.NewService(store, createRegistry{})
+
+		if _, err := svc.Create(context.Background(), channel.CreateInput{
+			ProviderID: 1, Name: "primary", Protocols: []string{channel.ProtocolOpenAI},
+			AdapterKey: channel.ProtocolOpenAI, Credential: "test-credential",
+			Status: channel.StatusDisabled,
+		}); err != nil {
+			t.Fatalf("creating a disabled channel without recharge rate must succeed, got %v", err)
+		}
+	})
+
+	t.Run("enable via update rejected", func(t *testing.T) {
+		store := &createStore{
+			provider: sqlc.Provider{ID: 1, Name: "Provider", Status: channel.StatusEnabled},
+			channel: sqlc.Channel{
+				ID: 7, ProviderID: 1, Name: "primary", Protocols: []string{channel.ProtocolOpenAI},
+				AdapterKey: channel.ProtocolOpenAI, Status: channel.StatusDisabled, CapacityRevision: 1,
+			},
+			rechargeRateMissing: true,
+		}
+		svc := channel.NewService(store, createRegistry{})
+
+		_, err := svc.Update(context.Background(), channel.UpdateInput{
+			ID: 7, ProviderID: 1, Name: "primary", Status: channel.StatusEnabled,
+		})
+		if got := failure.CodeOf(err); got != failure.CodeAdminConflict {
+			t.Fatalf("error code = %q, want %q (err=%v)", got, failure.CodeAdminConflict, err)
+		}
+		if store.updateCalls != 0 {
+			t.Fatalf("UpdateChannel calls = %d, want 0", store.updateCalls)
+		}
+	})
 }
 
 func TestCreateOpenAIFastCapability(t *testing.T) {

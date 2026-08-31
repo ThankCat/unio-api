@@ -62,11 +62,12 @@ type requestListItemDTO struct {
 	OutputTokens                int64 `json:"output_tokens"`
 	ReasoningOutputTokens       int64 `json:"reasoning_output_tokens"`
 	// USD 十进制字符串；无结算快照 / 账本时为 null。
-	UserChargeUsd                *string `json:"user_charge_usd"`
+	UserChargeUsd *string `json:"user_charge_usd"`
 	// 成本按 provider 结算币种记账（cost_currency，D2 修订）：*_cost_amount 为原币金额；
 	// total_cost_usd 为结算钉档汇率（cost_fx_rate）折算的 USD 总额，毛利/汇总用它。
 	CostCurrency                    *string `json:"cost_currency"`
 	CostFxRate                      *string `json:"cost_fx_rate"`
+	CostFxRateDate                  *string `json:"cost_fx_rate_date"`
 	TotalCostUsd                    *string `json:"total_cost_usd"`
 	TotalCostAmount                 *string `json:"total_cost_amount"`
 	UncachedInputCostAmount         *string `json:"uncached_input_cost_amount"`
@@ -98,7 +99,7 @@ type requestListItemDTO struct {
 	TierCostSource                    *string `json:"tier_cost_source"`
 	// DEC-027 成本来源倍率（倍率路径有值，覆盖/旧数据为 null）：价格倍率 + 充值倍率。
 	ChannelCostMultiplier *string `json:"channel_cost_multiplier"`
-	RechargeFactor        *string `json:"recharge_factor"`
+	ProviderRechargeRate  *string `json:"provider_recharge_rate"`
 	// LongContextApplied 费用是否已按长上下文倍率结算。
 	LongContextApplied bool `json:"long_context_applied"`
 	// 用户/Key 展示口径同 api-keys 页：只给名称和前缀，明文不落库也就无从回显。
@@ -135,6 +136,7 @@ type requestListItemDTO struct {
 type costSnapshotDTO struct {
 	Currency                        *string `json:"currency"`
 	FxRate                          *string `json:"fx_rate"`
+	FxRateDate                      *string `json:"fx_rate_date"`
 	TotalCostAmountUsd              *string `json:"total_cost_amount_usd"`
 	UncachedInputCostUnit           *string `json:"uncached_input_cost_unit"`
 	CacheReadInputCostUnit          *string `json:"cache_read_input_cost_unit"`
@@ -153,7 +155,7 @@ type costSnapshotDTO struct {
 	TotalCostAmount                 *string `json:"total_cost_amount"`
 	// DEC-027 成本来源倍率（倍率路径有值，覆盖/旧数据为 null）：价格倍率 + 充值倍率，供费用处展示新旧倍率。
 	ChannelCostMultiplier     *string `json:"channel_cost_multiplier"`
-	RechargeFactor            *string `json:"recharge_factor"`
+	ProviderRechargeRate      *string `json:"provider_recharge_rate"`
 	ServiceTier               *string `json:"service_tier"`
 	ModelPriceServiceTierID   *int64  `json:"model_price_service_tier_id"`
 	ChannelPriceServiceTierID *int64  `json:"channel_price_service_tier_id"`
@@ -181,7 +183,7 @@ type attemptDTO struct {
 	ChannelID             int64   `json:"channel_id"`
 	ChannelName           string  `json:"channel_name"`
 	ChannelCostMultiplier *string `json:"channel_cost_multiplier"`
-	RechargeFactor        *string `json:"recharge_factor"`
+	ProviderRechargeRate  *string `json:"provider_recharge_rate"`
 	AdapterKey            string  `json:"adapter_key"`
 	UpstreamModel         string  `json:"upstream_model"`
 	UpstreamProtocol      string  `json:"upstream_protocol"`
@@ -384,17 +386,18 @@ func toRequestSummaryDTO(s query.RequestSummary) requestSummaryDTO {
 
 func toRequestListItemDTO(item query.RequestListItem) requestListItemDTO {
 	return requestListItemDTO{
-		requestSummaryDTO:            toRequestSummaryDTO(item.RequestSummary),
-		UncachedInputTokens:          item.UncachedInputTokens,
-		CacheReadInputTokens:         item.CacheReadInputTokens,
-		CacheCreation5mInputTokens:   item.CacheCreation5mInputTokens,
-		CacheCreation1hInputTokens:   item.CacheCreation1hInputTokens,
-		CacheCreation30mInputTokens:  item.CacheCreation30mInputTokens,
-		OutputTokens:                 item.OutputTokens,
-		ReasoningOutputTokens:        item.ReasoningOutputTokens,
-		UserChargeUsd:                item.UserChargeUSD,
+		requestSummaryDTO:               toRequestSummaryDTO(item.RequestSummary),
+		UncachedInputTokens:             item.UncachedInputTokens,
+		CacheReadInputTokens:            item.CacheReadInputTokens,
+		CacheCreation5mInputTokens:      item.CacheCreation5mInputTokens,
+		CacheCreation1hInputTokens:      item.CacheCreation1hInputTokens,
+		CacheCreation30mInputTokens:     item.CacheCreation30mInputTokens,
+		OutputTokens:                    item.OutputTokens,
+		ReasoningOutputTokens:           item.ReasoningOutputTokens,
+		UserChargeUsd:                   item.UserChargeUSD,
 		CostCurrency:                    item.CostCurrency,
 		CostFxRate:                      item.CostFxRate,
+		CostFxRateDate:                  item.CostFxRateDate,
 		TotalCostUsd:                    item.TotalCostUSD,
 		TotalCostAmount:                 item.TotalCostAmount,
 		UncachedInputCostAmount:         item.UncachedInputCostAmount,
@@ -426,7 +429,7 @@ func toRequestListItemDTO(item query.RequestListItem) requestListItemDTO {
 		TierCostSource:                    item.TierCostSource,
 
 		ChannelCostMultiplier: item.ChannelCostMultiplier,
-		RechargeFactor:        item.RechargeFactor,
+		ProviderRechargeRate:  item.ProviderRechargeRate,
 		LongContextApplied:    item.LongContextApplied,
 
 		ApiKeyName:   item.APIKeyName,
@@ -463,6 +466,7 @@ func toCostSnapshotDTO(c query.CostSnapshotView) costSnapshotDTO {
 	return costSnapshotDTO{
 		Currency:                        c.Currency,
 		FxRate:                          c.FxRate,
+		FxRateDate:                      c.FxRateDate,
 		TotalCostAmountUsd:              c.TotalCostAmountUSD,
 		UncachedInputCostUnit:           c.UncachedInputCostUnit,
 		CacheReadInputCostUnit:          c.CacheReadInputCostUnit,
@@ -480,7 +484,7 @@ func toCostSnapshotDTO(c query.CostSnapshotView) costSnapshotDTO {
 		ReasoningOutputCostAmount:       c.ReasoningOutputCostAmount,
 		TotalCostAmount:                 c.TotalCostAmount,
 		ChannelCostMultiplier:           c.ChannelCostMultiplier,
-		RechargeFactor:                  c.RechargeFactor,
+		ProviderRechargeRate:            c.ProviderRechargeRate,
 		ServiceTier:                     c.ServiceTier,
 		ModelPriceServiceTierID:         c.ModelPriceServiceTierID,
 		ChannelPriceServiceTierID:       c.ChannelPriceServiceTierID,
@@ -549,7 +553,7 @@ func toAttemptDTO(a query.Attempt) attemptDTO {
 		ChannelID:             a.ChannelID,
 		ChannelName:           a.ChannelName,
 		ChannelCostMultiplier: a.ChannelCostMultiplier,
-		RechargeFactor:        a.RechargeFactor,
+		ProviderRechargeRate:  a.ProviderRechargeRate,
 		AdapterKey:            a.AdapterKey,
 		UpstreamModel:         a.UpstreamModel,
 		UpstreamProtocol:      a.UpstreamProtocol,

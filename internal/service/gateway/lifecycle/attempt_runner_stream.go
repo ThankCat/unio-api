@@ -511,7 +511,7 @@ scan:
 					FastChannelPriceServiceTierID: candidate.FastChannelPriceServiceTierID,
 					CostBaseModelPriceID:          candidate.CostBaseModelPriceID,
 					ChannelCostMultiplierID:       candidate.ChannelCostMultiplierID,
-					ChannelRechargeFactorID:       candidate.ChannelRechargeFactorID,
+					ProviderRechargeRateID:        candidate.ProviderRechargeRateID,
 					SalePrice:                     candidate.SalePrice,
 					FastSalePrice:                 candidate.FastSalePrice,
 					PriceRatio:                    candidate.PriceRatio,

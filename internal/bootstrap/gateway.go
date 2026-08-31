@@ -34,7 +34,7 @@ func NewChatGateway(
 
 	requestLogStore := requestlog.NewStore(queries)
 	ledgerService := ledger.NewService(db, queries)
-	providerLedgerService := providerledger.NewService(db, queries)
+	providerLedgerService := providerledger.NewService(db, queries).WithFxRates(fx.NewService(queries, 0))
 	chatSettlementService := lifecycle.NewChatSettlementService(
 		db,
 		queries,
@@ -100,14 +100,14 @@ func NewResponsesGateway(
 
 	requestLogStore := requestlog.NewStore(queries)
 	ledgerService := ledger.NewService(db, queries)
-	providerLedgerService := providerledger.NewService(db, queries)
+	providerLedgerService := providerledger.NewService(db, queries).WithFxRates(fx.NewService(queries, 0))
 	chatSettlementService := lifecycle.NewChatSettlementService(
 		db,
 		queries,
 		billing.Service{},
 		ledgerService,
 		providerLedgerService,
-	).WithFxRates(fx.NewService(queries, 0))
+	).WithFxRates(fx.NewService(queries, 0)).WithLogger(logger)
 	chatSettlementRecoveryStore := lifecycle.NewChatSettlementRecoveryStore(
 		queries,
 		workerConfig.SettlementRecoveryInitialDelay,
@@ -160,7 +160,7 @@ func NewMessagesGateway(
 
 	requestLogStore := requestlog.NewStore(queries)
 	ledgerService := ledger.NewService(db, queries)
-	providerLedgerService := providerledger.NewService(db, queries)
+	providerLedgerService := providerledger.NewService(db, queries).WithFxRates(fx.NewService(queries, 0))
 	chatSettlementService := lifecycle.NewChatSettlementService(
 		db,
 		queries,

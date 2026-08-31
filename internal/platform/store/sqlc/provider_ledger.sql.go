@@ -115,7 +115,10 @@ INSERT INTO provider_ledger_entries (
     balance_before,
     balance_after,
     idempotency_key,
-    reason
+    reason,
+    amount_usd,
+    fx_rate,
+    fx_rate_date
 )
 VALUES (
     $1,
@@ -134,9 +137,12 @@ VALUES (
     $14,
     $15,
     $16,
-    $17
+    $17,
+    $18,
+    $19,
+    $20
 )
-RETURNING id, provider_id, request_record_id, request_attempt_id, provider_probe_record_id, cost_snapshot_id, channel_id, request_id, channel_name, upstream_model, entry_type, amount, currency, balance_before, balance_after, idempotency_key, reason, created_at, usage_source
+RETURNING id, provider_id, request_record_id, request_attempt_id, provider_probe_record_id, cost_snapshot_id, channel_id, request_id, channel_name, upstream_model, entry_type, amount, currency, balance_before, balance_after, idempotency_key, reason, created_at, usage_source, amount_usd, fx_rate, fx_rate_date
 `
 
 type CreateProviderLedgerEntryParams struct {
@@ -157,6 +163,9 @@ type CreateProviderLedgerEntryParams struct {
 	BalanceAfter          pgtype.Numeric
 	IdempotencyKey        string
 	Reason                string
+	AmountUsd             pgtype.Numeric
+	FxRate                pgtype.Numeric
+	FxRateDate            pgtype.Date
 }
 
 func (q *Queries) CreateProviderLedgerEntry(ctx context.Context, arg CreateProviderLedgerEntryParams) (ProviderLedgerEntry, error) {
@@ -178,6 +187,9 @@ func (q *Queries) CreateProviderLedgerEntry(ctx context.Context, arg CreateProvi
 		arg.BalanceAfter,
 		arg.IdempotencyKey,
 		arg.Reason,
+		arg.AmountUsd,
+		arg.FxRate,
+		arg.FxRateDate,
 	)
 	var i ProviderLedgerEntry
 	err := row.Scan(
@@ -200,6 +212,9 @@ func (q *Queries) CreateProviderLedgerEntry(ctx context.Context, arg CreateProvi
 		&i.Reason,
 		&i.CreatedAt,
 		&i.UsageSource,
+		&i.AmountUsd,
+		&i.FxRate,
+		&i.FxRateDate,
 	)
 	return i, err
 }
@@ -357,7 +372,7 @@ func (q *Queries) GetProviderBalanceForUpdate(ctx context.Context, arg GetProvid
 }
 
 const getProviderLedgerEntryByCostSnapshotID = `-- name: GetProviderLedgerEntryByCostSnapshotID :one
-SELECT id, provider_id, request_record_id, request_attempt_id, provider_probe_record_id, cost_snapshot_id, channel_id, request_id, channel_name, upstream_model, entry_type, amount, currency, balance_before, balance_after, idempotency_key, reason, created_at, usage_source
+SELECT id, provider_id, request_record_id, request_attempt_id, provider_probe_record_id, cost_snapshot_id, channel_id, request_id, channel_name, upstream_model, entry_type, amount, currency, balance_before, balance_after, idempotency_key, reason, created_at, usage_source, amount_usd, fx_rate, fx_rate_date
 FROM provider_ledger_entries
 WHERE cost_snapshot_id = $1
 `
@@ -385,12 +400,15 @@ func (q *Queries) GetProviderLedgerEntryByCostSnapshotID(ctx context.Context, co
 		&i.Reason,
 		&i.CreatedAt,
 		&i.UsageSource,
+		&i.AmountUsd,
+		&i.FxRate,
+		&i.FxRateDate,
 	)
 	return i, err
 }
 
 const getProviderLedgerEntryByIdempotencyKey = `-- name: GetProviderLedgerEntryByIdempotencyKey :one
-SELECT id, provider_id, request_record_id, request_attempt_id, provider_probe_record_id, cost_snapshot_id, channel_id, request_id, channel_name, upstream_model, entry_type, amount, currency, balance_before, balance_after, idempotency_key, reason, created_at, usage_source
+SELECT id, provider_id, request_record_id, request_attempt_id, provider_probe_record_id, cost_snapshot_id, channel_id, request_id, channel_name, upstream_model, entry_type, amount, currency, balance_before, balance_after, idempotency_key, reason, created_at, usage_source, amount_usd, fx_rate, fx_rate_date
 FROM provider_ledger_entries
 WHERE idempotency_key = $1
 `
@@ -418,12 +436,15 @@ func (q *Queries) GetProviderLedgerEntryByIdempotencyKey(ctx context.Context, id
 		&i.Reason,
 		&i.CreatedAt,
 		&i.UsageSource,
+		&i.AmountUsd,
+		&i.FxRate,
+		&i.FxRateDate,
 	)
 	return i, err
 }
 
 const getProviderLedgerEntryByProbeRecordID = `-- name: GetProviderLedgerEntryByProbeRecordID :one
-SELECT id, provider_id, request_record_id, request_attempt_id, provider_probe_record_id, cost_snapshot_id, channel_id, request_id, channel_name, upstream_model, entry_type, amount, currency, balance_before, balance_after, idempotency_key, reason, created_at, usage_source
+SELECT id, provider_id, request_record_id, request_attempt_id, provider_probe_record_id, cost_snapshot_id, channel_id, request_id, channel_name, upstream_model, entry_type, amount, currency, balance_before, balance_after, idempotency_key, reason, created_at, usage_source, amount_usd, fx_rate, fx_rate_date
 FROM provider_ledger_entries
 WHERE provider_probe_record_id = $1
 `
@@ -451,6 +472,9 @@ func (q *Queries) GetProviderLedgerEntryByProbeRecordID(ctx context.Context, pro
 		&i.Reason,
 		&i.CreatedAt,
 		&i.UsageSource,
+		&i.AmountUsd,
+		&i.FxRate,
+		&i.FxRateDate,
 	)
 	return i, err
 }
@@ -507,6 +531,10 @@ SELECT
     e.entry_type,
     e.amount,
     e.currency,
+    -- 事件时锁定的 USD 折算快照（可空：本列上线前的存量行不回填，展示端显示不可折算）。
+    e.amount_usd,
+    e.fx_rate,
+    e.fx_rate_date,
     e.balance_before,
     e.balance_after,
     e.idempotency_key,
@@ -552,6 +580,9 @@ type ListProviderLedgerEntriesPageRow struct {
 	EntryType             string
 	Amount                pgtype.Numeric
 	Currency              string
+	AmountUsd             pgtype.Numeric
+	FxRate                pgtype.Numeric
+	FxRateDate            pgtype.Date
 	BalanceBefore         pgtype.Numeric
 	BalanceAfter          pgtype.Numeric
 	IdempotencyKey        string
@@ -594,6 +625,9 @@ func (q *Queries) ListProviderLedgerEntriesPage(ctx context.Context, arg ListPro
 			&i.EntryType,
 			&i.Amount,
 			&i.Currency,
+			&i.AmountUsd,
+			&i.FxRate,
+			&i.FxRateDate,
 			&i.BalanceBefore,
 			&i.BalanceAfter,
 			&i.IdempotencyKey,

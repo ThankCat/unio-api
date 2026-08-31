@@ -53,7 +53,7 @@ type adminHTTPDeps struct {
 
 	// DEC-027 渠道成本倍率。
 	ChannelCostMultiplierService channel.ChannelCostMultiplierService
-	ChannelRechargeFactorService channel.ChannelRechargeFactorService
+	ProviderRechargeRateService  provider.ProviderRechargeRateService
 
 	RoutingTraceService adminapi.RoutingTraceService
 
@@ -128,7 +128,7 @@ func NewAdminHTTPHandler(deps adminHTTPDeps) http.Handler {
 		ModelPriceService:            deps.ModelPriceService,
 
 		ChannelCostMultiplierService: deps.ChannelCostMultiplierService,
-		ChannelRechargeFactorService: deps.ChannelRechargeFactorService,
+		ProviderRechargeRateService:  deps.ProviderRechargeRateService,
 
 		RoutingTraceService: deps.RoutingTraceService,
 		RequestQueryService: deps.RequestQueryService,

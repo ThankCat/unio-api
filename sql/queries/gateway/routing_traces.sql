@@ -103,8 +103,8 @@ SELECT
     cost.reasoning_output_cost,
     COALESCE(mult.id, 0)::bigint AS channel_cost_multiplier_id,
     mult.multiplier AS cost_multiplier,
-    COALESCE(recharge.id, 0)::bigint AS channel_recharge_factor_id,
-    recharge.factor AS recharge_factor
+    COALESCE(recharge.id, 0)::bigint AS provider_recharge_rate_id,
+    recharge.rate AS provider_recharge_rate
 FROM channels c
 JOIN providers p ON p.id = c.provider_id
 LEFT JOIN models m
@@ -150,13 +150,13 @@ LEFT JOIN LATERAL (
     LIMIT 1
 ) mult ON TRUE
 LEFT JOIN LATERAL (
-    SELECT crf.id, crf.factor
-    FROM channel_recharge_factors crf
-    WHERE crf.channel_id = c.id
-      AND crf.status = 'enabled'
-      AND crf.effective_from <= sqlc.arg(at_time)
-      AND (crf.effective_to IS NULL OR crf.effective_to > sqlc.arg(at_time))
-    ORDER BY crf.effective_from DESC, crf.id DESC
+    SELECT prr.id, prr.rate
+    FROM provider_recharge_rates prr
+    WHERE prr.provider_id = p.id
+      AND prr.status = 'enabled'
+      AND prr.effective_from <= sqlc.arg(at_time)
+      AND (prr.effective_to IS NULL OR prr.effective_to > sqlc.arg(at_time))
+    ORDER BY prr.effective_from DESC, prr.id DESC
     LIMIT 1
 ) recharge ON TRUE
 WHERE c.status <> 'archived'

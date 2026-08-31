@@ -61,11 +61,15 @@ type AdjustParams struct {
 }
 
 type Adjustment struct {
-	EntryID      int64
-	ProviderID   int64
-	EntryType    string
-	Amount       string
-	Currency     string
+	EntryID    int64
+	ProviderID int64
+	EntryType  string
+	Amount     string
+	Currency   string
+	// AmountUSD/FxRate/FxRateDate 是本次变化在事件时锁定的 USD 折算快照（不可折算时为 nil）。
+	AmountUSD    *string
+	FxRate       *string
+	FxRateDate   *time.Time
 	BalanceAfter string
 	Reason       string
 }
@@ -129,6 +133,9 @@ func (s *Service) Adjust(ctx context.Context, params AdjustParams) (Adjustment, 
 	return Adjustment{
 		EntryID: entry.ID, ProviderID: entry.ProviderID, EntryType: entry.EntryType,
 		Amount: opsutil.NumericString(entry.Amount), Currency: entry.Currency,
+		AmountUSD:    opsutil.NumericStringPtr(entry.AmountUsd),
+		FxRate:       opsutil.NumericStringPtr(entry.FxRate),
+		FxRateDate:   datePtr(entry.FxRateDate),
 		BalanceAfter: opsutil.NumericString(entry.BalanceAfter), Reason: entry.Reason,
 	}, nil
 }
@@ -186,11 +193,15 @@ type Entry struct {
 	EntryType             string
 	Amount                string
 	Currency              string
-	BalanceBefore         string
-	BalanceAfter          string
-	IdempotencyKey        string
-	Reason                string
-	CreatedAt             time.Time
+	// AmountUSD/FxRate/FxRateDate 是事件时锁定的 USD 折算快照（本列上线前的存量行为 nil，展示端显示不可折算）。
+	AmountUSD      *string
+	FxRate         *string
+	FxRateDate     *time.Time
+	BalanceBefore  string
+	BalanceAfter   string
+	IdempotencyKey string
+	Reason         string
+	CreatedAt      time.Time
 }
 
 func (s *Service) List(ctx context.Context, params ListParams) ([]Entry, int64, error) {
@@ -250,6 +261,9 @@ func (s *Service) List(ctx context.Context, params ListParams) ([]Entry, int64, 
 			ProviderProbeRecordID: opsutil.Int8Value(row.ProviderProbeRecordID),
 			UsageSource:           textPtr(row.UsageSource),
 			EntryType:             row.EntryType, Amount: opsutil.NumericString(row.Amount), Currency: row.Currency,
+			AmountUSD:     opsutil.NumericStringPtr(row.AmountUsd),
+			FxRate:        opsutil.NumericStringPtr(row.FxRate),
+			FxRateDate:    datePtr(row.FxRateDate),
 			BalanceBefore: opsutil.NumericString(row.BalanceBefore), BalanceAfter: opsutil.NumericString(row.BalanceAfter),
 			IdempotencyKey: row.IdempotencyKey, Reason: row.Reason, CreatedAt: row.CreatedAt.Time,
 		})
@@ -305,6 +319,14 @@ func balanceStatus(amount pgtype.Numeric) string {
 		return "low"
 	}
 	return "normal"
+}
+
+func datePtr(v pgtype.Date) *time.Time {
+	if !v.Valid {
+		return nil
+	}
+	t := v.Time
+	return &t
 }
 
 func textPtr(v pgtype.Text) *string {
