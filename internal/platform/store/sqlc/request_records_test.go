@@ -28,7 +28,7 @@ func createRequestRecordIdentity(t *testing.T, ctx context.Context, queries *sql
 
 	user, err := queries.CreateUser(ctx, sqlc.CreateUserParams{
 		Email:        fmt.Sprintf("request-record-%d@example.com", suffix),
-		PasswordHash: "test-password-hash",
+		PasswordHash: pgtype.Text{String: "test-password-hash", Valid: true},
 		DisplayName:  "Request Record User",
 	})
 	if err != nil {

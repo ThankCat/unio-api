@@ -9,6 +9,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/capability"
 	admincdkeyapp "github.com/ThankCat/unio-gateway/internal/app/adminapi/cdkey"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/channel"
+	adminemail "github.com/ThankCat/unio-gateway/internal/app/adminapi/email"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/exchangerate"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/ledger"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/message"
@@ -85,6 +86,11 @@ type adminHTTPDeps struct {
 	// 站内消息中心（告警通道 MVP）。
 	MessageService message.MessageService
 
+	// 邮件发送记录（客户中心「邮件」列表）与 SMTP 配置面板（含测试邮件）。
+	EmailLogService  adminemail.EmailLogService
+	EmailSMTPService system.EmailSMTPService
+	EmailTestMailer  system.EmailTestMailer
+
 	// 用户反馈工单；nil 时不挂载（未配置 TICKET_ATTACHMENT_SECRET）。
 	TicketService ticket.TicketService
 
@@ -154,6 +160,9 @@ func NewAdminHTTPHandler(deps adminHTTPDeps) http.Handler {
 		RuntimeDiagnosticsService: deps.RuntimeDiagnosticsService,
 		GatewayLoggingService:     deps.GatewayLoggingService,
 		MessageService:            deps.MessageService,
+		EmailLogService:           deps.EmailLogService,
+		EmailSMTPService:          deps.EmailSMTPService,
+		EmailTestMailer:           deps.EmailTestMailer,
 		TicketService:             deps.TicketService,
 		ExchangeRateService:       deps.ExchangeRateService,
 		ProviderSettingsService:   deps.ProviderSettingsService,

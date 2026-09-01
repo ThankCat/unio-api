@@ -2,7 +2,6 @@ package bootstrap
 
 import (
 	"context"
-	"errors"
 	"net/http"
 
 	"go.uber.org/zap"
@@ -25,6 +24,7 @@ import (
 	consoleticket "github.com/ThankCat/unio-gateway/internal/service/console/ticket"
 	consoleusage "github.com/ThankCat/unio-gateway/internal/service/console/usage"
 	consolewallet "github.com/ThankCat/unio-gateway/internal/service/console/wallet"
+	emailsvc "github.com/ThankCat/unio-gateway/internal/service/email"
 	"github.com/ThankCat/unio-gateway/internal/service/publicmodels"
 	"github.com/redis/go-redis/v9"
 )
@@ -59,9 +59,6 @@ func (a *ConsoleServerApp) Shutdown(ctx context.Context) error {
 
 // NewConsoleServerApp 装配 Console 配置、认证服务和 HTTP 路由。
 func NewConsoleServerApp(ctx context.Context, deps ConsoleServerAppDeps) (*ConsoleServerApp, error) {
-	if deps.Config.Console.Environment == config.GatewayEnvironmentProduction && deps.Config.Console.FixedVerificationCode == "" {
-		return nil, errors.New("console email delivery is not configured for production")
-	}
 	tracerProvider, err := tracing.Setup(ctx, tracing.Options{
 		Enabled:     deps.Config.Tracing.Enabled,
 		Endpoint:    deps.Config.Tracing.Endpoint,
@@ -104,7 +101,7 @@ func NewConsoleServerApp(ctx context.Context, deps ConsoleServerAppDeps) (*Conso
 		deps.Redis,
 		deps.Config.Redis.KeyNamespace,
 		deps.Config.Console.AuthSecret,
-		deps.Config.Console.FixedVerificationCode,
+		"",
 		settingsStore,
 	)
 	if err != nil {
@@ -143,6 +140,8 @@ func NewConsoleServerApp(ctx context.Context, deps ConsoleServerAppDeps) (*Conso
 		_ = tracerProvider.Shutdown(ctx)
 		return nil, err
 	}
+	// 验证码邮件同步发送器：现读系统设置里的 SMTP 配置（热更新），发送后写 email_messages 记录。
+	authService = authService.WithCodeMailer(emailsvc.NewMailer(settingsStore, queries, deps.Logger))
 	// 工单模块：签名密钥未配置时整体不启用（路由不挂载），不阻塞其余 Console 功能。
 	var ticketService consoleticketapp.Service
 	if secret := deps.Config.Ticket.AttachmentSecret; secret != "" {

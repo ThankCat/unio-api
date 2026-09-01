@@ -11,6 +11,26 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const changeConsolePasswordIfSet = `-- name: ChangeConsolePasswordIfSet :execrows
+UPDATE users
+SET password_hash = $1, updated_at = now()
+WHERE id = $2
+  AND password_hash IS NOT NULL
+`
+
+type ChangeConsolePasswordIfSetParams struct {
+	PasswordHash pgtype.Text
+	ID           int64
+}
+
+func (q *Queries) ChangeConsolePasswordIfSet(ctx context.Context, arg ChangeConsolePasswordIfSetParams) (int64, error) {
+	result, err := q.db.Exec(ctx, changeConsolePasswordIfSet, arg.PasswordHash, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const consoleActiveEmailExists = `-- name: ConsoleActiveEmailExists :one
 SELECT EXISTS (
     SELECT 1
@@ -51,7 +71,7 @@ RETURNING id, uid, email, password_hash, display_name, status, created_at, updat
 type CreateConsoleUserParams struct {
 	Uid          pgtype.UUID
 	Email        string
-	PasswordHash string
+	PasswordHash pgtype.Text
 	DisplayName  string
 }
 
@@ -59,7 +79,7 @@ type CreateConsoleUserRow struct {
 	ID           int64
 	Uid          pgtype.UUID
 	Email        string
-	PasswordHash string
+	PasswordHash pgtype.Text
 	DisplayName  string
 	Status       string
 	CreatedAt    pgtype.Timestamptz
@@ -98,7 +118,7 @@ type GetConsoleUserByEmailRow struct {
 	ID           int64
 	Uid          pgtype.UUID
 	Email        string
-	PasswordHash string
+	PasswordHash pgtype.Text
 	DisplayName  string
 	Status       string
 	CreatedAt    pgtype.Timestamptz
@@ -132,7 +152,7 @@ type GetConsoleUserByUIDRow struct {
 	ID           int64
 	Uid          pgtype.UUID
 	Email        string
-	PasswordHash string
+	PasswordHash pgtype.Text
 	DisplayName  string
 	Status       string
 	CreatedAt    pgtype.Timestamptz
@@ -155,6 +175,26 @@ func (q *Queries) GetConsoleUserByUID(ctx context.Context, uid pgtype.UUID) (Get
 	return i, err
 }
 
+const setConsolePasswordIfUnset = `-- name: SetConsolePasswordIfUnset :execrows
+UPDATE users
+SET password_hash = $1, updated_at = now()
+WHERE id = $2
+  AND password_hash IS NULL
+`
+
+type SetConsolePasswordIfUnsetParams struct {
+	PasswordHash pgtype.Text
+	ID           int64
+}
+
+func (q *Queries) SetConsolePasswordIfUnset(ctx context.Context, arg SetConsolePasswordIfUnsetParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setConsolePasswordIfUnset, arg.PasswordHash, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const updateConsoleDisplayName = `-- name: UpdateConsoleDisplayName :one
 UPDATE users
 SET display_name = $1, updated_at = now()
@@ -171,7 +211,7 @@ type UpdateConsoleDisplayNameRow struct {
 	ID           int64
 	Uid          pgtype.UUID
 	Email        string
-	PasswordHash string
+	PasswordHash pgtype.Text
 	DisplayName  string
 	Status       string
 	CreatedAt    pgtype.Timestamptz
@@ -202,7 +242,7 @@ RETURNING id, uid, email, password_hash, display_name, status, created_at, updat
 `
 
 type UpdateConsolePasswordParams struct {
-	PasswordHash string
+	PasswordHash pgtype.Text
 	ID           int64
 }
 
@@ -210,7 +250,7 @@ type UpdateConsolePasswordRow struct {
 	ID           int64
 	Uid          pgtype.UUID
 	Email        string
-	PasswordHash string
+	PasswordHash pgtype.Text
 	DisplayName  string
 	Status       string
 	CreatedAt    pgtype.Timestamptz

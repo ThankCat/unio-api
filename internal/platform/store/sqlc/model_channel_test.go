@@ -179,7 +179,7 @@ func createUserForModelPolicy(t *testing.T, ctx context.Context, queries *sqlc.Q
 
 	user, err := queries.CreateUser(ctx, sqlc.CreateUserParams{
 		Email:        fmt.Sprintf("model-policy-user-%d@example.test", suffix),
-		PasswordHash: "hash",
+		PasswordHash: pgtype.Text{String: "hash", Valid: true},
 		DisplayName:  "model policy user",
 	})
 	if err != nil {

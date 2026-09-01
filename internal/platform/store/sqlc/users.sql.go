@@ -21,7 +21,7 @@ LIMIT 1
 type GetUserByEmailRow struct {
 	ID           int64
 	Email        string
-	PasswordHash string
+	PasswordHash pgtype.Text
 	DisplayName  string
 	CreatedAt    pgtype.Timestamptz
 	UpdatedAt    pgtype.Timestamptz

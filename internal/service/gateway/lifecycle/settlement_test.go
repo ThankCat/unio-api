@@ -229,7 +229,7 @@ func (d *chatSettlementDBDeps) seed(t *testing.T) {
 
 	user, err := d.queries.CreateUser(d.ctx, sqlc.CreateUserParams{
 		Email:        fmt.Sprintf("chat-settlement-%d@example.com", suffix),
-		PasswordHash: "test-password-hash",
+		PasswordHash: pgtype.Text{String: "test-password-hash", Valid: true},
 		DisplayName:  "Chat Settlement User",
 	})
 	if err != nil {

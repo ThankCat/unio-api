@@ -40,6 +40,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/service/admin/customer"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/customerops"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/dashboard"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/emaillog"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/exchangerate"
 	admingatewaylogging "github.com/ThankCat/unio-gateway/internal/service/admin/gatewaylogging"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/model"
@@ -56,6 +57,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/service/admin/runtimediagnostics"
 	adminticket "github.com/ThankCat/unio-gateway/internal/service/admin/ticket"
 	"github.com/ThankCat/unio-gateway/internal/service/appsettings"
+	emailsvc "github.com/ThankCat/unio-gateway/internal/service/email"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/readiness"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/runtimefacts"
 	"github.com/redis/go-redis/v9"
@@ -354,6 +356,9 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		RuntimeDiagnosticsService: runtimeDiagnosticsService,
 		GatewayLoggingService:     gatewayLoggingService,
 		MessageService:            adminMessageService,
+		EmailLogService:           emaillog.NewService(queries),
+		EmailSMTPService:          providerSettingsService,
+		EmailTestMailer:           emailsvc.NewMailer(settingsStore, queries, deps.Logger),
 		TicketService:             adminTicketService,
 		ExchangeRateService:       exchangeRateService,
 		ProviderSettingsService:   providerSettingsService,

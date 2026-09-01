@@ -67,7 +67,7 @@ func createIdentity(t *testing.T, ctx context.Context, queries *sqlc.Queries) te
 
 	user, err := queries.CreateUser(ctx, sqlc.CreateUserParams{
 		Email:        fmt.Sprintf("requestlog-%d@example.com", suffix),
-		PasswordHash: "test-password-hash",
+		PasswordHash: pgtype.Text{String: "test-password-hash", Valid: true},
 		DisplayName:  "Requestlog User",
 	})
 	if err != nil {

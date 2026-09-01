@@ -58,7 +58,8 @@ func DefaultPasswordLoginRateLimitSettings() PasswordLoginRateLimitSettings {
 func DefaultVerificationRateLimitSettings() VerificationRateLimitSettings {
 	return VerificationRateLimitSettings{
 		SendEmailPurpose: []RateLimitRule{
-			{WindowSeconds: 30, Limit: 1},
+			// 60 秒重发窗口（2026-09-01 决策，与 Challenge.ResendAfter 一致）。
+			{WindowSeconds: 60, Limit: 1},
 			{WindowSeconds: int64((15 * time.Minute).Seconds()), Limit: 5},
 			{WindowSeconds: int64((24 * time.Hour).Seconds()), Limit: 20},
 		},

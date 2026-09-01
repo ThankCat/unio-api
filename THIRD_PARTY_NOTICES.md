@@ -1,5 +1,14 @@
 # Third-Party Notices
 
+## go-mail
+
+SMTP client library [go-mail](https://github.com/wneessen/go-mail) is used for transactional email delivery.
+
+Copyright (c) 2022-2023 The go-mail Authors
+
+MIT License. See the [upstream license](https://github.com/wneessen/go-mail/blob/main/LICENSE) for the full text,
+which matches the MIT terms reproduced in the models.dev section below.
+
 ## models.dev
 
 Model metadata and lab logos sourced from [models.dev](https://models.dev) ([source repository](https://github.com/anomalyco/models.dev)).

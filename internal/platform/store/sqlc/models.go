@@ -300,6 +300,21 @@ type CostSnapshot struct {
 	ProviderRechargeRate            pgtype.Numeric
 }
 
+type EmailMessage struct {
+	ID           int64
+	EmailType    string
+	Recipient    string
+	Sender       string
+	Subject      string
+	BodyHtml     string
+	Status       string
+	ErrorSummary pgtype.Text
+	Locale       string
+	DurationMs   pgtype.Int4
+	SentAt       pgtype.Timestamptz
+	CreatedAt    pgtype.Timestamptz
+}
+
 type ExchangeRate struct {
 	ID            int64
 	BaseCurrency  string
@@ -967,7 +982,7 @@ type UsageRecord struct {
 type User struct {
 	ID           int64
 	Email        string
-	PasswordHash string
+	PasswordHash pgtype.Text
 	DisplayName  string
 	CreatedAt    pgtype.Timestamptz
 	UpdatedAt    pgtype.Timestamptz

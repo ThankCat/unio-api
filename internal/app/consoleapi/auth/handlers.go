@@ -2,6 +2,7 @@ package auth
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -45,13 +46,31 @@ func (h *handler) emailChallenge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	challenge, err := h.service.SendChallenge(
-		r.Context(), request.Email, request.Purpose, consolemiddleware.ClientIPFromContext(r.Context()),
+		r.Context(), request.Email, request.Purpose,
+		consolemiddleware.ClientIPFromContext(r.Context()), preferredLocale(r),
 	)
 	if err != nil {
 		h.errorWriter.Write(w, r, err)
 		return
 	}
 	_ = transport.WriteData(w, http.StatusAccepted, challenge)
+}
+
+// preferredLocale 从 Accept-Language 推断验证码邮件语言：zh* → zh，其余（含缺省）→ en，
+// 与 Blueprint「缺少语言信息或语言不受支持时统一使用英文」一致。
+func preferredLocale(r *http.Request) string {
+	header := r.Header.Get("Accept-Language")
+	for _, part := range strings.Split(header, ",") {
+		lang := strings.ToLower(strings.TrimSpace(strings.SplitN(part, ";", 2)[0]))
+		if lang == "" || lang == "*" {
+			continue
+		}
+		if strings.HasPrefix(lang, "zh") {
+			return "zh"
+		}
+		return "en"
+	}
+	return "en"
 }
 
 func (h *handler) registration(w http.ResponseWriter, r *http.Request) {
@@ -240,21 +259,45 @@ func (h *handler) updateMe(w http.ResponseWriter, r *http.Request) {
 	_ = transport.WriteData(w, http.StatusOK, userData{User: user})
 }
 
-func (h *handler) passwordChange(w http.ResponseWriter, r *http.Request) {
+func (h *handler) passwordChallenge(w http.ResponseWriter, r *http.Request) {
 	token, ok := h.requireAccessCookie(w, r)
 	if !ok {
 		return
 	}
-	var request passwordChangeRequest
+	challenge, challengeErr := h.service.SendPasswordChallenge(
+		r.Context(),
+		token,
+		consolemiddleware.ClientIPFromContext(r.Context()),
+		preferredLocale(r),
+	)
+	if challengeErr != nil {
+		h.errorWriter.Write(w, r, challengeErr)
+		return
+	}
+	_ = transport.WriteData(w, http.StatusAccepted, challenge)
+}
+
+func (h *handler) passwordUpdate(w http.ResponseWriter, r *http.Request) {
+	token, ok := h.requireAccessCookie(w, r)
+	if !ok {
+		return
+	}
+	var request passwordUpdateRequest
 	if err := transport.DecodeJSON(w, r, &request); err != nil {
 		h.errorWriter.Write(w, r, err)
 		return
 	}
-	if changeErr := h.service.ChangePassword(r.Context(), token, request.CurrentPassword, request.NewPassword); changeErr != nil {
-		h.errorWriter.Write(w, r, changeErr)
+	if updateErr := h.service.UpdatePassword(
+		r.Context(),
+		token,
+		request.ChallengeID,
+		request.Code,
+		request.NewPassword,
+		consolemiddleware.ClientIPFromContext(r.Context()),
+	); updateErr != nil {
+		h.errorWriter.Write(w, r, updateErr)
 		return
 	}
-	// 其他会话已被吊销；当前会话继续有效，Cookie 不动。
 	_ = transport.WriteData(w, http.StatusOK, completedData{Completed: true})
 }
 

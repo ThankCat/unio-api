@@ -262,7 +262,7 @@ RETURNING id, email, password_hash, display_name, created_at, updated_at, status
 
 type CreateUserParams struct {
 	Email        string
-	PasswordHash string
+	PasswordHash pgtype.Text
 	DisplayName  string
 }
 

@@ -32,6 +32,13 @@ type fakeAuthService struct {
 	resetVerificationCode    string
 	resetToken               string
 	resetPassword            string
+	passwordChallengeToken   string
+	passwordChallengeIP      string
+	passwordUpdateToken      string
+	passwordUpdateChallenge  string
+	passwordUpdateCode       string
+	passwordUpdateValue      string
+	passwordUpdateIP         string
 }
 
 func (s *fakeAuthService) CheckEmail(_ context.Context, email string) *consoleservice.Error {
@@ -44,9 +51,9 @@ func (s *fakeAuthService) CheckRegistrationEmail(_ context.Context, email string
 	return nil
 }
 
-func (s *fakeAuthService) SendChallenge(_ context.Context, _, _, ip string) (serviceauth.Challenge, *consoleservice.Error) {
+func (s *fakeAuthService) SendChallenge(_ context.Context, _, _, ip, _ string) (serviceauth.Challenge, *consoleservice.Error) {
 	s.challengeIP = ip
-	return serviceauth.Challenge{ID: "vch_test", ExpiresIn: 600, ResendAfter: 30}, nil
+	return serviceauth.Challenge{ID: "vch_test", ExpiresIn: 600, ResendAfter: 60}, nil
 }
 
 func (s *fakeAuthService) Register(context.Context, string, string, string, string, string, string) (serviceauth.User, serviceauth.TokenPair, *consoleservice.Error) {
@@ -112,7 +119,18 @@ func (s *fakeAuthService) UpdateDisplayName(context.Context, string, string) (se
 	return serviceauth.User{}, nil
 }
 
-func (s *fakeAuthService) ChangePassword(context.Context, string, string, string) *consoleservice.Error {
+func (s *fakeAuthService) SendPasswordChallenge(_ context.Context, token, ip, _ string) (serviceauth.Challenge, *consoleservice.Error) {
+	s.passwordChallengeToken = token
+	s.passwordChallengeIP = ip
+	return serviceauth.Challenge{ID: "vch_password", ExpiresIn: 600, ResendAfter: 60}, nil
+}
+
+func (s *fakeAuthService) UpdatePassword(_ context.Context, token, challengeID, code, password, ip string) *consoleservice.Error {
+	s.passwordUpdateToken = token
+	s.passwordUpdateChallenge = challengeID
+	s.passwordUpdateCode = code
+	s.passwordUpdateValue = password
+	s.passwordUpdateIP = ip
 	return nil
 }
 
@@ -416,6 +434,44 @@ func TestPasswordResetUsesVerificationThenOneTimeCredential(t *testing.T) {
 	}
 	if service.resetToken != "prt_test" || service.resetPassword != "Password1!" {
 		t.Fatalf("unexpected password reset input: token=%q password=%q", service.resetToken, service.resetPassword)
+	}
+}
+
+func TestAuthenticatedPasswordFlowUsesSessionIdentity(t *testing.T) {
+	service := &fakeAuthService{}
+	handler := newTestRouter(t, service)
+
+	challengeRequest := httptest.NewRequest(http.MethodPost, "/v1/auth/password-challenges", nil)
+	challengeRequest.AddCookie(&http.Cookie{Name: "unio_access_token", Value: "access-token"})
+	challengeRequest.RemoteAddr = "203.0.113.8:443"
+	challengeRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(challengeRecorder, challengeRequest)
+	if challengeRecorder.Code != http.StatusAccepted {
+		t.Fatalf("expected password challenge 202, got %d body=%s", challengeRecorder.Code, challengeRecorder.Body.String())
+	}
+	if service.passwordChallengeToken != "access-token" || service.passwordChallengeIP != "203.0.113.8" {
+		t.Fatalf("unexpected password challenge identity: token=%q ip=%q", service.passwordChallengeToken, service.passwordChallengeIP)
+	}
+
+	updateRequest := httptest.NewRequest(
+		http.MethodPut,
+		"/v1/auth/password",
+		strings.NewReader(`{"challenge_id":"vch_password","code":"638214","new_password":"Password2!"}`),
+	)
+	updateRequest.Header.Set("Content-Type", "application/json")
+	updateRequest.AddCookie(&http.Cookie{Name: "unio_access_token", Value: "access-token"})
+	updateRequest.RemoteAddr = "203.0.113.8:443"
+	updateRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(updateRecorder, updateRequest)
+	if updateRecorder.Code != http.StatusOK {
+		t.Fatalf("expected password update 200, got %d body=%s", updateRecorder.Code, updateRecorder.Body.String())
+	}
+	if service.passwordUpdateToken != "access-token" ||
+		service.passwordUpdateChallenge != "vch_password" ||
+		service.passwordUpdateCode != "638214" ||
+		service.passwordUpdateValue != "Password2!" ||
+		service.passwordUpdateIP != "203.0.113.8" {
+		t.Fatalf("unexpected password update input: %+v", service)
 	}
 }
 

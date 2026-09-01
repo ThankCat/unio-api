@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,16 +21,67 @@ func newTestVerificationStore(t *testing.T) (*VerificationStore, *redis.Client, 
 	return store, client, mini
 }
 
+func TestRandomVerificationCodesAreSixDigits(t *testing.T) {
+	mini := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: mini.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	store, err := NewVerificationStore(client, "test", "01234567890123456789012345678901", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	seen := make(map[string]struct{})
+	for i := 0; i < 32; i++ {
+		code, codeErr := store.newCode()
+		if codeErr != nil {
+			t.Fatal(codeErr)
+		}
+		if len(code) != 6 || strings.Trim(code, "0123456789") != "" {
+			t.Fatalf("unexpected code format %q", code)
+		}
+		seen[code] = struct{}{}
+	}
+	if len(seen) == 1 {
+		t.Fatalf("random generator returned one repeated value: %v", seen)
+	}
+}
+
+func TestPasswordChallengePurposeIsBoundToAccountAndPurpose(t *testing.T) {
+	store, client, _ := newTestVerificationStore(t)
+	t.Cleanup(func() { _ = client.Close() })
+	ctx := context.Background()
+
+	challenge, _, err := store.Issue(ctx, "user@example.com", PurposePasswordSet, "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	purpose, purposeErr := store.PasswordPurpose(ctx, "user@example.com", challenge.ID)
+	if purposeErr != nil || purpose != PurposePasswordSet {
+		t.Fatalf("unexpected password purpose: purpose=%q err=%v", purpose, purposeErr)
+	}
+	if _, crossUserErr := store.PasswordPurpose(ctx, "other@example.com", challenge.ID); crossUserErr == nil || crossUserErr.Code != CodeVerificationChallengeUnavailable {
+		t.Fatalf("cross-user challenge should be unavailable, got %v", crossUserErr)
+	}
+
+	publicChallenge, _, issueErr := store.Issue(ctx, "user@example.com", PurposeLogin, "127.0.0.1")
+	if issueErr != nil {
+		t.Fatal(issueErr)
+	}
+	if _, publicErr := store.PasswordPurpose(ctx, "user@example.com", publicChallenge.ID); publicErr == nil || publicErr.Code != CodeVerificationChallengeUnavailable {
+		t.Fatalf("public-purpose challenge should be unavailable, got %v", publicErr)
+	}
+}
+
 func TestVerificationChallengeLifecycle(t *testing.T) {
 	store, client, _ := newTestVerificationStore(t)
 	t.Cleanup(func() { _ = client.Close() })
 	ctx := context.Background()
 
-	challenge, err := store.Issue(ctx, "User@example.com", PurposeRegister, "127.0.0.1")
+	challenge, _, err := store.Issue(ctx, "User@example.com", PurposeRegister, "127.0.0.1")
 	if err != nil {
 		t.Fatalf("issue challenge: %v", err)
 	}
-	if challenge.ID == "" || challenge.ExpiresIn != 600 || challenge.ResendAfter != 30 {
+	if challenge.ID == "" || challenge.ExpiresIn != 600 || challenge.ResendAfter != 60 {
 		t.Fatalf("unexpected challenge: %+v", challenge)
 	}
 	if _, err := store.Reserve(ctx, "User@example.com", PurposeLogin, "127.0.0.1", challenge.ID, "123456"); err == nil || err.Code != CodeVerificationChallengeUnavailable {
@@ -59,12 +111,13 @@ func TestVerificationChallengeCanBeConsumedAndSuperseded(t *testing.T) {
 	t.Cleanup(func() { _ = client.Close() })
 	ctx := context.Background()
 
-	first, err := store.Issue(ctx, "user@example.com", PurposeLogin, "127.0.0.1")
+	first, _, err := store.Issue(ctx, "user@example.com", PurposeLogin, "127.0.0.1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	store.now = func() time.Time { return time.Now().Add(31 * time.Second) }
-	second, err := store.Issue(ctx, "user@example.com", PurposeLogin, "127.0.0.1")
+	// 60 秒重发窗口（send_email_purpose {60s,1}）过后才允许再次签发。
+	store.now = func() time.Time { return time.Now().Add(61 * time.Second) }
+	second, _, err := store.Issue(ctx, "user@example.com", PurposeLogin, "127.0.0.1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +141,7 @@ func TestPasswordResetGrantIsShortLivedAndSingleUse(t *testing.T) {
 	t.Cleanup(func() { _ = client.Close() })
 	ctx := context.Background()
 
-	challenge, err := store.Issue(ctx, "user@example.com", PurposePasswordReset, "127.0.0.1")
+	challenge, _, err := store.Issue(ctx, "user@example.com", PurposePasswordReset, "127.0.0.1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +217,7 @@ func TestPasswordResetGrantExpires(t *testing.T) {
 	t.Cleanup(func() { _ = client.Close() })
 	ctx := context.Background()
 
-	challenge, err := store.Issue(ctx, "user@example.com", PurposePasswordReset, "127.0.0.1")
+	challenge, _, err := store.Issue(ctx, "user@example.com", PurposePasswordReset, "127.0.0.1")
 	if err != nil {
 		t.Fatal(err)
 	}

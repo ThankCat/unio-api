@@ -15,7 +15,7 @@ import (
 type Service interface {
 	CheckEmail(context.Context, string) *consoleservice.Error
 	CheckRegistrationEmail(context.Context, string) *consoleservice.Error
-	SendChallenge(context.Context, string, string, string) (serviceauth.Challenge, *consoleservice.Error)
+	SendChallenge(context.Context, string, string, string, string) (serviceauth.Challenge, *consoleservice.Error)
 	Register(context.Context, string, string, string, string, string, string) (serviceauth.User, serviceauth.TokenPair, *consoleservice.Error)
 	PasswordLogin(context.Context, string, string, string, string) (serviceauth.User, serviceauth.TokenPair, *consoleservice.Error)
 	EmailCodeLogin(context.Context, string, string, string, string, string) (serviceauth.User, serviceauth.TokenPair, *consoleservice.Error)
@@ -27,7 +27,8 @@ type Service interface {
 	Logout(context.Context, string) *consoleservice.Error
 	LogoutAll(context.Context, string) *consoleservice.Error
 	UpdateDisplayName(context.Context, string, string) (serviceauth.User, *consoleservice.Error)
-	ChangePassword(context.Context, string, string, string) *consoleservice.Error
+	SendPasswordChallenge(context.Context, string, string, string) (serviceauth.Challenge, *consoleservice.Error)
+	UpdatePassword(context.Context, string, string, string, string, string) *consoleservice.Error
 	ListSessions(context.Context, string) ([]serviceauth.SessionEntry, *consoleservice.Error)
 	RevokeSession(context.Context, string, string) *consoleservice.Error
 	LogoutOthers(context.Context, string) *consoleservice.Error
@@ -56,7 +57,8 @@ func Register(r chi.Router, deps Deps) {
 		r.Post("/registration-email-checks", h.registrationEmailCheck)
 		r.Post("/email-challenges", h.emailChallenge)
 		r.Post("/registrations", h.registration)
-		r.Post("/password-changes", h.passwordChange)
+		r.Post("/password-challenges", h.passwordChallenge)
+		r.Put("/password", h.passwordUpdate)
 		r.Get("/sessions", h.listSessions)
 		r.Delete("/sessions/{sid}", h.revokeSession)
 		r.Post("/sessions/password", h.passwordSession)

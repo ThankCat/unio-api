@@ -30,7 +30,7 @@ func (s *fakeAuthService) CheckEmail(context.Context, string) *consoleservice.Er
 func (s *fakeAuthService) CheckRegistrationEmail(context.Context, string) *consoleservice.Error {
 	return nil
 }
-func (s *fakeAuthService) SendChallenge(context.Context, string, string, string) (serviceauth.Challenge, *consoleservice.Error) {
+func (s *fakeAuthService) SendChallenge(context.Context, string, string, string, string) (serviceauth.Challenge, *consoleservice.Error) {
 	return serviceauth.Challenge{}, nil
 }
 func (s *fakeAuthService) Register(context.Context, string, string, string, string, string, string) (serviceauth.User, serviceauth.TokenPair, *consoleservice.Error) {
@@ -63,7 +63,10 @@ func (s *fakeAuthService) LogoutAll(context.Context, string) *consoleservice.Err
 func (s *fakeAuthService) UpdateDisplayName(context.Context, string, string) (serviceauth.User, *consoleservice.Error) {
 	return serviceauth.User{}, nil
 }
-func (s *fakeAuthService) ChangePassword(context.Context, string, string, string) *consoleservice.Error {
+func (s *fakeAuthService) SendPasswordChallenge(context.Context, string, string, string) (serviceauth.Challenge, *consoleservice.Error) {
+	return serviceauth.Challenge{}, nil
+}
+func (s *fakeAuthService) UpdatePassword(context.Context, string, string, string, string, string) *consoleservice.Error {
 	return nil
 }
 func (s *fakeAuthService) ListSessions(context.Context, string) ([]serviceauth.SessionEntry, *consoleservice.Error) {

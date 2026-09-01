@@ -49,9 +49,10 @@ type updateMeRequest struct {
 	DisplayName string `json:"display_name"`
 }
 
-type passwordChangeRequest struct {
-	CurrentPassword string `json:"current_password"`
-	NewPassword     string `json:"new_password"`
+type passwordUpdateRequest struct {
+	ChallengeID string `json:"challenge_id"`
+	Code        string `json:"code"`
+	NewPassword string `json:"new_password"`
 }
 
 type sessionDTO struct {

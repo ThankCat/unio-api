@@ -15,6 +15,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/capability"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/cdkey"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/channel"
+	adminemail "github.com/ThankCat/unio-gateway/internal/app/adminapi/email"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/exchangerate"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/ledger"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/message"
@@ -106,6 +107,11 @@ type RouterDeps struct {
 
 	// 站内消息中心（告警通道 MVP）：worker 写入，管理台查看/标记已读。
 	MessageService message.MessageService
+
+	// 邮件发送记录（客户中心「邮件」列表）与 SMTP 配置面板（含测试邮件）。
+	EmailLogService  adminemail.EmailLogService
+	EmailSMTPService system.EmailSMTPService
+	EmailTestMailer  system.EmailTestMailer
 
 	// 用户反馈工单：队列/详情/回复/状态流转；nil 时不挂载（未配置 TICKET_ATTACHMENT_SECRET）。
 	TicketService ticket.TicketService
@@ -233,12 +239,15 @@ func NewRouter(deps RouterDeps) http.Handler {
 			ledger.Register(r, ledger.Deps{Service: deps.LedgerQueryService})
 			cdkey.Register(r, cdkey.Deps{Service: deps.CDKeyService, Logger: deps.Logger})
 			message.Register(r, message.Deps{Service: deps.MessageService})
+			adminemail.Register(r, adminemail.Deps{Service: deps.EmailLogService})
 			exchangerate.Register(r, exchangerate.Deps{Service: deps.ExchangeRateService})
 			system.Register(r, system.Deps{
 				RecoveryJobService:        deps.RecoveryJobQueryService,
 				ProviderSettingsService:   deps.ProviderSettingsService,
 				RuntimeDiagnosticsService: deps.RuntimeDiagnosticsService,
 				GatewayLoggingService:     deps.GatewayLoggingService,
+				EmailSMTPService:          deps.EmailSMTPService,
+				EmailTestMailer:           deps.EmailTestMailer,
 				GatewayConfig:             deps.GatewayConfig,
 				WorkerConfig:              deps.WorkerConfig,
 				HTTPConfig:                deps.HTTPConfig,

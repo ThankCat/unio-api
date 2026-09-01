@@ -13,6 +13,10 @@ type Deps struct {
 	RuntimeDiagnosticsService RuntimeDiagnosticsService
 	GatewayLoggingService     GatewayLoggingService
 
+	// SMTP 发信配置（可读可写 + 测试邮件）。
+	EmailSMTPService EmailSMTPService
+	EmailTestMailer  EmailTestMailer
+
 	// 进程级 env 生效阈值（脱敏）快照，恒有效，故 /system/config 无条件注册。
 	GatewayConfig config.GatewayConfig
 	WorkerConfig  config.WorkerConfig
@@ -47,6 +51,16 @@ func Register(r chi.Router, d Deps) {
 		r.Put("/settings/{key}", psh.putSetting)
 		r.Get("/provider-settings/anthropic/beta-policy", psh.getAnthropicBeta)
 		r.Put("/provider-settings/anthropic/beta-policy", psh.putAnthropicBeta)
+	}
+
+	// SMTP 发信配置（DedicatedControl，专用 typed 面板；chi 静态路由优先于 /settings/{key} 通配）。
+	if d.EmailSMTPService != nil {
+		esh := &emailSMTPHandler{service: d.EmailSMTPService, mailer: d.EmailTestMailer}
+		r.Get("/settings/email-smtp", esh.get)
+		r.Put("/settings/email-smtp", esh.put)
+		if d.EmailTestMailer != nil {
+			r.Post("/settings/email-smtp/test", esh.test)
+		}
 	}
 
 	// 系统配置只读面板：进程级 env 生效阈值（脱敏），让运营在前端看到所有不可运行期改的阈值。

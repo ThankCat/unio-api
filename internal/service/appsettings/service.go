@@ -330,3 +330,13 @@ func (s *Service) GetAnthropicBetaPolicy(ctx context.Context) messagesadapter.Be
 func (s *Service) SetAnthropicBetaPolicy(ctx context.Context, policy messagesadapter.BetaPolicy) error {
 	return SetAnthropicBetaPolicy(ctx, s.store, policy)
 }
+
+// GetEmailSMTP 读取当前 SMTP 发信配置（含密码；Admin 专用面板回显，可读可写）。
+func (s *Service) GetEmailSMTP(ctx context.Context) EmailSMTPConfig {
+	return EmailSMTP(ctx, s.store)
+}
+
+// SetEmailSMTP 校验并写入 SMTP 发信配置（写 DB + 刷新 Redis/本地，免重启热生效）。
+func (s *Service) SetEmailSMTP(ctx context.Context, cfg EmailSMTPConfig) error {
+	return SetEmailSMTP(ctx, s.store, cfg)
+}

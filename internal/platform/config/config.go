@@ -134,16 +134,15 @@ type AdminConfig struct {
 
 // ConsoleConfig 保存 console-server 的监听、认证密钥和浏览器 Cookie 配置。
 type ConsoleConfig struct {
-	HTTPAddr              string
-	Environment           string
-	AuthSecret            string
-	FixedVerificationCode string
-	CookieSecure          bool
-	CookieDomain          string
-	AllowedOrigins        []string
-	TrustedProxyCIDRs     []string
-	AccessTokenTTL        time.Duration
-	RefreshTokenTTL       time.Duration
+	HTTPAddr          string
+	Environment       string
+	AuthSecret        string
+	CookieSecure      bool
+	CookieDomain      string
+	AllowedOrigins    []string
+	TrustedProxyCIDRs []string
+	AccessTokenTTL    time.Duration
+	RefreshTokenTTL   time.Duration
 	// GatewayPublicBaseURL 是网关对外暴露的推理入口，Console 把它展示给用户当 base_url。
 	// 与 GATEWAY_HTTP_ADDR 是两件事：后者是进程监听地址，前者是用户侧看到的地址
 	// （通常带域名与 TLS，且经过反代）。留空表示未配置，Console 的接入区会隐藏。
@@ -703,32 +702,9 @@ func Load() (Config, error) {
 			failure.WithMessage("console token TTLs must be positive and refresh TTL must exceed access TTL"),
 		)
 	}
-	fixedVerificationCodeDefault := ""
 	consoleAuthSecretDefault := ""
 	if gatewayEnvironment == GatewayEnvironmentDevelopment || gatewayEnvironment == GatewayEnvironmentTest {
-		fixedVerificationCodeDefault = "123456"
 		consoleAuthSecretDefault = "unio-console-development-secret-change-me-2026"
-	}
-	fixedVerificationCode := getEnv("CONSOLE_FIXED_VERIFICATION_CODE", fixedVerificationCodeDefault)
-	if fixedVerificationCode != "" && len(fixedVerificationCode) != 6 {
-		return Config{}, failure.New(
-			failure.CodeConfigInvalid,
-			failure.WithMessage("CONSOLE_FIXED_VERIFICATION_CODE must contain exactly 6 digits"),
-		)
-	}
-	for _, ch := range fixedVerificationCode {
-		if ch < '0' || ch > '9' {
-			return Config{}, failure.New(
-				failure.CodeConfigInvalid,
-				failure.WithMessage("CONSOLE_FIXED_VERIFICATION_CODE must contain exactly 6 digits"),
-			)
-		}
-	}
-	if gatewayEnvironment == GatewayEnvironmentProduction && fixedVerificationCode != "" {
-		return Config{}, failure.New(
-			failure.CodeConfigInvalid,
-			failure.WithMessage("CONSOLE_FIXED_VERIFICATION_CODE is forbidden in production"),
-		)
 	}
 
 	partialAssumedCacheReadRatio, err := getEnvFloat("PARTIAL_ASSUMED_CACHE_READ_RATIO", 0.6)
@@ -885,17 +861,16 @@ func Load() (Config, error) {
 			LokiURL:                  getEnv("LOKI_URL", "http://127.0.0.1:3100"),
 		},
 		Console: ConsoleConfig{
-			HTTPAddr:              getEnv("CONSOLE_HTTP_ADDR", ":8522"),
-			Environment:           gatewayEnvironment,
-			AuthSecret:            getEnv("CONSOLE_AUTH_SECRET", consoleAuthSecretDefault),
-			FixedVerificationCode: fixedVerificationCode,
-			CookieSecure:          consoleCookieSecure,
-			CookieDomain:          strings.TrimSpace(os.Getenv("CONSOLE_COOKIE_DOMAIN")),
-			AllowedOrigins:        splitCommaSeparated(os.Getenv("CONSOLE_ALLOWED_ORIGINS")),
-			TrustedProxyCIDRs:     splitCommaSeparated(os.Getenv("CONSOLE_TRUSTED_PROXY_CIDRS")),
-			AccessTokenTTL:        consoleAccessTokenTTL,
-			RefreshTokenTTL:       consoleRefreshTokenTTL,
-			GatewayPublicBaseURL:  strings.TrimRight(strings.TrimSpace(os.Getenv("GATEWAY_PUBLIC_BASE_URL")), "/"),
+			HTTPAddr:             getEnv("CONSOLE_HTTP_ADDR", ":8522"),
+			Environment:          gatewayEnvironment,
+			AuthSecret:           getEnv("CONSOLE_AUTH_SECRET", consoleAuthSecretDefault),
+			CookieSecure:         consoleCookieSecure,
+			CookieDomain:         strings.TrimSpace(os.Getenv("CONSOLE_COOKIE_DOMAIN")),
+			AllowedOrigins:       splitCommaSeparated(os.Getenv("CONSOLE_ALLOWED_ORIGINS")),
+			TrustedProxyCIDRs:    splitCommaSeparated(os.Getenv("CONSOLE_TRUSTED_PROXY_CIDRS")),
+			AccessTokenTTL:       consoleAccessTokenTTL,
+			RefreshTokenTTL:      consoleRefreshTokenTTL,
+			GatewayPublicBaseURL: strings.TrimRight(strings.TrimSpace(os.Getenv("GATEWAY_PUBLIC_BASE_URL")), "/"),
 		},
 		Website: WebsiteConfig{
 			HTTPAddr: getEnv("WEBSITE_HTTP_ADDR", ":8523"),

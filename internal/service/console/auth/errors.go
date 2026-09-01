@@ -25,6 +25,8 @@ const (
 	CodeVerificationCodeInvalid = "auth_verification_code_invalid"
 	// CodeVerificationRateLimited 表示验证码请求被限流拒绝。
 	CodeVerificationRateLimited = "auth_verification_rate_limited"
+	// CodeVerificationDeliveryUnavailable 表示验证码邮件未能发出，可稍后重试。
+	CodeVerificationDeliveryUnavailable = "auth_verification_delivery_unavailable"
 	// CodePasswordLoginRateLimited 表示密码登录被限流拒绝。
 	CodePasswordLoginRateLimited = "auth_password_login_rate_limited"
 	// CodeInvalidPassword 表示密码不符合安全策略。
@@ -33,8 +35,10 @@ const (
 	CodePasswordTooLong = "auth_password_too_long"
 	// CodePasswordResetTokenUnavailable 表示密码重置凭证已过期或已使用。
 	CodePasswordResetTokenUnavailable = "auth_password_reset_token_unavailable"
-	// CodePasswordIncorrect 表示登录态改密码时提交的当前密码不正确。
-	CodePasswordIncorrect = "auth_password_incorrect"
+	// CodeInvalidDisplayName 表示展示名不符合字符或长度约束。
+	CodeInvalidDisplayName = "auth_invalid_display_name"
+	// CodePasswordStateChanged 表示发码后账户的密码配置状态已经改变。
+	CodePasswordStateChanged = "auth_password_state_changed"
 )
 
 func requestUnavailable(operation string, cause error) *consoleservice.Error {
@@ -58,12 +62,20 @@ func registrationUnavailable() *consoleservice.Error {
 	}
 }
 
-func passwordIncorrect() *consoleservice.Error {
+func invalidDisplayName() *consoleservice.Error {
 	return &consoleservice.Error{
-		Code:    CodePasswordIncorrect,
-		Message: "The current password is incorrect.",
-		Param:   "current_password",
+		Code:    CodeInvalidDisplayName,
+		Message: "The display name must contain 1-32 Chinese characters, ASCII letters, or digits.",
+		Param:   "display_name",
 		Status:  422,
+	}
+}
+
+func passwordStateChanged() *consoleservice.Error {
+	return &consoleservice.Error{
+		Code:    CodePasswordStateChanged,
+		Message: "The password configuration changed after the verification code was sent. Request a new code and try again.",
+		Status:  409,
 	}
 }
 
@@ -73,6 +85,14 @@ func passwordResetTokenUnavailable() *consoleservice.Error {
 		Message: "The password reset credential is invalid, expired, or already used.",
 		Param:   "reset_token",
 		Status:  401,
+	}
+}
+
+func verificationDeliveryUnavailable() *consoleservice.Error {
+	return &consoleservice.Error{
+		Code:    CodeVerificationDeliveryUnavailable,
+		Message: "The verification email could not be sent. Please try again later.",
+		Status:  503,
 	}
 }
 

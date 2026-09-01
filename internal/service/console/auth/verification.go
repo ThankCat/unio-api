@@ -25,6 +25,9 @@ const (
 	challengeTTL    = 10 * time.Minute
 	reservationTTL  = 30 * time.Second
 	maxCodeAttempts = 5
+	// resendAfterSeconds 是客户端重发倒计时（2026-09-01 决策：60 秒），
+	// 与 auth.verification_rate_limits 默认的 60 秒 send_email_purpose 窗口保持一致。
+	resendAfterSeconds = 60
 )
 
 // Purpose 标识允许消费验证码挑战的业务流程。
@@ -37,6 +40,10 @@ const (
 	PurposeLogin Purpose = "login"
 	// PurposePasswordReset 用于重置密码时验证邮箱所有权。
 	PurposePasswordReset Purpose = "password_reset"
+	// PurposePasswordSet 用于无密码账户首次设置密码。
+	PurposePasswordSet Purpose = "password_set"
+	// PurposePasswordChange 用于已有密码账户修改密码。
+	PurposePasswordChange Purpose = "password_change"
 )
 
 // ParsePurpose 校验公开的验证码用途值。
@@ -187,8 +194,9 @@ redis.call('SET', KEYS[1], ARGV[7], 'PX', ARGV[6])
 return old or ''
 `)
 
-// Issue 应用发送限流，并存储与用途绑定的新挑战。
-func (s *VerificationStore) Issue(ctx context.Context, email string, purpose Purpose, ip string) (Challenge, *consoleservice.Error) {
+// Issue 应用发送限流，存储与用途绑定的新挑战，并返回用于邮件投递的明文验证码。
+// 明文验证码只在内存中传递给同步发送路径；Redis 仍然只保存 HMAC 摘要。
+func (s *VerificationStore) Issue(ctx context.Context, email string, purpose Purpose, ip string) (Challenge, string, *consoleservice.Error) {
 	limits := appsettings.AuthVerificationRateLimits(ctx, s.settings)
 	emailID := s.identifier("email", email)
 	ipIDs := s.ipIdentifiers(ip)
@@ -200,13 +208,13 @@ func (s *VerificationStore) Issue(ctx context.Context, email string, purpose Pur
 		rules = appendRules(rules, s.counterPrefix("send", "ip_all", ipID), limits.SendIPAll)
 	}
 	if err := s.applyLimits(ctx, rules); err != nil {
-		return Challenge{}, err
+		return Challenge{}, "", err
 	}
 
 	challengeID := "vch_" + strings.ReplaceAll(uuid.NewString(), "-", "")
 	code, err := s.newCode()
 	if err != nil {
-		return Challenge{}, requestUnavailable("generate verification code", err)
+		return Challenge{}, "", requestUnavailable("generate verification code", err)
 	}
 	digest := s.codeDigest(challengeID, purpose, email, code)
 	now := s.now().UnixMilli()
@@ -224,9 +232,37 @@ func (s *VerificationStore) Issue(ctx context.Context, email string, purpose Pur
 		challengeTTL.Milliseconds(),
 		challengeID,
 	).Result(); err != nil {
-		return Challenge{}, requestUnavailable("store verification challenge", err)
+		return Challenge{}, "", requestUnavailable("store verification challenge", err)
 	}
-	return Challenge{ID: challengeID, ExpiresIn: int64(challengeTTL.Seconds()), ResendAfter: 30}, nil
+	return Challenge{ID: challengeID, ExpiresIn: int64(challengeTTL.Seconds()), ResendAfter: resendAfterSeconds}, code, nil
+}
+
+// HasFixedCode 报告测试是否显式注入了固定验证码（此时允许跳过真实邮件投递）。
+func (s *VerificationStore) HasFixedCode() bool {
+	return s.fixedCode != ""
+}
+
+// PasswordPurpose 返回认证态密码挑战绑定的用途，并校验挑战属于当前账户邮箱。
+func (s *VerificationStore) PasswordPurpose(ctx context.Context, email, challengeID string) (Purpose, *consoleservice.Error) {
+	fields, err := s.redis.HGetAll(ctx, s.challengeKey(challengeID)).Result()
+	if err != nil {
+		return "", requestUnavailable("read password verification challenge", err)
+	}
+	if len(fields) == 0 || fields["email_hmac"] != s.identifier("email", email) {
+		return "", challengeUnavailable()
+	}
+	purpose := Purpose(fields["purpose"])
+	if purpose != PurposePasswordSet && purpose != PurposePasswordChange {
+		return "", challengeUnavailable()
+	}
+	currentID, err := s.redis.Get(ctx, s.currentKey(purpose, fields["email_hmac"])).Result()
+	if errors.Is(err, redis.Nil) || currentID != challengeID {
+		return "", challengeUnavailable()
+	}
+	if err != nil {
+		return "", requestUnavailable("read current password verification challenge", err)
+	}
+	return purpose, nil
 }
 
 // Reserve 校验验证码，并为单个业务流程原子预占对应挑战。

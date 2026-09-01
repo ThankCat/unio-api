@@ -564,27 +564,12 @@ func TestLoadConsoleDevelopmentDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load config: %v", err)
 	}
-	if cfg.Console.FixedVerificationCode != "123456" {
-		t.Fatalf("expected development fixed code, got %q", cfg.Console.FixedVerificationCode)
-	}
 	if len(cfg.Console.AuthSecret) < 32 {
 		t.Fatal("expected a development authentication secret")
 	}
 	if cfg.Console.AccessTokenTTL != 15*time.Minute || cfg.Console.RefreshTokenTTL != 30*24*time.Hour {
 		t.Fatalf("unexpected console token TTLs: access=%v refresh=%v", cfg.Console.AccessTokenTTL, cfg.Console.RefreshTokenTTL)
 	}
-}
-
-func TestLoadRejectsProductionFixedVerificationCode(t *testing.T) {
-	clearInfrastructureEnv(t)
-	t.Setenv("GATEWAY_ENV", GatewayEnvironmentProduction)
-	t.Setenv("CONSOLE_FIXED_VERIFICATION_CODE", "123456")
-
-	_, err := Load()
-	if err == nil {
-		t.Fatal("expected production fixed verification code to fail")
-	}
-	assertConfigFailure(t, err, failure.CodeConfigInvalid)
 }
 
 func TestLoadRejectsInvalidConsoleTokenTTLs(t *testing.T) {
@@ -708,7 +693,6 @@ func clearInfrastructureEnv(t *testing.T) {
 		"ADMIN_HTTP_ADDR",
 		"CONSOLE_HTTP_ADDR",
 		"CONSOLE_AUTH_SECRET",
-		"CONSOLE_FIXED_VERIFICATION_CODE",
 		"CONSOLE_COOKIE_SECURE",
 		"CONSOLE_COOKIE_DOMAIN",
 		"CONSOLE_ALLOWED_ORIGINS",
