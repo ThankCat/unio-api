@@ -118,7 +118,9 @@ type Channel struct {
 	ConcurrencyLimit    pgtype.Int4
 	SupportsOpenaiFast  bool
 	// 本渠道可服务的入口协议族集合；与 adapter_key 组合后必须在代码 adapter 注册表中存在。
-	Protocols []string
+	Protocols                 []string
+	SupplyForm                string
+	AccountDefaultConcurrency pgtype.Int4
 }
 
 type ChannelCostMultiplier struct {
@@ -759,6 +761,7 @@ type RequestRecord struct {
 	ClientThreadID        pgtype.Text
 	ClientTurnID          pgtype.Text
 	ClientRequestKind     pgtype.Text
+	FinalAccountID        pgtype.Int8
 }
 
 type RoutingDecisionTrace struct {
@@ -908,6 +911,41 @@ type SettlementRecoveryJob struct {
 	ServiceTierResolution                 pgtype.Text
 	ModelPriceServiceTierID               pgtype.Int8
 	ChannelPriceServiceTierID             pgtype.Int8
+}
+
+type SubscriptionAccount struct {
+	ID                    int64
+	ChannelID             int64
+	Platform              string
+	CredentialType        string
+	UpstreamAccountID     string
+	DisplayName           string
+	PlanType              pgtype.Text
+	Credentials           []byte
+	ProxyUrl              pgtype.Text
+	ConcurrencyLimit      pgtype.Int4
+	Priority              int32
+	Status                string
+	DisabledReason        pgtype.Text
+	SubscriptionExpiresAt pgtype.Timestamptz
+	UsageSnapshot         []byte
+	LastSuccessAt         pgtype.Timestamptz
+	ConfigRevision        int64
+	CreatedAt             pgtype.Timestamptz
+	UpdatedAt             pgtype.Timestamptz
+}
+
+type SubscriptionLedgerEntry struct {
+	ID          int64
+	AccountID   int64
+	Amount      pgtype.Numeric
+	Currency    string
+	PeriodStart pgtype.Timestamptz
+	PeriodEnd   pgtype.Timestamptz
+	Note        pgtype.Text
+	CreatedBy   pgtype.Text
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
 }
 
 type Ticket struct {

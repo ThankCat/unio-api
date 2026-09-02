@@ -174,7 +174,8 @@ SELECT
     service_tier_resolution,
     client_thread_id,
     client_turn_id,
-    client_request_kind
+    client_request_kind,
+    final_account_id
 FROM request_records
 WHERE request_id = $1
 `
@@ -219,6 +220,7 @@ func (q *Queries) GetRequestRecordByRequestID(ctx context.Context, requestID str
 		&i.ClientThreadID,
 		&i.ClientTurnID,
 		&i.ClientRequestKind,
+		&i.FinalAccountID,
 	)
 	return i, err
 }

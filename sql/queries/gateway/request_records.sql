@@ -94,7 +94,8 @@ RETURNING
     service_tier_resolution,
     client_thread_id,
     client_turn_id,
-    client_request_kind;
+    client_request_kind,
+    final_account_id;
 
 -- name: GetRequestRecordForUpdate :one
 -- GetRequestRecordForUpdate 锁定请求记录，串行化同一个 request 的并发结算。
@@ -133,7 +134,8 @@ SELECT
     service_tier_resolution,
     client_thread_id,
     client_turn_id,
-    client_request_kind
+    client_request_kind,
+    final_account_id
 FROM request_records
 WHERE id = sqlc.arg(request_record_id)
     FOR UPDATE;

@@ -289,7 +289,8 @@ SELECT
     service_tier_resolution,
     client_thread_id,
     client_turn_id,
-    client_request_kind
+    client_request_kind,
+    final_account_id
 FROM request_records
 WHERE request_id = sqlc.arg(request_id);
 

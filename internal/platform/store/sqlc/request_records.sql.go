@@ -106,7 +106,8 @@ RETURNING
     service_tier_resolution,
     client_thread_id,
     client_turn_id,
-    client_request_kind
+    client_request_kind,
+    final_account_id
 `
 
 type CreateRequestRecordParams struct {
@@ -208,6 +209,7 @@ func (q *Queries) CreateRequestRecord(ctx context.Context, arg CreateRequestReco
 		&i.ClientThreadID,
 		&i.ClientTurnID,
 		&i.ClientRequestKind,
+		&i.FinalAccountID,
 	)
 	return i, err
 }
@@ -247,7 +249,8 @@ SELECT
     service_tier_resolution,
     client_thread_id,
     client_turn_id,
-    client_request_kind
+    client_request_kind,
+    final_account_id
 FROM request_records
 WHERE id = $1
     FOR UPDATE
@@ -293,6 +296,7 @@ func (q *Queries) GetRequestRecordForUpdate(ctx context.Context, requestRecordID
 		&i.ClientThreadID,
 		&i.ClientTurnID,
 		&i.ClientRequestKind,
+		&i.FinalAccountID,
 	)
 	return i, err
 }
@@ -308,14 +312,14 @@ WITH updated AS (
             updated_at = now()
         WHERE request_records.id = $5
             AND request_records.status = 'running'
-        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind
+        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind, request_records.final_account_id
 )
-SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, endpoint, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, gateway_first_token_at, response_completed_at, started_at, completed_at, created_at, updated_at, reasoning_effort, reasoning_budget_tokens, client_ip, requested_service_tier, actual_service_tier, settled_service_tier, service_tier_resolution, client_thread_id, client_turn_id, client_request_kind
+SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, endpoint, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, gateway_first_token_at, response_completed_at, started_at, completed_at, created_at, updated_at, reasoning_effort, reasoning_budget_tokens, client_ip, requested_service_tier, actual_service_tier, settled_service_tier, service_tier_resolution, client_thread_id, client_turn_id, client_request_kind, final_account_id
 FROM updated
 
 UNION ALL
 
-SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind
+SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind, request_records.final_account_id
 FROM request_records
 WHERE request_records.id = $5
   AND request_records.status = 'canceled'
@@ -365,6 +369,7 @@ type MarkRequestCanceledRow struct {
 	ClientThreadID        pgtype.Text
 	ClientTurnID          pgtype.Text
 	ClientRequestKind     pgtype.Text
+	FinalAccountID        pgtype.Int8
 }
 
 // MarkRequestCanceled 将 running 请求原子推进到 canceled，重复 canceled 返回第一次取消事实。
@@ -413,6 +418,7 @@ func (q *Queries) MarkRequestCanceled(ctx context.Context, arg MarkRequestCancel
 		&i.ClientThreadID,
 		&i.ClientTurnID,
 		&i.ClientRequestKind,
+		&i.FinalAccountID,
 	)
 	return i, err
 }
@@ -425,14 +431,14 @@ WITH updated AS (
             updated_at = now()
         WHERE request_records.id = $2
             AND request_records.delivery_status IN ('not_started', 'in_progress')
-        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind
+        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind, request_records.final_account_id
 )
-SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, endpoint, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, gateway_first_token_at, response_completed_at, started_at, completed_at, created_at, updated_at, reasoning_effort, reasoning_budget_tokens, client_ip, requested_service_tier, actual_service_tier, settled_service_tier, service_tier_resolution, client_thread_id, client_turn_id, client_request_kind
+SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, endpoint, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, gateway_first_token_at, response_completed_at, started_at, completed_at, created_at, updated_at, reasoning_effort, reasoning_budget_tokens, client_ip, requested_service_tier, actual_service_tier, settled_service_tier, service_tier_resolution, client_thread_id, client_turn_id, client_request_kind, final_account_id
 FROM updated
 
 UNION ALL
 
-SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind
+SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind, request_records.final_account_id
 FROM request_records
 WHERE request_records.id = $2
   AND request_records.delivery_status = 'completed'
@@ -479,6 +485,7 @@ type MarkRequestDeliveryCompletedRow struct {
 	ClientThreadID        pgtype.Text
 	ClientTurnID          pgtype.Text
 	ClientRequestKind     pgtype.Text
+	FinalAccountID        pgtype.Int8
 }
 
 // MarkRequestDeliveryCompleted 在响应完整交付后把交付状态推进到 completed，并同语句落地
@@ -522,6 +529,7 @@ func (q *Queries) MarkRequestDeliveryCompleted(ctx context.Context, arg MarkRequ
 		&i.ClientThreadID,
 		&i.ClientTurnID,
 		&i.ClientRequestKind,
+		&i.FinalAccountID,
 	)
 	return i, err
 }
@@ -533,14 +541,14 @@ WITH updated AS (
             updated_at = now()
         WHERE request_records.id = $1
             AND request_records.delivery_status IN ('not_started', 'in_progress')
-        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind
+        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind, request_records.final_account_id
 )
-SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, endpoint, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, gateway_first_token_at, response_completed_at, started_at, completed_at, created_at, updated_at, reasoning_effort, reasoning_budget_tokens, client_ip, requested_service_tier, actual_service_tier, settled_service_tier, service_tier_resolution, client_thread_id, client_turn_id, client_request_kind
+SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, endpoint, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, gateway_first_token_at, response_completed_at, started_at, completed_at, created_at, updated_at, reasoning_effort, reasoning_budget_tokens, client_ip, requested_service_tier, actual_service_tier, settled_service_tier, service_tier_resolution, client_thread_id, client_turn_id, client_request_kind, final_account_id
 FROM updated
 
 UNION ALL
 
-SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind
+SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind, request_records.final_account_id
 FROM request_records
 WHERE request_records.id = $1
   AND request_records.delivery_status = 'interrupted'
@@ -582,6 +590,7 @@ type MarkRequestDeliveryInterruptedRow struct {
 	ClientThreadID        pgtype.Text
 	ClientTurnID          pgtype.Text
 	ClientRequestKind     pgtype.Text
+	FinalAccountID        pgtype.Int8
 }
 
 // MarkRequestDeliveryInterrupted 在交付中断（客户端取消、上游中断、尾部错误）时把交付状态推进到
@@ -625,6 +634,7 @@ func (q *Queries) MarkRequestDeliveryInterrupted(ctx context.Context, requestRec
 		&i.ClientThreadID,
 		&i.ClientTurnID,
 		&i.ClientRequestKind,
+		&i.FinalAccountID,
 	)
 	return i, err
 }
@@ -640,14 +650,14 @@ WITH updated AS (
         WHERE request_records.id = $1
           AND request_records.status IN ('running', 'succeeded')
           AND request_records.delivery_status = 'not_started'
-        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind
+        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind, request_records.final_account_id
 )
-SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, endpoint, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, gateway_first_token_at, response_completed_at, started_at, completed_at, created_at, updated_at, reasoning_effort, reasoning_budget_tokens, client_ip, requested_service_tier, actual_service_tier, settled_service_tier, service_tier_resolution, client_thread_id, client_turn_id, client_request_kind
+SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, endpoint, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, gateway_first_token_at, response_completed_at, started_at, completed_at, created_at, updated_at, reasoning_effort, reasoning_budget_tokens, client_ip, requested_service_tier, actual_service_tier, settled_service_tier, service_tier_resolution, client_thread_id, client_turn_id, client_request_kind, final_account_id
 FROM updated
 
 UNION ALL
 
-SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind
+SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind, request_records.final_account_id
 FROM request_records
 WHERE request_records.id = $1
   AND request_records.delivery_status <> 'not_started'
@@ -689,6 +699,7 @@ type MarkRequestDeliveryStartedRow struct {
 	ClientThreadID        pgtype.Text
 	ClientTurnID          pgtype.Text
 	ClientRequestKind     pgtype.Text
+	FinalAccountID        pgtype.Int8
 }
 
 // MarkRequestDeliveryStarted 在首次客户帧成功写出后推进 delivery 状态，不写 Gateway 首字时间。
@@ -730,6 +741,7 @@ func (q *Queries) MarkRequestDeliveryStarted(ctx context.Context, requestRecordI
 		&i.ClientThreadID,
 		&i.ClientTurnID,
 		&i.ClientRequestKind,
+		&i.FinalAccountID,
 	)
 	return i, err
 }
@@ -745,14 +757,14 @@ WITH updated AS (
             updated_at = now()
         WHERE request_records.id = $5
             AND request_records.status = 'running'
-        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind
+        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind, request_records.final_account_id
 )
-SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, endpoint, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, gateway_first_token_at, response_completed_at, started_at, completed_at, created_at, updated_at, reasoning_effort, reasoning_budget_tokens, client_ip, requested_service_tier, actual_service_tier, settled_service_tier, service_tier_resolution, client_thread_id, client_turn_id, client_request_kind
+SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, endpoint, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, gateway_first_token_at, response_completed_at, started_at, completed_at, created_at, updated_at, reasoning_effort, reasoning_budget_tokens, client_ip, requested_service_tier, actual_service_tier, settled_service_tier, service_tier_resolution, client_thread_id, client_turn_id, client_request_kind, final_account_id
 FROM updated
 
 UNION ALL
 
-SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind
+SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind, request_records.final_account_id
 FROM request_records
 WHERE request_records.id = $5
   AND request_records.status = 'failed'
@@ -802,6 +814,7 @@ type MarkRequestFailedRow struct {
 	ClientThreadID        pgtype.Text
 	ClientTurnID          pgtype.Text
 	ClientRequestKind     pgtype.Text
+	FinalAccountID        pgtype.Int8
 }
 
 // MarkRequestFailed 将 running 请求原子推进到 failed，重复 failed 返回第一次失败事实。
@@ -850,6 +863,7 @@ func (q *Queries) MarkRequestFailed(ctx context.Context, arg MarkRequestFailedPa
 		&i.ClientThreadID,
 		&i.ClientTurnID,
 		&i.ClientRequestKind,
+		&i.FinalAccountID,
 	)
 	return i, err
 }
@@ -861,14 +875,14 @@ WITH updated AS (
             updated_at = now()
         WHERE request_records.id = $2
           AND request_records.gateway_first_token_at IS NULL
-        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind
+        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind, request_records.final_account_id
 )
-SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, endpoint, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, gateway_first_token_at, response_completed_at, started_at, completed_at, created_at, updated_at, reasoning_effort, reasoning_budget_tokens, client_ip, requested_service_tier, actual_service_tier, settled_service_tier, service_tier_resolution, client_thread_id, client_turn_id, client_request_kind
+SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, endpoint, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, gateway_first_token_at, response_completed_at, started_at, completed_at, created_at, updated_at, reasoning_effort, reasoning_budget_tokens, client_ip, requested_service_tier, actual_service_tier, settled_service_tier, service_tier_resolution, client_thread_id, client_turn_id, client_request_kind, final_account_id
 FROM updated
 
 UNION ALL
 
-SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind
+SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind, request_records.final_account_id
 FROM request_records
 WHERE request_records.id = $2
   AND request_records.gateway_first_token_at IS NOT NULL
@@ -915,6 +929,7 @@ type MarkRequestGatewayFirstTokenRow struct {
 	ClientThreadID        pgtype.Text
 	ClientTurnID          pgtype.Text
 	ClientRequestKind     pgtype.Text
+	FinalAccountID        pgtype.Int8
 }
 
 // MarkRequestGatewayFirstToken 记录首次有效生成 Token 客户交付时间；不改变 delivery 状态。
@@ -956,6 +971,7 @@ func (q *Queries) MarkRequestGatewayFirstToken(ctx context.Context, arg MarkRequ
 		&i.ClientThreadID,
 		&i.ClientTurnID,
 		&i.ClientRequestKind,
+		&i.FinalAccountID,
 	)
 	return i, err
 }
@@ -967,14 +983,14 @@ WITH updated AS (
             updated_at = now()
         WHERE request_records.id = $1
             AND request_records.status = 'pending'
-        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind
+        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind, request_records.final_account_id
 )
-SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, endpoint, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, gateway_first_token_at, response_completed_at, started_at, completed_at, created_at, updated_at, reasoning_effort, reasoning_budget_tokens, client_ip, requested_service_tier, actual_service_tier, settled_service_tier, service_tier_resolution, client_thread_id, client_turn_id, client_request_kind
+SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, endpoint, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, gateway_first_token_at, response_completed_at, started_at, completed_at, created_at, updated_at, reasoning_effort, reasoning_budget_tokens, client_ip, requested_service_tier, actual_service_tier, settled_service_tier, service_tier_resolution, client_thread_id, client_turn_id, client_request_kind, final_account_id
 FROM updated
 
 UNION ALL
 
-SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind
+SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind, request_records.final_account_id
 FROM request_records
 WHERE request_records.id = $1
   AND request_records.status = 'running'
@@ -1016,6 +1032,7 @@ type MarkRequestRunningRow struct {
 	ClientThreadID        pgtype.Text
 	ClientTurnID          pgtype.Text
 	ClientRequestKind     pgtype.Text
+	FinalAccountID        pgtype.Int8
 }
 
 // MarkRequestRunning 将 pending 请求原子推进到 running，重复 running 返回原事实。
@@ -1058,6 +1075,7 @@ func (q *Queries) MarkRequestRunning(ctx context.Context, requestRecordID int64)
 		&i.ClientThreadID,
 		&i.ClientTurnID,
 		&i.ClientRequestKind,
+		&i.FinalAccountID,
 	)
 	return i, err
 }
@@ -1079,14 +1097,14 @@ WITH updated AS (
             updated_at = now()
         WHERE request_records.id = $11
             AND request_records.status = 'running'
-        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind
+        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind, request_records.final_account_id
 )
-SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, endpoint, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, gateway_first_token_at, response_completed_at, started_at, completed_at, created_at, updated_at, reasoning_effort, reasoning_budget_tokens, client_ip, requested_service_tier, actual_service_tier, settled_service_tier, service_tier_resolution, client_thread_id, client_turn_id, client_request_kind
+SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, endpoint, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, gateway_first_token_at, response_completed_at, started_at, completed_at, created_at, updated_at, reasoning_effort, reasoning_budget_tokens, client_ip, requested_service_tier, actual_service_tier, settled_service_tier, service_tier_resolution, client_thread_id, client_turn_id, client_request_kind, final_account_id
 FROM updated
 
 UNION ALL
 
-SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind
+SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind, request_records.final_account_id
 FROM request_records
 WHERE request_records.id = $11
   AND request_records.status = 'succeeded'
@@ -1142,6 +1160,7 @@ type MarkRequestSucceededRow struct {
 	ClientThreadID        pgtype.Text
 	ClientTurnID          pgtype.Text
 	ClientRequestKind     pgtype.Text
+	FinalAccountID        pgtype.Int8
 }
 
 // MarkRequestSucceeded 将 running 请求原子推进到 succeeded，重复 succeeded 返回第一次成功事实。
@@ -1198,6 +1217,7 @@ func (q *Queries) MarkRequestSucceeded(ctx context.Context, arg MarkRequestSucce
 		&i.ClientThreadID,
 		&i.ClientTurnID,
 		&i.ClientRequestKind,
+		&i.FinalAccountID,
 	)
 	return i, err
 }
@@ -1222,14 +1242,14 @@ WITH updated AS (
             updated_at = now()
         WHERE request_records.id = $14
             AND request_records.status = 'running'
-        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind
+        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind, request_records.final_account_id
 )
-SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, endpoint, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, gateway_first_token_at, response_completed_at, started_at, completed_at, created_at, updated_at, reasoning_effort, reasoning_budget_tokens, client_ip, requested_service_tier, actual_service_tier, settled_service_tier, service_tier_resolution, client_thread_id, client_turn_id, client_request_kind
+SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, endpoint, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, gateway_first_token_at, response_completed_at, started_at, completed_at, created_at, updated_at, reasoning_effort, reasoning_budget_tokens, client_ip, requested_service_tier, actual_service_tier, settled_service_tier, service_tier_resolution, client_thread_id, client_turn_id, client_request_kind, final_account_id
 FROM updated
 
 UNION ALL
 
-SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind
+SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind, request_records.final_account_id
 FROM request_records
 WHERE request_records.id = $14
   AND request_records.status = 'canceled'
@@ -1288,6 +1308,7 @@ type MarkSettledRequestCanceledRow struct {
 	ClientThreadID        pgtype.Text
 	ClientTurnID          pgtype.Text
 	ClientRequestKind     pgtype.Text
+	FinalAccountID        pgtype.Int8
 }
 
 // MarkSettledRequestCanceled 将 running 请求推进到 canceled，但保留已结算响应事实（partial stream 客户端取消）。
@@ -1345,6 +1366,7 @@ func (q *Queries) MarkSettledRequestCanceled(ctx context.Context, arg MarkSettle
 		&i.ClientThreadID,
 		&i.ClientTurnID,
 		&i.ClientRequestKind,
+		&i.FinalAccountID,
 	)
 	return i, err
 }
@@ -1369,14 +1391,14 @@ WITH updated AS (
             updated_at = now()
         WHERE request_records.id = $14
             AND request_records.status = 'running'
-        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind
+        RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind, request_records.final_account_id
 )
-SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, endpoint, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, gateway_first_token_at, response_completed_at, started_at, completed_at, created_at, updated_at, reasoning_effort, reasoning_budget_tokens, client_ip, requested_service_tier, actual_service_tier, settled_service_tier, service_tier_resolution, client_thread_id, client_turn_id, client_request_kind
+SELECT id, request_id, user_id, api_key_id, requested_model_id, ingress_protocol, endpoint, response_model_id, response_protocol, response_id, stream, status, final_provider_id, final_channel_id, error_code, error_message, internal_error_detail, delivery_status, gateway_first_token_at, response_completed_at, started_at, completed_at, created_at, updated_at, reasoning_effort, reasoning_budget_tokens, client_ip, requested_service_tier, actual_service_tier, settled_service_tier, service_tier_resolution, client_thread_id, client_turn_id, client_request_kind, final_account_id
 FROM updated
 
 UNION ALL
 
-SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind
+SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind, request_records.final_account_id
 FROM request_records
 WHERE request_records.id = $14
   AND request_records.status = 'failed'
@@ -1435,6 +1457,7 @@ type MarkSettledRequestFailedRow struct {
 	ClientThreadID        pgtype.Text
 	ClientTurnID          pgtype.Text
 	ClientRequestKind     pgtype.Text
+	FinalAccountID        pgtype.Int8
 }
 
 // MarkSettledRequestFailed 将 running 请求推进到 failed，但保留已结算响应事实（partial stream 上游中断）。
@@ -1491,6 +1514,7 @@ func (q *Queries) MarkSettledRequestFailed(ctx context.Context, arg MarkSettledR
 		&i.ClientThreadID,
 		&i.ClientTurnID,
 		&i.ClientRequestKind,
+		&i.FinalAccountID,
 	)
 	return i, err
 }
