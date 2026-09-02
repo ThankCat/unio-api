@@ -27,6 +27,23 @@
 - 本次不做：影子账号、按账号计费倍率、代理自动轮换、池内退避排队、`load_factor`、指纹伪装 enrichment、
   反代账号类型、WebSocket 传输、账号级 RPM/会话数上限。
 
+## 官方文档核对（2026-09-02，动工前完成）
+
+抓包只能证明「这一个账号在这一刻的行为」，枚举的完整取值必须查官方。核对结果如下，**均已回改到下文
+对应条目**：
+
+| 项 | 核对结论 | 对计划的影响 |
+| --- | --- | --- |
+| `plan_type` 取值 | 官方档位为 Free / Go / Plus / Pro（5x 与 20x 两档同名 pro）/ Business（旧名 Team，两者都可能出现）/ Enterprise / Edu / ChatGPT for Teachers。抓包账号为 `plus`，Sub2API 代码认识 free/plus/pro/team/enterprise | **`plan_type` 不加 CHECK 约束**，按自由文本存储 + 应用层白名单软校验；「同套餐一池」按实际字符串比对，不枚举 |
+| 5h 窗口是否恒存在 | **Business Premium 座位「无五小时限制」**；Enterprise/Edu 弹性定价「无固定速率限制，随额度伸缩」 | 用量快照的 5h 窗口**可能缺失**，调度过滤必须容忍 `primary` 为空，不得默认按 0% 处理 |
+| 窗口语义 | 5h 为滚动窗口持续刷新；7d 为**自首次使用起算的滚动周期**，非自然周 | 与实测 `reset_at` 绝对时间戳一致，沿用实测值 |
+| 配额重置 | 2026-06 起支持**付费即时重置与可储存重置**（Plus/Pro），重置会把 `reset_at` **提前**并重启周期 | 用量恢复逻辑不能只处理「`reset_at` 到期」，必须处理 **`reset_at` 变小（提前重置）** 的情况，否则账号会被错误地继续暂停 |
+| `service_tier` 取值 | 官方为 `auto` / `default` / `flex` / `priority`（2026-07-30 起**改名 fast**，两个值都接受）/ `scale`（企业遗留）。**现有模型响应仍回 `priority`；gpt-5.6 之后发布的模型响应改回 `fast`** | Fast 档位解析必须把 `priority` 与 `fast` **视为同一档**，否则新模型上线时会把 Fast 误判成 Standard。这是对现有 Fast 实现的修正，**不限于号池** |
+| Codex 模型的 Fast 声明 | 抓包清单实测：`service_tiers: [{id:"priority", name:"Fast"}]`、`additional_speed_tiers: ["fast"]` | 两个名字在同一份响应里并存，印证上条 |
+| reasoning 档位 | 抓包清单实测（上游自报）：`low` / `medium` / `high` / `xhigh` / `max` / `ultra`，多于标准 API 的档位集 | 透传即可，不要按标准 API 档位集做白名单校验 |
+| 客户接入配置 | 官方参考确认：`wire_api` 默认且**唯一**取值 `responses`；`env_key` 提供 API Key；`requires_openai_auth` 默认 false。与沙箱实测一致 | 客户接入文档按此写 |
+| **`wire_api = "chat"` 已移除** | Chat Completions 协议于 2025-12 弃用、**2026-02 从 Codex CLI 彻底移除**，设置该值会在启动时报错 | **Codex CLI 客户不可能向我们发 Chat Completions**。反向桥接的受益方不是 Codex CLI，而是通用 chat 客户端（OpenAI SDK、LangChain、第三方应用）。桥接照做，但**优先级排在 Codex 主链路之后**，且验收场景要改成通用 chat 客户端而非 codex CLI |
+
 ## 证据来源纪律
 
 蓝图每条结论都标了来源等级。实现时：**【实测】**可直接照做；**【Sub2API】**必须与真实响应复核后再落地，
@@ -53,7 +70,8 @@
       credential_type     text   NOT NULL,              -- oauth（本期唯一取值，CHECK 约束）
       upstream_account_id text   NOT NULL,              -- 上游账号标识（Codex 的 chatgpt_account_id）
       display_name        text   NOT NULL,              -- 运营可读名（邮箱或备注，不作唯一键）
-      plan_type           text,                         -- plus / pro，用于校验「同套餐一池」
+      plan_type           text,                         -- free/go/plus/pro/business(team)/enterprise/edu；
+                                                    -- 官方档位会增改，**不加 CHECK**，应用层白名单软校验
       credentials         jsonb  NOT NULL,              -- access/refresh token、过期时间、client_id 等
       proxy_url           text,                         -- 账号绑定出口；NULL 表示直连
       concurrency_limit   integer,                      -- NULL 继承渠道默认，0 不限，正数上限
@@ -61,7 +79,9 @@
       status              text   NOT NULL,              -- enabled / disabled / archived
       disabled_reason     text,                         -- 受控值：manual / token_revoked / risk_control
       subscription_expires_at timestamptz,              -- 订阅到期（与令牌过期是两回事）
-      usage_snapshot      jsonb,                        -- 5h/7d 水位与窗口重置时间，采集时间同存
+      usage_snapshot      jsonb,                        -- 5h/7d 水位与窗口重置时间（绝对时间戳）+ 采集时间；
+                                                    -- Business Premium 无 5h 窗口、Enterprise/Edu 弹性额度无固定限，
+                                                    -- 故任一窗口都可能缺失，消费方必须容忍空值
       last_success_at     timestamptz,
       config_revision     bigint NOT NULL DEFAULT 1,    -- 账号配置真变化时 +1（见第三节热更新）
       created_at          timestamptz NOT NULL DEFAULT now(),
@@ -150,6 +170,8 @@
     **按账号收敛的设备指纹**（`originator`/`User-Agent`/`version`，边界 26）；剥离入站鉴权头；
   - `previous_response_id` 一律 400 拒绝（边界 25，与上游 HTTP 行为一致）；
   - 防御性剥离客户回带的 `x-codex-turn-state`（跨账号串号防护）；
+  - `reasoning.effort` 原样透传：上游自报档位为 low/medium/high/xhigh/max/ultra，多于标准 API 档位集，
+    **不得按标准集做白名单校验**；
   - 响应：解析 `x-codex-*` 用量头（**primary = 5h、secondary = 7d，勿照抄 Sub2API 的反向映射**）、
     `usage`（含 `attribution`）、`service_tier`；`safety_identifier` 与 `x-codex-turn-state` 不回传客户。
   - 逐字段对照 `sandbox/codex/wire/samples/`：`ingress-request.json`、
@@ -162,6 +184,10 @@
 - [ ] **Fast 档位**（边界 15，修订既有档位结算契约）：按 wire 引入「响应档位权威性」标记——credential
       渠道维持现状（按响应事实结算），Codex wire 标记为不权威、**按出站档位结算**（实测同一请求响应分别
       回 `auto`/`default`，均非发送值）。Fast 开关对池型渠道提供，仍要求人工确认。
+- [ ] **`priority` 与 `fast` 归一为同一档（存量修正，不限号池）**：官方 2026-07-30 把 priority 改名
+      fast，两值都接受；现有模型响应回 `priority`，**gpt-5.6 之后发布的模型响应回 `fast`**。现有档位
+      解析若只认 `priority`，新模型上线即把 Fast 误判为 Standard 并少收费。需在档位归一化处同时接受
+      两值，并补测试冻结该等价关系。
 
 ## 五、健康反馈与归因（unio-gateway）
 
@@ -175,6 +201,9 @@
   - 传输错误持久/瞬态二分（边界 16，**【Sub2API】需复核**）：持久（代理认证失败、连接拒绝、DNS 失败、
     无路由）→ 账号临时不可调度约 10 分钟 + 换号；瞬态（超时、重置、EOF）→ 只换号不处置账号；
   - 用量自动暂停：快照达阈值（默认 90%，可配置）提前移出调度；窗口重置或快照过期自动恢复。
+    **两个易漏边界**：① 官方支持付费即时重置与可储存重置，`reset_at` 可能**提前**，恢复判定必须处理
+    「reset_at 变小」而非只处理「到期」；② 5h/7d 任一窗口可能缺失（见官方核对表），缺失时视为不限，
+    不得按 0% 或 100% 臆断。
 
 - [ ] half-open 探测同样经池内选号取健康账号，不绕过账号层（边界 8）。
 
@@ -213,6 +242,11 @@
       必须接入 ADR-0020 影响预览，不得静默绕过。
 
 ## 八、Chat Completions → Responses 反向桥接（unio-gateway）
+
+> **受益方已由官方核对澄清**：Codex CLI 自 2026-02 起移除 `wire_api = "chat"`，**不可能**向我们发
+> Chat Completions，因此本桥接的受益方是**通用 chat 客户端**（OpenAI SDK 的 `chat.completions`、
+> LangChain、各类第三方应用）——它们想用号池模型时只会说 chat 协议。桥接照做（已拍板），但排期上
+> **应在 Codex 主链路（批次一至七）跑通之后**，验收场景也要用通用 chat 客户端而非 codex CLI。
 
 - [ ] 候选资格放开（`lifecycle/adapter_registry.go` OpenAI 分支，**三处**，与 responses 侧对称）：
       `AdapterCapabilityNonStream` 由 `HasChat` → `HasChat || HasResponses`；
