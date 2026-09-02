@@ -66,6 +66,11 @@ SELECT
     c.status AS channel_status,
     c.credential_valid,
     (c.credential <> '')::boolean AS has_credential,
+    c.supply_form,
+    EXISTS (
+        SELECT 1 FROM subscription_accounts sa
+        WHERE sa.channel_id = c.id AND sa.status = 'enabled'
+    )::boolean AS has_schedulable_account,
     (p.origin <> '')::boolean AS has_origin,
     c.protocols,
     c.adapter_key,

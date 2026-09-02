@@ -7,6 +7,7 @@ import (
 
 	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/chatcompletions"
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
+	chatbridge "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatbridge"
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
@@ -148,15 +149,21 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 		CountOutputTokens:       partialOutputTokenCounter,
 		Sticky:                  stickySession,
 		ResolveAdapter: func(candidate routing.ChatRouteCandidate) error {
-			adapter, ok := s.registry.StreamChat(candidate.AdapterKey)
-			if !ok {
-				return failure.New(
-					failure.CodeGatewayAdapterNotRegistered,
-					failure.WithMessage(fmt.Sprintf("gateway stream chat adapter %q not registered", candidate.AdapterKey)),
-				)
+			if adapter, ok := s.registry.StreamChat(candidate.AdapterKey); ok {
+				streamAdapter = adapter
+				return nil
 			}
-			streamAdapter = adapter
-			return nil
+			// responses-only 上游（codex 号池）：chat 流经反向桥接译回 chat chunk（第八节）。
+			// 权威首字由桥接保证：只有 output_text.delta 会产出携带内容的 chunk（ADR-0017）。
+			if streamResponses, ok := s.registry.StreamResponses(candidate.AdapterKey); ok {
+				responsesAdapter, _ := s.registry.Responses(candidate.AdapterKey)
+				streamAdapter = chatbridge.New(responsesAdapter, streamResponses)
+				return nil
+			}
+			return failure.New(
+				failure.CodeGatewayAdapterNotRegistered,
+				failure.WithMessage(fmt.Sprintf("gateway stream chat adapter %q not registered", candidate.AdapterKey)),
+			)
 		},
 		Stream: func(ctx context.Context, candidate routing.ChatRouteCandidate, onChunk func(chatcompletionsadapter.ChatStreamChunk) error) (*adapter.ResponseFacts, error) {
 			attemptReq := requestForOpenAIChannel(req, tierRequest.Tier, candidate)

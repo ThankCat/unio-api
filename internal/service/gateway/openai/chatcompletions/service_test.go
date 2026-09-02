@@ -12,6 +12,7 @@ import (
 	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/chatcompletions"
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
+	responsesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/responses"
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
 	"github.com/ThankCat/unio-gateway/internal/core/channel"
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
@@ -76,6 +77,19 @@ func (r *fakeAdapterRegistry) ChatInputTokenizer(adapterKey string) (chatcomplet
 	r.chatInputTokenizerKeys = append(r.chatInputTokenizerKeys, adapterKey)
 	tokenizer, ok := r.chatInputTokenizers[adapterKey]
 	return tokenizer, ok
+}
+
+// Responses 三槽：现有 chat 测试全部走直转路径，替身不提供 responses-only 上游。
+func (r *fakeAdapterRegistry) Responses(string) (responsesadapter.ResponsesAdapter, bool) {
+	return nil, false
+}
+
+func (r *fakeAdapterRegistry) StreamResponses(string) (responsesadapter.StreamResponsesAdapter, bool) {
+	return nil, false
+}
+
+func (r *fakeAdapterRegistry) ResponsesInputTokenizer(string) (responsesadapter.ResponsesInputTokenizer, bool) {
+	return nil, false
 }
 
 // fakeRetryClassifier 是 gateway 测试使用的 retry 判断替身。

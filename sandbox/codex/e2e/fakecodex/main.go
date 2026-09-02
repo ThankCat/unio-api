@@ -49,9 +49,31 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 
 		var body struct {
-			Model string `json:"model"`
+			Model  string `json:"model"`
+			Stream bool   `json:"stream"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
+
+		// 非流式：直接回完整 response JSON（真实 codex 后端同样支持两种形态）。
+		if !body.Stream {
+			header.Set("Content-Type", "application/json")
+			message := map[string]any{
+				"type": "message", "id": "msg_fake_1", "role": "assistant", "status": "completed",
+				"content": []any{map[string]any{"type": "output_text", "text": "pong-fake", "annotations": []any{}}},
+			}
+			payload := map[string]any{
+				"id": "resp_fakecodex_1", "object": "response", "status": "completed",
+				"created_at": time.Now().Unix(), "model": body.Model, "service_tier": "auto",
+				"output": []any{message},
+				"usage": map[string]any{
+					"input_tokens": 42, "input_tokens_details": map[string]any{"cached_tokens": 0},
+					"output_tokens": 3, "output_tokens_details": map[string]any{"reasoning_tokens": 0},
+					"total_tokens": 45,
+				},
+			}
+			_ = json.NewEncoder(w).Encode(payload)
+			return
+		}
 
 		flusher := w.(http.Flusher)
 		emit := func(event string, payload map[string]any) {
@@ -70,6 +92,13 @@ func main() {
 		message := map[string]any{
 			"type": "message", "id": "msg_fake_1", "role": "assistant", "status": "completed",
 			"content": []any{map[string]any{"type": "output_text", "text": "pong-fake", "annotations": []any{}}},
+		}
+		// 与真实 wire 一致：文本先经 output_text.delta 增量下发，再由 output_item.done 收口。
+		for _, delta := range []string{"pong", "-fake"} {
+			emit("response.output_text.delta", map[string]any{
+				"type": "response.output_text.delta", "item_id": "msg_fake_1",
+				"output_index": 0, "content_index": 0, "delta": delta,
+			})
 		}
 		emit("response.output_item.done", map[string]any{
 			"type": "response.output_item.done", "output_index": 0, "item": message,

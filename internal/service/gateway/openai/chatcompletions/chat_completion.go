@@ -7,6 +7,7 @@ import (
 	"time"
 
 	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/chatcompletions"
+	chatbridge "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatbridge"
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
@@ -148,15 +149,20 @@ func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req ga
 		},
 		Sticky: stickySession,
 		ResolveAdapter: func(candidate routing.ChatRouteCandidate) error {
-			adapter, ok := s.registry.Chat(candidate.AdapterKey)
-			if !ok {
-				return failure.New(
-					failure.CodeGatewayAdapterNotRegistered,
-					failure.WithMessage(fmt.Sprintf("gateway chat adapter %q not registered", candidate.AdapterKey)),
-				)
+			if adapter, ok := s.registry.Chat(candidate.AdapterKey); ok {
+				chatAdapter = adapter
+				return nil
 			}
-			chatAdapter = adapter
-			return nil
+			// responses-only 上游（codex 号池）：chat 请求经反向桥接走 /responses（第八节）。
+			if responsesAdapter, ok := s.registry.Responses(candidate.AdapterKey); ok {
+				streamAdapter, _ := s.registry.StreamResponses(candidate.AdapterKey)
+				chatAdapter = chatbridge.New(responsesAdapter, streamAdapter)
+				return nil
+			}
+			return failure.New(
+				failure.CodeGatewayAdapterNotRegistered,
+				failure.WithMessage(fmt.Sprintf("gateway chat adapter %q not registered", candidate.AdapterKey)),
+			)
 		},
 		Invoke: func(ctx context.Context, candidate routing.ChatRouteCandidate) (lifecycle.AttemptSuccess, error) {
 			attemptReq := requestForOpenAIChannel(req, tierRequest.Tier, candidate)

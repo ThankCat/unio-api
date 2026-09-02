@@ -147,12 +147,15 @@ func (r *AdapterRegistry) hasOpenAI(adapterKey string, capability AdapterCapabil
 	}
 
 	switch capability {
+	// chat 三槽与 responses 侧对称放开（第八节，反向桥接）：chat 直转（HasChat）或
+	// chat→responses 桥接（HasResponses，codex 等 responses-only 上游）任一可服务即保留候选；
+	// 具体走哪条由 chat completions service 据 HasChat 分流。
 	case AdapterCapabilityNonStream:
-		return r.OpenAI.HasChat(adapterKey)
+		return r.OpenAI.HasChat(adapterKey) || r.OpenAI.HasResponses(adapterKey)
 	case AdapterCapabilityStream:
-		return r.OpenAI.HasStreamChat(adapterKey)
+		return r.OpenAI.HasStreamChat(adapterKey) || r.OpenAI.HasStreamResponses(adapterKey)
 	case AdapterCapabilityInputTokenizer:
-		return r.OpenAI.HasChatInputTokenizer(adapterKey)
+		return r.OpenAI.HasChatInputTokenizer(adapterKey) || r.OpenAI.HasResponsesInputTokenizer(adapterKey)
 	case AdapterCapabilityResponsesServeNonStream:
 		// 直传（上游 /responses）或桥接（responses→chat）任一可服务即保留候选；
 		// 具体走哪条由 responses service 据 HasResponses 分流。

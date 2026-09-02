@@ -4,6 +4,8 @@ import (
 	"context"
 
 	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/chatcompletions"
+	chatbridge "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatbridge"
+	responsesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/responses"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
@@ -38,6 +40,11 @@ func (s *ChatCompletionService) chatInputTokenEstimator(req gatewayapi.ChatCompl
 	return func(_ context.Context, candidate routing.ChatRouteCandidate) (int64, error) {
 		tokenizer, ok := s.registry.ChatInputTokenizer(candidate.AdapterKey)
 		if !ok {
+			// responses-only 上游（codex 号池）经反向桥接服务 chat 请求（第八节）：
+			// 估算同样走桥接——把 chat 请求译成 responses 体，用该 adapter 的 responses tokenizer 计数。
+			if bridged, bridgedOK := s.bridgedChatTokens(req, candidate); bridgedOK {
+				return bridged, nil
+			}
 			return 0, failure.New(
 				failure.CodeGatewayAdapterNotRegistered,
 				failure.WithMessage("openai chat input tokenizer is not registered"),
@@ -62,6 +69,23 @@ func (s *ChatCompletionService) chatInputTokenEstimator(req gatewayapi.ChatCompl
 
 		return inputTokens, nil
 	}
+}
+
+// bridgedChatTokens 用反向桥接路径估算 chat 请求的输入 token（codex 等 responses-only 上游）。
+func (s *ChatCompletionService) bridgedChatTokens(req gatewayapi.ChatCompletionRequest, candidate routing.ChatRouteCandidate) (int64, bool) {
+	tokenizer, ok := s.registry.ResponsesInputTokenizer(candidate.AdapterKey)
+	if !ok {
+		return 0, false
+	}
+	body, err := chatbridge.BuildResponsesBodyForEstimate(mapGatewayRequestToAdapter(req, candidate.UpstreamModel))
+	if err != nil {
+		return 0, false
+	}
+	tokens, err := tokenizer.CountResponsesInputTokens(responsesadapter.Request{Body: body})
+	if err != nil {
+		return 0, false
+	}
+	return tokens, true
 }
 
 // estimateMaxCompletionTokens 返回客户显式给出的输出 token 上限；客户未给出时返回 0。

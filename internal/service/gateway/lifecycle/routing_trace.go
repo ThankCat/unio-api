@@ -543,6 +543,7 @@ func poolFactsFromRow(row sqlc.ModelRuntimePoolRow) routingdiagnostic.PoolFacts 
 	return routingdiagnostic.PoolFacts{
 		ChannelStatus: row.ChannelStatus, ProviderStatus: row.ProviderStatus,
 		CredentialValid: row.CredentialValid, HasCredential: row.HasCredential, HasBaseURL: row.HasOrigin,
+		SupplyForm: row.SupplyForm, HasSchedulableAccount: row.HasSchedulableAccount,
 		Protocols: row.Protocols, ModelExists: row.ModelExists, ModelStatus: row.ModelStatus,
 		BindingStatus: row.BindingStatus, HasModelPrice: row.HasModelPrice, HasChannelCost: row.HasChannelCost,
 	}

@@ -13,7 +13,11 @@ type PoolFacts struct {
 	ProviderStatus  string
 	CredentialValid bool
 	HasCredential   bool
-	HasBaseURL      bool
+	// SupplyForm 是渠道供给形态；pool 型的供给单元是账号，凭据判定换成「有无可调度账号」。
+	SupplyForm string
+	// HasSchedulableAccount 表示池内至少有一个 enabled 账号（credential 型恒 false，不参与判定）。
+	HasSchedulableAccount bool
+	HasBaseURL            bool
 	// Protocols 是渠道声明支持的入口协议集合；一条渠道可以同时接多个协议。
 	Protocols      []string
 	ModelExists    bool
@@ -31,7 +35,10 @@ func ExcludedReason(facts PoolFacts, filter Filter) string {
 		return "provider_" + facts.ProviderStatus
 	case !facts.CredentialValid:
 		return "credential_invalid"
-	case !facts.HasCredential:
+	// 池型渠道不持凭据：凭据在账号上，判定换成「池内有无可调度账号」（池空 ≠ 缺凭据 ≠ 熔断）。
+	case facts.SupplyForm == "pool" && !facts.HasSchedulableAccount:
+		return "account_pool_empty"
+	case facts.SupplyForm != "pool" && !facts.HasCredential:
 		return "credential_missing"
 	case !facts.HasBaseURL:
 		return "base_url_missing"

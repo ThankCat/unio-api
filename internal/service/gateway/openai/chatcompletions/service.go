@@ -7,6 +7,7 @@ import (
 	"go.uber.org/zap"
 
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
+	responsesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/responses"
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
@@ -24,6 +25,12 @@ type AdapterRegistry interface {
 	Chat(adapterKey string) (chatcompletionsadapter.ChatAdapter, bool)
 	StreamChat(adapterKey string) (chatcompletionsadapter.StreamChatAdapter, bool)
 	ChatInputTokenizer(adapterKey string) (chatcompletionsadapter.ChatInputTokenizer, bool)
+
+	// Responses 三槽供 chat→responses 反向桥接（第八节）：responses-only 上游（codex 号池）
+	// 的 chat 请求经桥接走 /responses，直转候选完全不经过这三条查询。
+	Responses(adapterKey string) (responsesadapter.ResponsesAdapter, bool)
+	StreamResponses(adapterKey string) (responsesadapter.StreamResponsesAdapter, bool)
+	ResponsesInputTokenizer(adapterKey string) (responsesadapter.ResponsesInputTokenizer, bool)
 }
 
 // ChatCompletionService 编排 chat completion 请求的 routing、adapter 调用、request log 和结算。
