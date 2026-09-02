@@ -1,0 +1,33 @@
+{
+  "_source": "定向 HTTP 探测（2026-09-02，非 CLI 流量；CLI 原生走 WS，用量以 codex.rate_limits 事件下发）",
+  "_what": "上游 HTTP 出站 POST /backend-api/codex/responses 的响应头：用量窗口与回合状态。这是号池出站路径实际会读到的头集合",
+  "_caution": "primary = 5h 窗口（window-minutes=300），secondary = 7d 窗口（window-minutes=10080）。Sub2API 源码把两者弄反，勿照抄其映射。",
+  "response_headers": {
+    "x-codex-active-limit": "premium",
+    "x-codex-plan-type": "plus",
+    "x-codex-primary-used-percent": "0",
+    "x-codex-primary-window-minutes": "300",
+    "x-codex-primary-reset-after-seconds": "18000",
+    "x-codex-primary-reset-at": "1788339488",
+    "x-codex-secondary-used-percent": "0",
+    "x-codex-secondary-window-minutes": "10080",
+    "x-codex-secondary-reset-after-seconds": "604800",
+    "x-codex-secondary-reset-at": "1788926288",
+    "x-codex-primary-over-secondary-limit-percent": "0",
+    "x-codex-credits-has-credits": "False",
+    "x-codex-credits-balance": "0",
+    "x-codex-credits-unlimited": "False",
+    "x-base-model-inference-limit-name": "gpt-reserve",
+    "x-base-model-inference-primary-used-percent": "0",
+    "x-base-model-inference-primary-window-minutes": "10080",
+    "x-base-model-inference-primary-reset-after-seconds": "604800",
+    "x-base-model-inference-primary-reset-at": "1788926288",
+    "x-base-model-inference-secondary-used-percent": "0",
+    "x-base-model-inference-secondary-window-minutes": "0",
+    "x-base-model-inference-secondary-reset-after-seconds": "0",
+    "x-base-model-inference-secondary-reset-at": "",
+    "x-base-model-inference-primary-over-secondary-limit-percent": "0",
+    "x-codex-turn-state": "<blob len=376 prefix=gAAAAABql57P>",
+    "x-models-etag": "W/\"<etag>\""
+  }
+}

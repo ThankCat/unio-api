@@ -1,0 +1,20 @@
+{
+  "_source": "20260902-121830.jsonl",
+  "_what": "response.completed 的账务相关字段（service_tier 谎报、usage、缓存选项）",
+  "service_tier": "auto",
+  "usage": {
+    "input_tokens": 11316,
+    "input_tokens_details": {
+      "cache_write_tokens": 0,
+      "cached_tokens": 0
+    },
+    "output_tokens": 0,
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    },
+    "total_tokens": 11316
+  },
+  "prompt_cache_options": null,
+  "prompt_cache_retention": "24h",
+  "status": "completed"
+}

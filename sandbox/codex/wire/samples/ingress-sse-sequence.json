@@ -1,0 +1,16 @@
+{
+  "_source": "20260902-131009.jsonl",
+  "_what": "客户入口收到的 SSE 事件序列（假网关回放，形状与真实一致）",
+  "event_sequence": [
+    "response.created",
+    "response.output_item.added",
+    "response.output_item.done",
+    "response.completed"
+  ],
+  "counts": {
+    "response.created": 1,
+    "response.output_item.added": 1,
+    "response.output_item.done": 1,
+    "response.completed": 1
+  }
+}

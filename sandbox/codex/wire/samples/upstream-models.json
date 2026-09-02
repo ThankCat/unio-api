@@ -1,0 +1,135 @@
+{
+  "_source": "20260902-121830.jsonl",
+  "_what": "Codex 模型清单端点响应（发现流程的数据源）",
+  "model_count": 8,
+  "slugs": [
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "gpt-reserve",
+    "gpt-5.5",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "codex-auto-review"
+  ],
+  "first_model_fields": {
+    "slug": "gpt-5.6-sol",
+    "prefer_websockets": true,
+    "support_verbosity": true,
+    "default_verbosity": "low",
+    "apply_patch_tool_type": "freeform",
+    "web_search_tool_type": "text_and_image",
+    "input_modalities": [
+      "text",
+      "image"
+    ],
+    "supports_image_detail_original": true,
+    "truncation_policy": {
+      "mode": "tokens",
+      "limit": 10000
+    },
+    "supports_parallel_tool_calls": true,
+    "tool_mode": "code_mode_only",
+    "multi_agent_version": "v2",
+    "multi_agent_reasoning_effort": null,
+    "use_responses_lite": true,
+    "include_skills_usage_instructions": false,
+    "include_apps_usage_instructions": true,
+    "include_plugin_usage_instructions": true,
+    "node_repl_auto_review_required": false,
+    "node_repl_disabled": false,
+    "requires_sandboxed_review": false,
+    "auto_review_model_override": null,
+    "model_specialty": null,
+    "context_window": 272000,
+    "max_context_window": 872000,
+    "auto_compact_token_limit": null,
+    "comp_hash": "3000",
+    "default_reasoning_summary": "none",
+    "display_name": "GPT-5.6-Sol",
+    "description": "Reliable agentic workhorse for everyday tasks.",
+    "default_reasoning_level": "low",
+    "supported_reasoning_levels": [
+      {
+        "effort": "low",
+        "description": "Fast responses with lighter reasoning"
+      },
+      {
+        "effort": "medium",
+        "description": "Balances speed and reasoning depth for everyday tasks"
+      },
+      {
+        "effort": "high",
+        "description": "Greater reasoning depth for complex problems"
+      },
+      {
+        "effort": "xhigh",
+        "description": "Extra high reasoning depth for complex problems"
+      },
+      {
+        "effort": "max",
+        "description": "Maximum reasoning depth for the hardest problems"
+      },
+      {
+        "effort": "ultra",
+        "description": "Maximum reasoning with automatic task delegation"
+      }
+    ],
+    "shell_type": "shell_command",
+    "visibility": "list",
+    "minimal_client_version": "0.144.0",
+    "supported_in_api": true,
+    "availability_nux": null,
+    "upgrade": null,
+    "priority": 1,
+    "model_messages": {
+      "instructions_template": "You are Codex, an agent based on GPT-5. You and the user share one workspace, and your job is to collaborate with them until their goal is genuinely handled.\n\n# Personality\n\nAs Codex, you are an excel…<+115 chars>",
+      "instructions_variables": null,
+      "persistent_instructions": null,
+      "tools": null,
+      "approvals": null,
+      "collaboration_modes": null,
+      "auto_review": null,
+      "multi_agent": null,
+      "permissions": null,
+      "token_budget": {
+        "enabled": false,
+        "use_history_notes_extension": false,
+        "reminder_threshold_tokens": 6144,
+        "reminder_message_template": "<context_window_reminder>\nYour current context window is nearly exhausted; only {n_remaining} tokens remain. Before starting a new context window, save concise progress notes with the `notes` tool wit…<+113 chars>",
+        "guidance_message": "For tasks that may span context windows, use `notes` to maintain a concise checkpoint of the goal, decisions, progress, learnings and next steps. Include the window ID and item ID for every relevant u…<+114 chars>",
+        "auto_compact_fallback_prompt": "<context_window_reminder>\nThe current context window is exhausted. Do not continue the task or give a final answer in this window. The next window will not automatically include this conversation. Mak…<+113 chars>",
+        "auto_compact_fallback_buffer_tokens": 16384
+      },
+      "guardian_v2": null,
+      "confirmation_policies": null
+    },
+    "experimental_supported_tools": [],
+    "available_in_plans": [
+      "business",
+      "edu",
+      "edu_plus",
+      "edu_pro",
+      "education",
+      "enterprise",
+      "enterprise_cbp_automation",
+      "enterprise_cbp_trial",
+      "…<15 more>"
+    ],
+    "supports_search_tool": true,
+    "default_service_tier": null,
+    "service_tiers": [
+      {
+        "id": "priority",
+        "name": "Fast",
+        "description": "1.5x speed, increased usage"
+      }
+    ],
+    "additional_speed_tiers": [
+      "fast"
+    ],
+    "supports_reasoning_summary_parameter": true,
+    "supports_reasoning_summaries": true,
+    "base_instructions": "You are Codex, an agent based on GPT-5. You and the user share one workspace, and your job is to collaborate with them until their goal is genuinely handled.\n\n# Personality\n\nAs Codex, you are an excel…<+115 chars>"
+  }
+}

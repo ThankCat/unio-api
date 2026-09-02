@@ -86,6 +86,15 @@ python3 scripts/wire-snapshot.py diff wire/<旧版本>.json wire/<新版本>.jso
   提供伪终端并自动应答。
 - **后台进程继承 stdout**：假网关等后台进程需重定向输出，否则调用方管道（`| tail`）收不到 EOF。
 
+## wire 契约与证据（实现 adapter 前必读）
+
+- **逐字段对照**：[`wire/README.md`](wire/README.md) 的样例索引 → `wire/samples/*.json`（带真实取值的
+  脱敏样例，入库，44 KB）。
+- **结论与设计取舍**：蓝图 `unio-blueprint/docs/architecture/account-pool.md`，其中每条结论都标注了
+  来源等级（【实测】/【探测】/【Sub2API】/【推断】）；标【Sub2API】的**必须复核后才能照做**——已发现
+  其两处与真实行为不符。
+- **取得新证据后**：`python3 scripts/extract-samples.py` 更新样例，并回写蓝图把标记升级为【实测】。
+
 ## 两种 wire 形态
 
 同一个 CLI 对不同 provider 发出的 wire **不是同一套**，完整实测见蓝图

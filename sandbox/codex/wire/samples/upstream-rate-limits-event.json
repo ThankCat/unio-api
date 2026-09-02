@@ -1,0 +1,44 @@
+{
+  "_source": "20260902-121830.jsonl",
+  "_what": "原生 WS 的 codex.rate_limits 事件：allowed/limit_reached 与两个窗口的 reset_at",
+  "event": {
+    "type": "codex.rate_limits",
+    "plan_type": "plus",
+    "rate_limits": {
+      "allowed": true,
+      "limit_reached": false,
+      "primary": {
+        "used_percent": 0,
+        "window_minutes": 300,
+        "reset_after_seconds": 16777,
+        "reset_at": 1788339490
+      },
+      "secondary": {
+        "used_percent": 0,
+        "window_minutes": 10080,
+        "reset_after_seconds": 603577,
+        "reset_at": 1788926290
+      }
+    },
+    "code_review_rate_limits": null,
+    "additional_rate_limits": {
+      "gpt-reserve": {
+        "allowed": true,
+        "limit_reached": false,
+        "primary": {
+          "used_percent": 0,
+          "window_minutes": 10080,
+          "reset_after_seconds": 604800,
+          "reset_at": 1788927513
+        },
+        "secondary": null
+      }
+    },
+    "credits": {
+      "has_credits": false,
+      "unlimited": false,
+      "balance": "0"
+    },
+    "promo": null
+  }
+}

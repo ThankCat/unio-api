@@ -1,0 +1,13 @@
+{
+  "_source": "20260902-121830.jsonl",
+  "_what": "原生 WS 中承载 HTTP 响应头的事件（含 x-codex-turn-state）",
+  "event": {
+    "type": "codex.response.metadata",
+    "headers": {
+      "x-models-etag": "W/\"961221dbfa5101bdb5ee8ca752720f78\"",
+      "x-codex-turn-state": "gAAAAABql6OZTWNXmEFHKBeVLv1TOfowG-jKshgk85WgpBIld-mTtJaVAc-vhZ_7IaP6g32xaNYIheuZsTTHBMNCgO5xYTSSlfwxcSkpMPy31Wb0SKCWszfgnszShkNUyl-kADCj99OoVjxlhliFo173wUEIQMjhvvDVOvcYE_Bvi4BKbvde2EvuNvxMUuZe6fUcgJai…<+92 chars>",
+      "x-codex-safety-buffering-enabled": "true",
+      "x-codex-safety-buffering-faster-model": "gpt-5.6-luna"
+    }
+  }
+}
