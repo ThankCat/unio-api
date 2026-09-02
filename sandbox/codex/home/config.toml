@@ -1,0 +1,9 @@
+# Codex 沙箱配置（隔离 CODEX_HOME）。
+# 强制走 ChatGPT 订阅登录，而非 API Key / 自定义中转 provider。
+preferred_auth_method = "chatgpt"
+
+# 订阅号默认关闭服务端响应存储（与号池请求口径一致）。
+disable_response_storage = true
+
+[projects."/Users/chenhao/Project/unio/unio-gateway/sandbox/codex/home/work"]
+trust_level = "trusted"

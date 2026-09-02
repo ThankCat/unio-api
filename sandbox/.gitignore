@@ -1,0 +1,17 @@
+# 沙箱：脚手架入库，凭据与运行态产物不入库。
+
+# 各平台隔离 HOME 默认整体忽略（含活令牌、会话、sqlite、cache 等运行态），
+# 仅显式放行需要入库的配置模板。
+**/home/*
+!**/home/config.toml
+!**/home/.gitkeep
+
+# 本地安装的 CLI 与依赖
+**/node_modules/
+**/bin/
+
+# 抓包产物与沙箱内的 mitmproxy 配置（含 CA 私钥）；wire/ 下的规范化快照不含敏感信息，入库
+**/*.mitm
+**/flows/
+**/.mitmproxy/
+**/.probe-home/

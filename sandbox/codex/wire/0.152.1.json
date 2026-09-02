@@ -1,0 +1,574 @@
+{
+  "cli_version": "0.152.1",
+  "endpoints": {
+    "GET http://127.0.0.1:18999/v1/models [http]": {
+      "client_message_types": [],
+      "event_types": [],
+      "input_item_kinds": [],
+      "request_body_keys": [],
+      "request_headers": [
+        "accept",
+        "authorization",
+        "chatgpt-account-id",
+        "host",
+        "originator",
+        "user-agent"
+      ],
+      "response_body_keys": [
+        "data",
+        "object"
+      ],
+      "response_headers": [
+        "content-type",
+        "server"
+      ],
+      "statuses": [
+        200
+      ],
+      "tool_types": []
+    },
+    "GET https://chatgpt.com/backend-api/codex/models [http]": {
+      "client_message_types": [],
+      "event_types": [],
+      "input_item_kinds": [],
+      "request_body_keys": [],
+      "request_headers": [
+        "accept",
+        "authorization",
+        "chatgpt-account-id",
+        "originator",
+        "user-agent",
+        "version"
+      ],
+      "response_body_keys": [
+        "models"
+      ],
+      "response_headers": [
+        "content-type",
+        "cross-origin-opener-policy",
+        "referrer-policy",
+        "server",
+        "strict-transport-security",
+        "x-content-type-options",
+        "x-openai-proxy-wasm"
+      ],
+      "statuses": [
+        200
+      ],
+      "tool_types": []
+    },
+    "GET https://chatgpt.com/backend-api/codex/responses [websocket]": {
+      "client_message_types": [
+        "response.create"
+      ],
+      "event_types": [
+        "codex.rate_limits",
+        "codex.response.metadata",
+        "response.completed",
+        "response.content_part.added",
+        "response.content_part.done",
+        "response.created",
+        "response.custom_tool_call_input.delta",
+        "response.custom_tool_call_input.done",
+        "response.in_progress",
+        "response.output_item.added",
+        "response.output_item.done",
+        "response.output_text.delta",
+        "response.output_text.done",
+        "responsesapi.websocket_timing"
+      ],
+      "input_item_kinds": [
+        "additional_tools/developer:-",
+        "custom_tool_call_output/-:-",
+        "message/assistant:unknown",
+        "message/developer:apps.instructions",
+        "message/developer:collaboration_mode.instructions",
+        "message/developer:host_skills.instructions",
+        "message/developer:model.base_instructions",
+        "message/developer:multi_agent.mode_instructions",
+        "message/developer:multi_agent.usage_hint",
+        "message/developer:permissions.instructions",
+        "message/developer:plugins.usage_instructions",
+        "message/user:agents_md.instructions",
+        "message/user:environments.environment_context",
+        "message/user:plugins.recommendations",
+        "message/user:user.text"
+      ],
+      "request_body_keys": [
+        "client_metadata",
+        "generate",
+        "include",
+        "input",
+        "model",
+        "parallel_tool_calls",
+        "previous_response_id",
+        "prompt_cache_key",
+        "reasoning",
+        "store",
+        "stream",
+        "text",
+        "tool_choice",
+        "type"
+      ],
+      "request_headers": [
+        "authorization",
+        "chatgpt-account-id",
+        "connection",
+        "host",
+        "openai-beta",
+        "originator",
+        "sec-websocket-extensions",
+        "sec-websocket-version",
+        "session-id",
+        "thread-id",
+        "upgrade",
+        "user-agent",
+        "version",
+        "x-codex-beta-features",
+        "x-codex-routing-hint",
+        "x-codex-turn-metadata",
+        "x-codex-window-id"
+      ],
+      "response_body_keys": [],
+      "response_headers": [
+        "connection",
+        "cross-origin-opener-policy",
+        "referrer-policy",
+        "sec-websocket-extensions",
+        "server",
+        "strict-transport-security",
+        "upgrade",
+        "x-content-type-options",
+        "x-openai-proxy-wasm"
+      ],
+      "statuses": [
+        101
+      ],
+      "tool_types": [
+        "namespace:collaboration",
+        "namespace:functions"
+      ]
+    },
+    "GET https://chatgpt.com/backend-api/plugins/featured [http]": {
+      "client_message_types": [],
+      "event_types": [],
+      "input_item_kinds": [],
+      "request_body_keys": [],
+      "request_headers": [
+        "accept",
+        "authorization",
+        "chatgpt-account-id",
+        "originator",
+        "user-agent"
+      ],
+      "response_body_keys": [],
+      "response_headers": [
+        "content-type",
+        "cross-origin-opener-policy",
+        "referrer-policy",
+        "server",
+        "strict-transport-security",
+        "x-build",
+        "x-content-type-options"
+      ],
+      "statuses": [
+        200
+      ],
+      "tool_types": []
+    },
+    "GET https://chatgpt.com/backend-api/ps/plugins/installed [http]": {
+      "client_message_types": [],
+      "event_types": [],
+      "input_item_kinds": [],
+      "request_body_keys": [],
+      "request_headers": [
+        "accept",
+        "authorization",
+        "chatgpt-account-id",
+        "oai-product-sku",
+        "originator",
+        "user-agent"
+      ],
+      "response_body_keys": [
+        "pagination",
+        "plugins"
+      ],
+      "response_headers": [
+        "content-type",
+        "cross-origin-opener-policy",
+        "referrer-policy",
+        "server",
+        "strict-transport-security",
+        "x-content-type-options",
+        "x-openai-proxy-wasm"
+      ],
+      "statuses": [
+        200
+      ],
+      "tool_types": []
+    },
+    "GET https://chatgpt.com/backend-api/ps/plugins/list [http]": {
+      "client_message_types": [],
+      "event_types": [],
+      "input_item_kinds": [],
+      "request_body_keys": [],
+      "request_headers": [
+        "accept",
+        "authorization",
+        "chatgpt-account-id",
+        "oai-product-sku",
+        "originator",
+        "user-agent"
+      ],
+      "response_body_keys": [
+        "pagination",
+        "plugins"
+      ],
+      "response_headers": [
+        "content-type",
+        "cross-origin-opener-policy",
+        "referrer-policy",
+        "server",
+        "strict-transport-security",
+        "x-content-type-options",
+        "x-openai-proxy-wasm"
+      ],
+      "statuses": [
+        200
+      ],
+      "tool_types": []
+    },
+    "GET https://chatgpt.com/backend-api/ps/plugins/suggested/codex [http]": {
+      "client_message_types": [],
+      "event_types": [],
+      "input_item_kinds": [],
+      "request_body_keys": [],
+      "request_headers": [
+        "accept",
+        "authorization",
+        "chatgpt-account-id",
+        "oai-product-sku",
+        "originator",
+        "user-agent"
+      ],
+      "response_body_keys": [
+        "enabled",
+        "plugins"
+      ],
+      "response_headers": [
+        "content-type",
+        "cross-origin-opener-policy",
+        "referrer-policy",
+        "server",
+        "strict-transport-security",
+        "x-content-type-options",
+        "x-openai-proxy-wasm"
+      ],
+      "statuses": [
+        200
+      ],
+      "tool_types": []
+    },
+    "GET https://chatgpt.com/backend-api/wham/rate-limit-reset-credits [http]": {
+      "client_message_types": [],
+      "event_types": [],
+      "input_item_kinds": [],
+      "request_body_keys": [],
+      "request_headers": [
+        "accept",
+        "authorization",
+        "chatgpt-account-id",
+        "user-agent"
+      ],
+      "response_body_keys": [
+        "available_count",
+        "credits",
+        "history_enabled",
+        "immediate_reset_purchase_eligible",
+        "total_earned_count"
+      ],
+      "response_headers": [
+        "content-type",
+        "cross-origin-opener-policy",
+        "referrer-policy",
+        "server",
+        "strict-transport-security",
+        "x-content-type-options",
+        "x-openai-proxy-wasm"
+      ],
+      "statuses": [
+        200
+      ],
+      "tool_types": []
+    },
+    "GET https://chatgpt.com/backend-api/wham/settings/user [http]": {
+      "client_message_types": [],
+      "event_types": [],
+      "input_item_kinds": [],
+      "request_body_keys": [],
+      "request_headers": [
+        "accept",
+        "authorization",
+        "cache-control",
+        "chatgpt-account-id",
+        "user-agent"
+      ],
+      "response_body_keys": [
+        "allow_credits_for_code_reviews",
+        "alpha_opt_in",
+        "branch_format",
+        "code_review_preference",
+        "code_review_trigger_policy",
+        "commit_attribution_enabled",
+        "custom_instructions",
+        "exhaustive_code_review",
+        "git_diff_mode",
+        "preferred_github_connector_id",
+        "preferred_gitlab_connector_id",
+        "security_review",
+        "user_id"
+      ],
+      "response_headers": [
+        "content-type",
+        "cross-origin-opener-policy",
+        "referrer-policy",
+        "server",
+        "strict-transport-security",
+        "x-content-type-options",
+        "x-openai-proxy-wasm"
+      ],
+      "statuses": [
+        200
+      ],
+      "tool_types": []
+    },
+    "GET https://chatgpt.com/backend-api/wham/usage [http]": {
+      "client_message_types": [],
+      "event_types": [],
+      "input_item_kinds": [],
+      "request_body_keys": [],
+      "request_headers": [
+        "accept",
+        "authorization",
+        "chatgpt-account-id",
+        "user-agent"
+      ],
+      "response_body_keys": [
+        "account_id",
+        "additional_rate_limits",
+        "code_review_rate_limit",
+        "credits",
+        "email",
+        "model_usage",
+        "plan_type",
+        "promo",
+        "rate_limit",
+        "rate_limit_reached_type",
+        "rate_limit_reset_credits",
+        "spend_control",
+        "user_id"
+      ],
+      "response_headers": [
+        "content-type",
+        "cross-origin-opener-policy",
+        "referrer-policy",
+        "server",
+        "strict-transport-security",
+        "x-content-type-options",
+        "x-openai-proxy-wasm"
+      ],
+      "statuses": [
+        200
+      ],
+      "tool_types": []
+    },
+    "POST http://127.0.0.1:18999/v1/responses [http]": {
+      "client_message_types": [],
+      "event_types": [
+        "response.completed",
+        "response.created",
+        "response.output_item.added",
+        "response.output_item.done"
+      ],
+      "input_item_kinds": [
+        "function_call/-:-",
+        "function_call_output/-:-",
+        "message/developer:-",
+        "message/user:-"
+      ],
+      "request_body_keys": [
+        "client_metadata",
+        "include",
+        "input",
+        "instructions",
+        "model",
+        "parallel_tool_calls",
+        "prompt_cache_key",
+        "reasoning",
+        "store",
+        "stream",
+        "text",
+        "tool_choice",
+        "tools"
+      ],
+      "request_headers": [
+        "accept",
+        "authorization",
+        "chatgpt-account-id",
+        "content-type",
+        "host",
+        "originator",
+        "session-id",
+        "thread-id",
+        "user-agent",
+        "x-codex-beta-features",
+        "x-codex-turn-metadata",
+        "x-codex-window-id"
+      ],
+      "response_body_keys": [],
+      "response_headers": [
+        "content-type",
+        "server"
+      ],
+      "statuses": [
+        200
+      ],
+      "tool_types": [
+        "custom:apply_patch",
+        "function:create_goal",
+        "function:exec_command",
+        "function:get_goal",
+        "function:list_mcp_resource_templates",
+        "function:list_mcp_resources",
+        "function:read_mcp_resource",
+        "function:request_plugin_install",
+        "function:request_user_input",
+        "function:update_goal",
+        "function:view_image",
+        "function:write_stdin",
+        "namespace:image_gen",
+        "tool_search:None",
+        "web_search:None"
+      ]
+    },
+    "POST https://chatgpt.com/backend-api/codex/analytics-events/events [http]": {
+      "client_message_types": [],
+      "event_types": [],
+      "input_item_kinds": [],
+      "request_body_keys": [
+        "events"
+      ],
+      "request_headers": [
+        "accept",
+        "authorization",
+        "chatgpt-account-id",
+        "content-type",
+        "originator",
+        "user-agent"
+      ],
+      "response_body_keys": [
+        "accepted_events",
+        "skipped_events",
+        "status",
+        "total_events"
+      ],
+      "response_headers": [
+        "content-type",
+        "cross-origin-opener-policy",
+        "referrer-policy",
+        "server",
+        "strict-transport-security",
+        "x-content-type-options",
+        "x-openai-proxy-wasm"
+      ],
+      "statuses": [
+        200
+      ],
+      "tool_types": []
+    },
+    "POST https://chatgpt.com/backend-api/ps/apps/batch [http]": {
+      "client_message_types": [],
+      "event_types": [],
+      "input_item_kinds": [],
+      "request_body_keys": [
+        "app_ids",
+        "include_tools"
+      ],
+      "request_headers": [
+        "accept",
+        "authorization",
+        "chatgpt-account-id",
+        "content-type",
+        "oai-product-sku",
+        "originator",
+        "user-agent"
+      ],
+      "response_body_keys": [
+        "apps"
+      ],
+      "response_headers": [
+        "content-type",
+        "cross-origin-opener-policy",
+        "referrer-policy",
+        "server",
+        "strict-transport-security",
+        "x-content-type-options",
+        "x-openai-proxy-wasm"
+      ],
+      "statuses": [
+        200
+      ],
+      "tool_types": []
+    },
+    "POST https://chatgpt.com/backend-api/ps/mcp [http]": {
+      "client_message_types": [],
+      "event_types": [],
+      "input_item_kinds": [],
+      "request_body_keys": [
+        "id",
+        "jsonrpc",
+        "method",
+        "params"
+      ],
+      "request_headers": [
+        "accept",
+        "authorization",
+        "chatgpt-account-id",
+        "content-type",
+        "mcp-protocol-version",
+        "originator",
+        "user-agent",
+        "x-openai-product-sku"
+      ],
+      "response_body_keys": [
+        "id",
+        "jsonrpc",
+        "result"
+      ],
+      "response_headers": [
+        "content-type",
+        "cross-origin-opener-policy",
+        "referrer-policy",
+        "server",
+        "strict-transport-security",
+        "x-content-type-options",
+        "x-openai-proxy-wasm"
+      ],
+      "statuses": [
+        200,
+        204
+      ],
+      "tool_types": []
+    }
+  },
+  "sources": [
+    "20260902-121830.jsonl",
+    "20260902-122043.jsonl",
+    "20260902-122103.jsonl",
+    "20260902-124201.jsonl",
+    "20260902-130145.jsonl",
+    "20260902-130551.jsonl",
+    "20260902-131009.jsonl",
+    "20260902-133340-custom-tool.jsonl"
+  ]
+}

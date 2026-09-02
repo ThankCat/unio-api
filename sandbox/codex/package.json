@@ -1,0 +1,9 @@
+{
+  "name": "unio-sandbox-codex",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Isolated OpenAI Codex CLI for account-pool wire verification. Do NOT use the host-global codex.",
+  "dependencies": {
+    "@openai/codex": "0.152.1"
+  }
+}
