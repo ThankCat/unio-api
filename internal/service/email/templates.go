@@ -232,11 +232,22 @@ func renderMessage(kind MessageKind, locale, code string, expiresMinutes int) (s
 	}
 
 	var plain strings.Builder
-	plain.WriteString(deck.Title + "\n\n" + deck.Intro + "\n")
+	plain.WriteString(deck.Title)
+	plain.WriteString("\n\n")
+	plain.WriteString(deck.Intro)
+	plain.WriteByte('\n')
 	if code != "" {
-		plain.WriteString("\n" + code + "\n" + codeMeta + "\n")
+		plain.WriteByte('\n')
+		plain.WriteString(code)
+		plain.WriteByte('\n')
+		plain.WriteString(codeMeta)
+		plain.WriteByte('\n')
 	}
-	plain.WriteString("\n" + deck.Fine + "\n\n" + deck.Footer + "\n")
+	plain.WriteByte('\n')
+	plain.WriteString(deck.Fine)
+	plain.WriteString("\n\n")
+	plain.WriteString(deck.Footer)
+	plain.WriteByte('\n')
 
 	return deck.Subject, out.String(), plain.String(), nil
 }
