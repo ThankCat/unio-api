@@ -37,6 +37,10 @@ const (
 	StatusDisabled = "disabled"
 	// StatusArchived 表示 channel 已归档（默认隐藏、不参与路由候选；可恢复）。
 	StatusArchived = "archived"
+
+	// SupplyFormCredential / SupplyFormPool 是渠道供给形态，与 channels.supply_form 的 DB 约束一致。
+	SupplyFormCredential = "credential"
+	SupplyFormPool       = "pool"
 )
 
 // Store 定义 channel 管理所需的存储能力。
@@ -119,9 +123,12 @@ type Channel struct {
 	StickyTTLms         *int64
 	// ConcurrencyLimit 是渠道在途并发上限（DEC-029）：nil=继承并发默认 channel_limit，0=不限，>0=具体上限。
 	ConcurrencyLimit *int64
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
-	ArchivedAt       *time.Time
+	// SupplyForm / AccountDefaultConcurrency 是号池改造引入的供给形态（credential/pool）。
+	SupplyForm                string
+	AccountDefaultConcurrency *int64
+	CreatedAt                 time.Time
+	UpdatedAt                 time.Time
+	ArchivedAt                *time.Time
 	// LastTested* 是最近一次主动检测结果（渠道检测，阶段一）：全 nil 表示从未检测。
 	// 仅由检测上游源站写入，不参与路由/计费，也不改渠道启停状态。
 	LastTestedAt      *time.Time
@@ -194,6 +201,10 @@ type CreateInput struct {
 	StickyEnabled       *bool
 	StickyTTLms         *int64
 	ConcurrencyLimit    *int64
+	// SupplyForm 是供给形态：credential（缺省，持单份 API Key）/ pool（下挂订阅账号池，不持凭据）。
+	SupplyForm string
+	// AccountDefaultConcurrency 是池型渠道的账号默认并发（nil 继承全局，0 不限，正数上限）。
+	AccountDefaultConcurrency *int64
 }
 
 // UpdateInput 是更新 channel 的入参；protocol、adapter_key 与凭据不在此修改。
@@ -431,8 +442,28 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Channel, error) {
 	if err != nil {
 		return Channel{}, err
 	}
-	if strings.TrimSpace(in.Credential) == "" {
-		return Channel{}, invalidArgument("credential", "credential is required")
+	supplyForm := strings.TrimSpace(in.SupplyForm)
+	if supplyForm == "" {
+		supplyForm = SupplyFormCredential
+	}
+	switch supplyForm {
+	case SupplyFormCredential:
+		if strings.TrimSpace(in.Credential) == "" {
+			return Channel{}, invalidArgument("credential", "credential is required")
+		}
+		if in.AccountDefaultConcurrency != nil {
+			return Channel{}, invalidArgument("account_default_concurrency", "仅池型渠道可配账号默认并发")
+		}
+	case SupplyFormPool:
+		// 池型渠道不持凭据：凭据在账号上，双份真相会让轮换语义混乱（DB CHECK 同步拦截）。
+		if strings.TrimSpace(in.Credential) != "" {
+			return Channel{}, invalidArgument("credential", "池型渠道不持渠道级凭据")
+		}
+		if in.AccountDefaultConcurrency != nil && *in.AccountDefaultConcurrency < 0 {
+			return Channel{}, invalidArgument("account_default_concurrency", "账号默认并发不可为负")
+		}
+	default:
+		return Channel{}, invalidArgument("supply_form", "supply_form 只能是 credential 或 pool")
 	}
 
 	// 每个声明的协议都必须与 adapter_key 组成 registry 里注册过的组合：
@@ -462,19 +493,21 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Channel, error) {
 	}
 
 	row, err := s.store.CreateChannel(ctx, sqlc.CreateChannelParams{
-		ProviderID:          in.ProviderID,
-		Name:                name,
-		Protocols:           protocols,
-		AdapterKey:          adapterKey,
-		Credential:          strings.TrimSpace(in.Credential),
-		Status:              status,
-		Priority:            in.Priority,
-		SupportsOpenaiFast:  in.SupportsOpenAIFast,
-		ResponseTimeoutMs:   timeoutParam(in.ResponseTimeoutMs),
-		FirstTokenTimeoutMs: timeoutParam(in.FirstTokenTimeoutMs),
-		ConcurrencyLimit:    rateLimitParam(capacity.Concurrency),
-		StickyEnabled:       boolParam(in.StickyEnabled),
-		StickyTtlMs:         nullableInt8Param(in.StickyTTLms),
+		ProviderID:                in.ProviderID,
+		Name:                      name,
+		Protocols:                 protocols,
+		AdapterKey:                adapterKey,
+		Credential:                strings.TrimSpace(in.Credential),
+		Status:                    status,
+		Priority:                  in.Priority,
+		SupportsOpenaiFast:        in.SupportsOpenAIFast,
+		ResponseTimeoutMs:         timeoutParam(in.ResponseTimeoutMs),
+		FirstTokenTimeoutMs:       timeoutParam(in.FirstTokenTimeoutMs),
+		ConcurrencyLimit:          rateLimitParam(capacity.Concurrency),
+		StickyEnabled:             boolParam(in.StickyEnabled),
+		StickyTtlMs:               nullableInt8Param(in.StickyTTLms),
+		SupplyForm:                supplyForm,
+		AccountDefaultConcurrency: rateLimitParam(in.AccountDefaultConcurrency),
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -955,25 +988,27 @@ func (s *Service) ensureProviderRechargeRateConfigured(ctx context.Context, prov
 
 func toChannel(c sqlc.Channel) Channel {
 	return Channel{
-		ID:                  c.ID,
-		ProviderID:          c.ProviderID,
-		ConfigRevision:      c.ConfigRevision,
-		CapacityRevision:    c.CapacityRevision,
-		Name:                c.Name,
-		Protocols:           c.Protocols,
-		AdapterKey:          c.AdapterKey,
-		SupportsOpenAIFast:  c.SupportsOpenaiFast,
-		Credential:          c.Credential,
-		Status:              c.Status,
-		Priority:            c.Priority,
-		ResponseTimeoutMs:   timeoutResult(c.ResponseTimeoutMs),
-		FirstTokenTimeoutMs: timeoutResult(c.FirstTokenTimeoutMs),
-		ConcurrencyLimit:    rateLimitResult(c.ConcurrencyLimit),
-		StickyEnabled:       boolResult(c.StickyEnabled),
-		StickyTTLms:         int8Result(c.StickyTtlMs),
-		CreatedAt:           c.CreatedAt.Time,
-		UpdatedAt:           c.UpdatedAt.Time,
-		ArchivedAt:          timestampResult(c.ArchivedAt),
+		ID:                        c.ID,
+		ProviderID:                c.ProviderID,
+		ConfigRevision:            c.ConfigRevision,
+		CapacityRevision:          c.CapacityRevision,
+		Name:                      c.Name,
+		Protocols:                 c.Protocols,
+		AdapterKey:                c.AdapterKey,
+		SupportsOpenAIFast:        c.SupportsOpenaiFast,
+		Credential:                c.Credential,
+		Status:                    c.Status,
+		Priority:                  c.Priority,
+		ResponseTimeoutMs:         timeoutResult(c.ResponseTimeoutMs),
+		FirstTokenTimeoutMs:       timeoutResult(c.FirstTokenTimeoutMs),
+		ConcurrencyLimit:          rateLimitResult(c.ConcurrencyLimit),
+		StickyEnabled:             boolResult(c.StickyEnabled),
+		StickyTTLms:               int8Result(c.StickyTtlMs),
+		SupplyForm:                c.SupplyForm,
+		AccountDefaultConcurrency: rateLimitResult(c.AccountDefaultConcurrency),
+		CreatedAt:                 c.CreatedAt.Time,
+		UpdatedAt:                 c.UpdatedAt.Time,
+		ArchivedAt:                timestampResult(c.ArchivedAt),
 
 		LastTestedAt:      timestampResult(c.LastTestedAt),
 		LastTestOK:        boolResult(c.LastTestOk),
@@ -1002,26 +1037,28 @@ func (s *Service) enrichProviderName(ctx context.Context, ch Channel) (Channel, 
 // toChannelRow 映射分页列表行，额外带出 JOIN 出的 provider 名称。
 func toChannelRow(c sqlc.ListChannelsPageRow) Channel {
 	return Channel{
-		ID:                  c.ID,
-		ProviderID:          c.ProviderID,
-		ProviderName:        c.ProviderName,
-		ConfigRevision:      c.ConfigRevision,
-		CapacityRevision:    c.CapacityRevision,
-		Name:                c.Name,
-		Protocols:           c.Protocols,
-		AdapterKey:          c.AdapterKey,
-		SupportsOpenAIFast:  c.SupportsOpenaiFast,
-		Origin:              c.Origin,
-		Credential:          c.Credential,
-		Status:              c.Status,
-		Priority:            c.Priority,
-		ResponseTimeoutMs:   timeoutResult(c.ResponseTimeoutMs),
-		FirstTokenTimeoutMs: timeoutResult(c.FirstTokenTimeoutMs),
-		ConcurrencyLimit:    rateLimitResult(c.ConcurrencyLimit),
-		StickyEnabled:       boolResult(c.StickyEnabled),
-		StickyTTLms:         int8Result(c.StickyTtlMs),
-		CreatedAt:           c.CreatedAt.Time,
-		UpdatedAt:           c.UpdatedAt.Time,
+		ID:                        c.ID,
+		ProviderID:                c.ProviderID,
+		ProviderName:              c.ProviderName,
+		ConfigRevision:            c.ConfigRevision,
+		CapacityRevision:          c.CapacityRevision,
+		Name:                      c.Name,
+		Protocols:                 c.Protocols,
+		AdapterKey:                c.AdapterKey,
+		SupportsOpenAIFast:        c.SupportsOpenaiFast,
+		Origin:                    c.Origin,
+		Credential:                c.Credential,
+		Status:                    c.Status,
+		Priority:                  c.Priority,
+		ResponseTimeoutMs:         timeoutResult(c.ResponseTimeoutMs),
+		FirstTokenTimeoutMs:       timeoutResult(c.FirstTokenTimeoutMs),
+		ConcurrencyLimit:          rateLimitResult(c.ConcurrencyLimit),
+		StickyEnabled:             boolResult(c.StickyEnabled),
+		StickyTTLms:               int8Result(c.StickyTtlMs),
+		SupplyForm:                c.SupplyForm,
+		AccountDefaultConcurrency: rateLimitResult(c.AccountDefaultConcurrency),
+		CreatedAt:                 c.CreatedAt.Time,
+		UpdatedAt:                 c.UpdatedAt.Time,
 
 		LastTestedAt:      timestampResult(c.LastTestedAt),
 		LastTestOK:        boolResult(c.LastTestOk),

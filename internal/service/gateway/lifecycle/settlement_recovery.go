@@ -147,6 +147,7 @@ func (s *ChatSettlementRecoveryStore) CreatePendingChatSettlementRecoveryJob(ctx
 		ModelID:                               params.ModelDBID,
 		ProviderID:                            params.FinalProviderID,
 		ChannelID:                             params.FinalChannelID,
+		AccountID:                             nullableInt8(params.FinalAccountID),
 		UpstreamProtocol:                      facts.UpstreamProtocol,
 		UpstreamResponseID:                    facts.UpstreamResponseID,
 		UpstreamModel:                         facts.UpstreamModel,
@@ -349,6 +350,7 @@ func (s *ChatSettlementRecoveryService) chatSettlementParamsFromJob(ctx context.
 		ModelDBID:           job.ModelID,
 		FinalProviderID:     job.ProviderID,
 		FinalChannelID:      job.ChannelID,
+		FinalAccountID:      int8OrZero(job.AccountID),
 		// 重放 settlement 沿用 job 落库时锁定的成本来源 pin（覆盖 price_id 或 倍率三来源 id，P1-3 + DEC-027）；
 		// 客户售价用 job 落库时算好的售价向量（= 基准 × 倍率，DEC-026），保证重放账单与首次一致、不受改价/改倍率竞态影响。
 		ChannelPriceID:                int8OrZero(job.PriceID),

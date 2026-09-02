@@ -643,6 +643,7 @@ scan:
 				ModelDBID:                     candidate.ModelDBID,
 				FinalProviderID:               candidate.ProviderID,
 				FinalChannelID:                candidate.Channel.ID,
+				FinalAccountID:                permitAccount.ID,
 				ChannelPriceID:                candidate.ChannelPriceID,
 				FastModelPriceServiceTierID:   candidate.FastModelPriceServiceTierID,
 				FastChannelPriceServiceTierID: candidate.FastChannelPriceServiceTierID,

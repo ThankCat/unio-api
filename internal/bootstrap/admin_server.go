@@ -26,6 +26,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/tracing"
+	"github.com/ThankCat/unio-gateway/internal/platform/proxyclient"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/adminmessage"
 	capabilityadmin "github.com/ThankCat/unio-gateway/internal/service/admin/capability"
@@ -55,11 +56,13 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/service/admin/query"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/routingtrace"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/runtimediagnostics"
+	subscriptionaccountadmin "github.com/ThankCat/unio-gateway/internal/service/admin/subscriptionaccount"
 	adminticket "github.com/ThankCat/unio-gateway/internal/service/admin/ticket"
 	"github.com/ThankCat/unio-gateway/internal/service/appsettings"
 	emailsvc "github.com/ThankCat/unio-gateway/internal/service/email"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/readiness"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/runtimefacts"
+	"github.com/ThankCat/unio-gateway/internal/service/subscription"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -237,6 +240,24 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 	// DEC-027 渠道价格倍率 + 服务商充值汇率，均复用同一 sqlc Queries。
 	channelCostMultiplierService := channelcostmultiplier.NewService(queries)
 	providerRechargeRateService := providerrechargerate.NewService(queries)
+
+	// 订阅账号号池管理（第九节）：账号写入经渠道容量 control 两阶段发布传播到运行态围栏；
+	// 出站（换码/刷新）与 gateway 同一按账号代理与令牌端点实现。
+	var subscriptionAccountService *subscriptionaccountadmin.Service
+	if pool, ok := deps.DB.(*pgxpool.Pool); ok && sharedBreakerStore != nil {
+		accountProxyClients := proxyclient.NewResolver(upstreamHTTPClient(nil))
+		accountTokens := subscription.NewTokenClient(accountProxyClients.ClientFor)
+		accountOutbound := subscription.NewOutbound(queries, accountTokens, sharedBreakerStore, deps.Redis, deps.Logger)
+		subscriptionAccountService = subscriptionaccountadmin.NewService(
+			queries,
+			sharedBreakerStore,
+			runtimecontrol.NewPublisher(pool, sharedBreakerStore),
+			sharedBreakerStore,
+			accountOutbound,
+			accountTokens,
+			deps.Logger,
+		)
+	}
 	routingTraceService := routingtrace.NewService(queries)
 
 	// M6 只读查询台：请求记录 / 账本，只读 service 共用同一 sqlc Queries。
@@ -331,6 +352,7 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 
 		ChannelCostMultiplierService: channelCostMultiplierService,
 		ProviderRechargeRateService:  providerRechargeRateService,
+		SubscriptionAccountService:   subscriptionAccountService,
 
 		RoutingTraceService: routingTraceService,
 		RequestQueryService: requestQueryService,

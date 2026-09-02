@@ -1089,13 +1089,14 @@ WITH updated AS (
             response_id = $3,
             final_provider_id = $4,
             final_channel_id = $5,
-            actual_service_tier = $6,
-            settled_service_tier = $7,
-            service_tier_resolution = $8,
-            gateway_first_token_at = COALESCE(request_records.gateway_first_token_at, $9),
-            completed_at = $10,
+            final_account_id = $6,
+            actual_service_tier = $7,
+            settled_service_tier = $8,
+            service_tier_resolution = $9,
+            gateway_first_token_at = COALESCE(request_records.gateway_first_token_at, $10),
+            completed_at = $11,
             updated_at = now()
-        WHERE request_records.id = $11
+        WHERE request_records.id = $12
             AND request_records.status = 'running'
         RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind, request_records.final_account_id
 )
@@ -1106,7 +1107,7 @@ UNION ALL
 
 SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind, request_records.final_account_id
 FROM request_records
-WHERE request_records.id = $11
+WHERE request_records.id = $12
   AND request_records.status = 'succeeded'
   AND NOT EXISTS (SELECT 1 FROM updated)
 `
@@ -1117,6 +1118,7 @@ type MarkRequestSucceededParams struct {
 	ResponseID            pgtype.Text
 	FinalProviderID       pgtype.Int8
 	FinalChannelID        pgtype.Int8
+	FinalAccountID        pgtype.Int8
 	ActualServiceTier     pgtype.Text
 	SettledServiceTier    pgtype.Text
 	ServiceTierResolution pgtype.Text
@@ -1174,6 +1176,7 @@ func (q *Queries) MarkRequestSucceeded(ctx context.Context, arg MarkRequestSucce
 		arg.ResponseID,
 		arg.FinalProviderID,
 		arg.FinalChannelID,
+		arg.FinalAccountID,
 		arg.ActualServiceTier,
 		arg.SettledServiceTier,
 		arg.ServiceTierResolution,
@@ -1231,16 +1234,17 @@ WITH updated AS (
             response_id = $3,
             final_provider_id = $4,
             final_channel_id = $5,
-            actual_service_tier = $6,
-            settled_service_tier = $7,
-            service_tier_resolution = $8,
-            error_code = $9,
-            error_message = $10,
-            internal_error_detail = $11,
-            gateway_first_token_at = COALESCE(request_records.gateway_first_token_at, $12),
-            completed_at = $13,
+            final_account_id = $6,
+            actual_service_tier = $7,
+            settled_service_tier = $8,
+            service_tier_resolution = $9,
+            error_code = $10,
+            error_message = $11,
+            internal_error_detail = $12,
+            gateway_first_token_at = COALESCE(request_records.gateway_first_token_at, $13),
+            completed_at = $14,
             updated_at = now()
-        WHERE request_records.id = $14
+        WHERE request_records.id = $15
             AND request_records.status = 'running'
         RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind, request_records.final_account_id
 )
@@ -1251,7 +1255,7 @@ UNION ALL
 
 SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind, request_records.final_account_id
 FROM request_records
-WHERE request_records.id = $14
+WHERE request_records.id = $15
   AND request_records.status = 'canceled'
   AND NOT EXISTS (SELECT 1 FROM updated)
 `
@@ -1262,6 +1266,7 @@ type MarkSettledRequestCanceledParams struct {
 	ResponseID            pgtype.Text
 	FinalProviderID       pgtype.Int8
 	FinalChannelID        pgtype.Int8
+	FinalAccountID        pgtype.Int8
 	ActualServiceTier     pgtype.Text
 	SettledServiceTier    pgtype.Text
 	ServiceTierResolution pgtype.Text
@@ -1320,6 +1325,7 @@ func (q *Queries) MarkSettledRequestCanceled(ctx context.Context, arg MarkSettle
 		arg.ResponseID,
 		arg.FinalProviderID,
 		arg.FinalChannelID,
+		arg.FinalAccountID,
 		arg.ActualServiceTier,
 		arg.SettledServiceTier,
 		arg.ServiceTierResolution,
@@ -1380,16 +1386,17 @@ WITH updated AS (
             response_id = $3,
             final_provider_id = $4,
             final_channel_id = $5,
-            actual_service_tier = $6,
-            settled_service_tier = $7,
-            service_tier_resolution = $8,
-            error_code = $9,
-            error_message = $10,
-            internal_error_detail = $11,
-            gateway_first_token_at = COALESCE(request_records.gateway_first_token_at, $12),
-            completed_at = $13,
+            final_account_id = $6,
+            actual_service_tier = $7,
+            settled_service_tier = $8,
+            service_tier_resolution = $9,
+            error_code = $10,
+            error_message = $11,
+            internal_error_detail = $12,
+            gateway_first_token_at = COALESCE(request_records.gateway_first_token_at, $13),
+            completed_at = $14,
             updated_at = now()
-        WHERE request_records.id = $14
+        WHERE request_records.id = $15
             AND request_records.status = 'running'
         RETURNING request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind, request_records.final_account_id
 )
@@ -1400,7 +1407,7 @@ UNION ALL
 
 SELECT request_records.id, request_records.request_id, request_records.user_id, request_records.api_key_id, request_records.requested_model_id, request_records.ingress_protocol, request_records.endpoint, request_records.response_model_id, request_records.response_protocol, request_records.response_id, request_records.stream, request_records.status, request_records.final_provider_id, request_records.final_channel_id, request_records.error_code, request_records.error_message, request_records.internal_error_detail, request_records.delivery_status, request_records.gateway_first_token_at, request_records.response_completed_at, request_records.started_at, request_records.completed_at, request_records.created_at, request_records.updated_at, request_records.reasoning_effort, request_records.reasoning_budget_tokens, request_records.client_ip, request_records.requested_service_tier, request_records.actual_service_tier, request_records.settled_service_tier, request_records.service_tier_resolution, request_records.client_thread_id, request_records.client_turn_id, request_records.client_request_kind, request_records.final_account_id
 FROM request_records
-WHERE request_records.id = $14
+WHERE request_records.id = $15
   AND request_records.status = 'failed'
   AND NOT EXISTS (SELECT 1 FROM updated)
 `
@@ -1411,6 +1418,7 @@ type MarkSettledRequestFailedParams struct {
 	ResponseID            pgtype.Text
 	FinalProviderID       pgtype.Int8
 	FinalChannelID        pgtype.Int8
+	FinalAccountID        pgtype.Int8
 	ActualServiceTier     pgtype.Text
 	SettledServiceTier    pgtype.Text
 	ServiceTierResolution pgtype.Text
@@ -1468,6 +1476,7 @@ func (q *Queries) MarkSettledRequestFailed(ctx context.Context, arg MarkSettledR
 		arg.ResponseID,
 		arg.FinalProviderID,
 		arg.FinalChannelID,
+		arg.FinalAccountID,
 		arg.ActualServiceTier,
 		arg.SettledServiceTier,
 		arg.ServiceTierResolution,

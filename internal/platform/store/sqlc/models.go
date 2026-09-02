@@ -913,6 +913,7 @@ type SettlementRecoveryJob struct {
 	ServiceTierResolution                 pgtype.Text
 	ModelPriceServiceTierID               pgtype.Int8
 	ChannelPriceServiceTierID             pgtype.Int8
+	AccountID                             pgtype.Int8
 }
 
 type SubscriptionAccount struct {

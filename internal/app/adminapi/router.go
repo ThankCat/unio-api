@@ -24,12 +24,14 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/overview"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/provider"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/requests"
+	subscriptionaccountapi "github.com/ThankCat/unio-gateway/internal/app/adminapi/subscriptionaccount"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/system"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/ticket"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/user"
 	"github.com/ThankCat/unio-gateway/internal/platform/config"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpmw"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
+	subscriptionaccountservice "github.com/ThankCat/unio-gateway/internal/service/admin/subscriptionaccount"
 )
 
 type RoutingTraceService interface {
@@ -70,6 +72,8 @@ type RouterDeps struct {
 
 	// DEC-027：渠道价格倍率（渠道真实成本 = 模型基准价 × 价格倍率 × 服务商充值汇率）。
 	ChannelCostMultiplierService channel.ChannelCostMultiplierService
+	// SubscriptionAccountService 是订阅账号号池管理（第九节）；nil 时不注册账号路由。
+	SubscriptionAccountService *subscriptionaccountservice.Service
 	// 服务商充值汇率（服务商级，全渠道共享）。
 	ProviderRechargeRateService provider.ProviderRechargeRateService
 
@@ -214,6 +218,7 @@ func NewRouter(deps RouterDeps) http.Handler {
 				CostMultiplierService: deps.ChannelCostMultiplierService,
 				Breaker:               deps.ChannelBreaker,
 			})
+			subscriptionaccountapi.Register(r, deps.SubscriptionAccountService)
 			model.Register(r, model.Deps{
 				Service:        deps.ModelService,
 				OpsService:     deps.ModelOpsService,

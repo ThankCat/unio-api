@@ -80,6 +80,7 @@ func TestChannelCRUDQueries(t *testing.T) {
 		Credential:          "sk-admin-create",
 		Status:              "enabled",
 		Priority:            10,
+		SupplyForm:          "credential",
 		ResponseTimeoutMs:   pgtype.Int4{Int32: 15000, Valid: true},
 		FirstTokenTimeoutMs: pgtype.Int4{Int32: 60000, Valid: true},
 	})
@@ -186,6 +187,7 @@ func TestChannelCredentialRotationRevisionCAS(t *testing.T) {
 	created, err := queries.CreateChannel(ctx, sqlc.CreateChannelParams{
 		ProviderID: providerID, Name: "credential-cas",
 		Protocols: []string{"openai"}, AdapterKey: "openai", Credential: "sk-old", Status: "enabled", Priority: 10,
+		SupplyForm: "credential",
 	})
 	if err != nil {
 		t.Fatalf("create channel: %v", err)

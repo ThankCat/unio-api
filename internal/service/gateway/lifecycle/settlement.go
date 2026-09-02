@@ -131,6 +131,9 @@ type ChatSettlementParams struct {
 	ModelDBID           int64
 	FinalProviderID     int64
 	FinalChannelID      int64
+	// FinalAccountID 是最终命中的订阅账号（池型渠道）；0 表示 credential 型渠道。
+	// 只作请求记录快照与离线摊销归因，不参与实时结算计价（成本倍率恒 0）。
+	FinalAccountID int64
 	// ChannelPriceID 是中标候选在路由/授权时锁定的 channel_prices 绝对成本覆盖行 ID（P1-3 / DEC-027）。
 	// settlement 优先按此 ID 取价计费，降低「授权后管理员停用/改窗口」导致结算价漂移到另一行的竞态。
 	// 0 表示无覆盖（走倍率路径，见下三个 pin）或未透传（旧数据，此时回退按 attemptStart 重查）。
@@ -1227,6 +1230,7 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		ResponseID:            params.ResponseID,
 		FinalProviderID:       params.FinalProviderID,
 		FinalChannelID:        params.FinalChannelID,
+		FinalAccountID:        params.FinalAccountID,
 		GatewayFirstTokenAt:   params.GatewayFirstTokenAt,
 		CompletedAt:           now,
 		ActualServiceTier:     tierSelection.actual,

@@ -53,10 +53,13 @@ type channelDTO struct {
 	StickyEnabled       *bool  `json:"sticky_enabled"`
 	StickyTTLms         *int64 `json:"sticky_ttl_ms"`
 	// ConcurrencyLimit：渠道在途并发上限（DEC-029）。null=继承并发默认 channel_limit，0=不限，>0=具体上限。
-	ConcurrencyLimit *int64  `json:"concurrency_limit"`
-	CreatedAt        string  `json:"created_at"`
-	UpdatedAt        string  `json:"updated_at"`
-	ArchivedAt       *string `json:"archived_at"`
+	ConcurrencyLimit *int64 `json:"concurrency_limit"`
+	// SupplyForm：供给形态（credential/pool）；AccountDefaultConcurrency 仅池型有意义。
+	SupplyForm                string  `json:"supply_form"`
+	AccountDefaultConcurrency *int64  `json:"account_default_concurrency"`
+	CreatedAt                 string  `json:"created_at"`
+	UpdatedAt                 string  `json:"updated_at"`
+	ArchivedAt                *string `json:"archived_at"`
 	// LastTest*：最近一次主动检测结果（渠道检测，阶段一）。全 null 表示从未检测。
 	LastTestedAt      *string `json:"last_tested_at"`
 	LastTestOK        *bool   `json:"last_test_ok"`
@@ -117,6 +120,10 @@ type createChannelRequest struct {
 	StickyTTLms         *int64        `json:"sticky_ttl_ms"`
 	ConcurrencyLimit    optionalInt64 `json:"concurrency_limit"`
 	SupportsOpenAIFast  bool          `json:"supports_openai_fast"`
+	// SupplyForm 是供给形态（credential 缺省 / pool 订阅账号池）；池型不填凭据。
+	SupplyForm any `json:"supply_form"`
+	// AccountDefaultConcurrency 是池型渠道的账号默认并发（null 继承全局，0 不限，正数上限）。
+	AccountDefaultConcurrency optionalInt64 `json:"account_default_concurrency"`
 }
 
 type updateChannelRequest struct {
@@ -243,20 +250,26 @@ func (h *channelsHandler) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	supplyForm := ""
+	if v, ok := req.SupplyForm.(string); ok {
+		supplyForm = v
+	}
 	in := channel.CreateInput{
-		ProviderID:          req.ProviderID,
-		Name:                req.Name,
-		Protocols:           req.Protocols,
-		AdapterKey:          req.AdapterKey,
-		Credential:          req.Credential,
-		Status:              req.Status,
-		Priority:            req.Priority,
-		ResponseTimeoutMs:   req.ResponseTimeoutMs,
-		FirstTokenTimeoutMs: req.FirstTokenTimeoutMs,
-		StickyEnabled:       req.StickyEnabled,
-		StickyTTLms:         req.StickyTTLms,
-		ConcurrencyLimit:    req.ConcurrencyLimit.Value,
-		SupportsOpenAIFast:  req.SupportsOpenAIFast,
+		ProviderID:                req.ProviderID,
+		Name:                      req.Name,
+		Protocols:                 req.Protocols,
+		AdapterKey:                req.AdapterKey,
+		Credential:                req.Credential,
+		Status:                    req.Status,
+		Priority:                  req.Priority,
+		ResponseTimeoutMs:         req.ResponseTimeoutMs,
+		FirstTokenTimeoutMs:       req.FirstTokenTimeoutMs,
+		StickyEnabled:             req.StickyEnabled,
+		StickyTTLms:               req.StickyTTLms,
+		ConcurrencyLimit:          req.ConcurrencyLimit.Value,
+		SupportsOpenAIFast:        req.SupportsOpenAIFast,
+		SupplyForm:                supplyForm,
+		AccountDefaultConcurrency: req.AccountDefaultConcurrency.Value,
 	}
 	c, err := h.service.Create(r.Context(), in)
 	if err != nil {
@@ -409,28 +422,30 @@ func (h *channelsHandler) restore(w http.ResponseWriter, r *http.Request) {
 
 func toChannelDTO(c channel.Channel) channelDTO {
 	return channelDTO{
-		ID:                  c.ID,
-		ProviderID:          c.ProviderID,
-		ProviderName:        c.ProviderName,
-		ConfigRevision:      c.ConfigRevision,
-		CapacityRevision:    c.CapacityRevision,
-		RuntimeSyncPending:  c.RuntimeSyncPending,
-		Name:                c.Name,
-		Protocols:           c.Protocols,
-		AdapterKey:          c.AdapterKey,
-		Origin:              c.Origin,
-		SupportsOpenAIFast:  c.SupportsOpenAIFast,
-		Credential:          c.Credential,
-		Status:              c.Status,
-		Priority:            c.Priority,
-		ResponseTimeoutMs:   c.ResponseTimeoutMs,
-		FirstTokenTimeoutMs: c.FirstTokenTimeoutMs,
-		StickyEnabled:       c.StickyEnabled,
-		StickyTTLms:         c.StickyTTLms,
-		ConcurrencyLimit:    c.ConcurrencyLimit,
-		CreatedAt:           c.CreatedAt.UTC().Format(time.RFC3339),
-		UpdatedAt:           c.UpdatedAt.UTC().Format(time.RFC3339),
-		ArchivedAt:          formatOptionalTime(c.ArchivedAt),
+		ID:                        c.ID,
+		ProviderID:                c.ProviderID,
+		ProviderName:              c.ProviderName,
+		ConfigRevision:            c.ConfigRevision,
+		CapacityRevision:          c.CapacityRevision,
+		RuntimeSyncPending:        c.RuntimeSyncPending,
+		Name:                      c.Name,
+		Protocols:                 c.Protocols,
+		AdapterKey:                c.AdapterKey,
+		Origin:                    c.Origin,
+		SupportsOpenAIFast:        c.SupportsOpenAIFast,
+		Credential:                c.Credential,
+		Status:                    c.Status,
+		Priority:                  c.Priority,
+		ResponseTimeoutMs:         c.ResponseTimeoutMs,
+		FirstTokenTimeoutMs:       c.FirstTokenTimeoutMs,
+		StickyEnabled:             c.StickyEnabled,
+		StickyTTLms:               c.StickyTTLms,
+		ConcurrencyLimit:          c.ConcurrencyLimit,
+		SupplyForm:                c.SupplyForm,
+		AccountDefaultConcurrency: c.AccountDefaultConcurrency,
+		CreatedAt:                 c.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt:                 c.UpdatedAt.UTC().Format(time.RFC3339),
+		ArchivedAt:                formatOptionalTime(c.ArchivedAt),
 
 		LastTestedAt:      formatOptionalTime(c.LastTestedAt),
 		LastTestOK:        c.LastTestOK,

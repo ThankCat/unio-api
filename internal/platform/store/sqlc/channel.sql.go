@@ -1038,32 +1038,36 @@ INSERT INTO channels (
     provider_id, name, protocols, adapter_key, credential, status, priority,
     supports_openai_fast,
     response_timeout_ms, first_token_timeout_ms, concurrency_limit,
-    sticky_enabled, sticky_ttl_ms
+    sticky_enabled, sticky_ttl_ms,
+    supply_form, account_default_concurrency
 )
 VALUES (
     $1, $2, $3, $4,
     $5, $6, $7,
     $8,
     $9, $10, $11,
-    $12, $13
+    $12, $13,
+    $14, $15
 )
 RETURNING id, provider_id, name, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast, protocols, supply_form, account_default_concurrency
 `
 
 type CreateChannelParams struct {
-	ProviderID          int64
-	Name                string
-	Protocols           []string
-	AdapterKey          string
-	Credential          string
-	Status              string
-	Priority            int32
-	SupportsOpenaiFast  bool
-	ResponseTimeoutMs   pgtype.Int4
-	FirstTokenTimeoutMs pgtype.Int4
-	ConcurrencyLimit    pgtype.Int4
-	StickyEnabled       pgtype.Bool
-	StickyTtlMs         pgtype.Int8
+	ProviderID                int64
+	Name                      string
+	Protocols                 []string
+	AdapterKey                string
+	Credential                string
+	Status                    string
+	Priority                  int32
+	SupportsOpenaiFast        bool
+	ResponseTimeoutMs         pgtype.Int4
+	FirstTokenTimeoutMs       pgtype.Int4
+	ConcurrencyLimit          pgtype.Int4
+	StickyEnabled             pgtype.Bool
+	StickyTtlMs               pgtype.Int8
+	SupplyForm                string
+	AccountDefaultConcurrency pgtype.Int4
 }
 
 // CreateChannel 创建 channel；credential 为明文上游凭据，protocols 中每个协议与 adapter_key 的组合都须先在 adapter registry 校验存在。
@@ -1083,6 +1087,8 @@ func (q *Queries) CreateChannel(ctx context.Context, arg CreateChannelParams) (C
 		arg.ConcurrencyLimit,
 		arg.StickyEnabled,
 		arg.StickyTtlMs,
+		arg.SupplyForm,
+		arg.AccountDefaultConcurrency,
 	)
 	var i Channel
 	err := row.Scan(
@@ -2021,6 +2027,7 @@ SELECT
     c.concurrency_limit,
     c.response_timeout_ms, c.first_token_timeout_ms,
     c.sticky_enabled, c.sticky_ttl_ms,
+    c.supply_form, c.account_default_concurrency,
     c.last_tested_at, c.last_test_ok, c.last_test_latency_ms, c.last_test_error, c.credential_valid,
     c.config_revision, c.capacity_revision,
     p.name AS provider_name, p.status AS provider_status
@@ -2046,32 +2053,34 @@ type ListChannelsPageParams struct {
 }
 
 type ListChannelsPageRow struct {
-	ID                  int64
-	ProviderID          int64
-	Name                string
-	Protocols           []string
-	AdapterKey          string
-	Origin              string
-	Credential          string
-	Status              string
-	Priority            int32
-	CreatedAt           pgtype.Timestamptz
-	UpdatedAt           pgtype.Timestamptz
-	SupportsOpenaiFast  bool
-	ConcurrencyLimit    pgtype.Int4
-	ResponseTimeoutMs   pgtype.Int4
-	FirstTokenTimeoutMs pgtype.Int4
-	StickyEnabled       pgtype.Bool
-	StickyTtlMs         pgtype.Int8
-	LastTestedAt        pgtype.Timestamptz
-	LastTestOk          pgtype.Bool
-	LastTestLatencyMs   pgtype.Int4
-	LastTestError       pgtype.Text
-	CredentialValid     bool
-	ConfigRevision      int64
-	CapacityRevision    int64
-	ProviderName        string
-	ProviderStatus      string
+	ID                        int64
+	ProviderID                int64
+	Name                      string
+	Protocols                 []string
+	AdapterKey                string
+	Origin                    string
+	Credential                string
+	Status                    string
+	Priority                  int32
+	CreatedAt                 pgtype.Timestamptz
+	UpdatedAt                 pgtype.Timestamptz
+	SupportsOpenaiFast        bool
+	ConcurrencyLimit          pgtype.Int4
+	ResponseTimeoutMs         pgtype.Int4
+	FirstTokenTimeoutMs       pgtype.Int4
+	StickyEnabled             pgtype.Bool
+	StickyTtlMs               pgtype.Int8
+	SupplyForm                string
+	AccountDefaultConcurrency pgtype.Int4
+	LastTestedAt              pgtype.Timestamptz
+	LastTestOk                pgtype.Bool
+	LastTestLatencyMs         pgtype.Int4
+	LastTestError             pgtype.Text
+	CredentialValid           bool
+	ConfigRevision            int64
+	CapacityRevision          int64
+	ProviderName              string
+	ProviderStatus            string
 }
 
 // ListChannelsPage 按 provider/状态/关键字过滤后分页列出 channel，连带 provider 名称；过滤项为 NULL 时不过滤。
@@ -2108,6 +2117,8 @@ func (q *Queries) ListChannelsPage(ctx context.Context, arg ListChannelsPagePara
 			&i.FirstTokenTimeoutMs,
 			&i.StickyEnabled,
 			&i.StickyTtlMs,
+			&i.SupplyForm,
+			&i.AccountDefaultConcurrency,
 			&i.LastTestedAt,
 			&i.LastTestOk,
 			&i.LastTestLatencyMs,

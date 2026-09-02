@@ -280,6 +280,7 @@ SELECT
     c.concurrency_limit,
     c.response_timeout_ms, c.first_token_timeout_ms,
     c.sticky_enabled, c.sticky_ttl_ms,
+    c.supply_form, c.account_default_concurrency,
     c.last_tested_at, c.last_test_ok, c.last_test_latency_ms, c.last_test_error, c.credential_valid,
     c.config_revision, c.capacity_revision,
     p.name AS provider_name, p.status AS provider_status
@@ -507,14 +508,16 @@ INSERT INTO channels (
     provider_id, name, protocols, adapter_key, credential, status, priority,
     supports_openai_fast,
     response_timeout_ms, first_token_timeout_ms, concurrency_limit,
-    sticky_enabled, sticky_ttl_ms
+    sticky_enabled, sticky_ttl_ms,
+    supply_form, account_default_concurrency
 )
 VALUES (
     sqlc.arg(provider_id), sqlc.arg(name), sqlc.arg(protocols), sqlc.arg(adapter_key),
     sqlc.arg(credential), sqlc.arg(status), sqlc.arg(priority),
     sqlc.arg(supports_openai_fast),
     sqlc.narg(response_timeout_ms), sqlc.narg(first_token_timeout_ms), sqlc.narg(concurrency_limit),
-    sqlc.narg(sticky_enabled), sqlc.narg(sticky_ttl_ms)
+    sqlc.narg(sticky_enabled), sqlc.narg(sticky_ttl_ms),
+    sqlc.arg(supply_form), sqlc.narg(account_default_concurrency)
 )
 RETURNING *;
 

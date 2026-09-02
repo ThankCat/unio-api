@@ -122,12 +122,14 @@ type RequestRecord struct {
 // response_completed_at 不在此处写入：它归属交付状态机（delivery_status='completed' 时落地），
 // 结算阶段交付尚未完成，强写会违反 ck_request_records_delivery_completed_at。
 type MarkRequestSucceededParams struct {
-	ID                    int64
-	ResponseModelID       string
-	ResponseProtocol      Protocol
-	ResponseID            string
-	FinalProviderID       int64
-	FinalChannelID        int64
+	ID               int64
+	ResponseModelID  string
+	ResponseProtocol Protocol
+	ResponseID       string
+	FinalProviderID  int64
+	FinalChannelID   int64
+	// FinalAccountID 是最终命中的订阅账号（池型渠道）；0 表示 credential 型渠道，落 NULL。
+	FinalAccountID        int64
 	GatewayFirstTokenAt   *time.Time
 	CompletedAt           time.Time
 	ActualServiceTier     servicetier.Tier
