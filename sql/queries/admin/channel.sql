@@ -558,6 +558,20 @@ WHERE id = sqlc.arg(id)
   AND concurrency_limit IS DISTINCT FROM sqlc.narg(concurrency_limit)
 RETURNING *;
 
+-- name: BumpChannelCapacityRevision :one
+-- BumpChannelCapacityRevision 同样只供 runtimecontrol.Publisher 的 BusinessCommit 事务调用：
+-- 池内某个账号的调度参数（并发、优先级、代理、启停）变了，渠道自身的并发容量却没变，
+-- 但运行态围栏必须跟着推进一版，否则候选快照会继续按旧账号配置准入。
+-- 与 CommitChannelCapacityAtRevision 只差一处：不要求 concurrency_limit 真变化，
+-- 因为这里变的本来就不是渠道自己的值。
+UPDATE channels
+SET capacity_revision = sqlc.arg(next_revision),
+    updated_at = now()
+WHERE id = sqlc.arg(id)
+  AND capacity_revision = sqlc.arg(current_revision)
+  AND sqlc.arg(next_revision) = sqlc.arg(current_revision) + 1
+RETURNING *;
+
 -- name: UpdateChannelCredential :execrows
 -- UpdateChannelCredential 更新 channel 的明文上游凭据；返回受影响行数用于判定 channel 是否存在。
 UPDATE channels

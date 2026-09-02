@@ -27,6 +27,8 @@ const (
 	operationAbortAttempt           = "abort_attempt"
 	operationSet429Cooldown         = "set_429_cooldown"
 	operationRead429Cooldown        = "read_429_cooldown"
+	operationMarkAccountRuntime     = "mark_account_runtime"
+	operationReadAccountRuntime     = "read_account_runtime"
 	operationPausePermission        = "pause_permission"
 	operationClearPermission        = "clear_permission"
 	operationClaimPermissionRecheck = "claim_permission_recheck"

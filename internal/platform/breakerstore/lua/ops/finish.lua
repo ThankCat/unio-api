@@ -13,17 +13,20 @@ local permit_key = KEYS[2]
 local origin_key = KEYS[3]
 local channel_key = KEYS[4]
 local conc_key = KEYS[5]
-local breaker_ctl = KEYS[6]
-local evidence_channels_key = KEYS[7]
-local evidence_models_key = KEYS[8]
+-- 账号并发槽（池型渠道）；credential 型渠道传空串，跳过归还。
+-- 固定为 KEYS[6]：与 abort 共用 attemptLifecycleKeys 前缀，两个脚本下标一致。
+local account_conc_key = KEYS[6]
+local breaker_ctl = KEYS[7]
+local evidence_channels_key = KEYS[8]
+local evidence_models_key = KEYS[9]
 
 local permit_id = ARGV[1]
-local ep_outcome = ARGV[17]
-local ch_outcome = ARGV[18]
-local origin_evidence = ARGV[19]
-local request_write_state = ARGV[20]
-local response_headers_received = ARGV[21]
-local first_token_eligible = ARGV[22]
+local ep_outcome = ARGV[18]
+local ch_outcome = ARGV[19]
+local origin_evidence = ARGV[20]
+local request_write_state = ARGV[21]
+local response_headers_received = ARGV[22]
+local first_token_eligible = ARGV[23]
 local interaction_evidence = request_write_state == 'completed'
   or request_write_state == 'uncertain'
   or response_headers_received == 'true'
@@ -66,6 +69,9 @@ end
 
 -- 资源收口：释放并发租约（first-terminal-wins，始终执行）。
 if conc_key ~= '' then redis.call('ZREM', conc_key, permit_id) end
+-- 账号槽与渠道槽同时归还：两者在 acquire 时一次占用，收口也必须一次释放，
+-- 否则账号容量会因为只归还渠道侧而缓慢泄漏，最终整池假性满载。
+if account_conc_key ~= '' then redis.call('ZREM', account_conc_key, permit_id) end
 
 redis.call(
   'HSET',

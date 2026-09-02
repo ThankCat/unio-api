@@ -31,6 +31,18 @@ func (k keyBuilder) channelConcurrency(id int64) string {
 	return k.channel(id) + concurrencyKeySuffix
 }
 
+// account 是订阅账号的运行态 hash：冷却至、临时不可调度至、用量暂停等只活在 Redis，不落库。
+// 与 channel 并列而非嵌套：账号是独立的容量与健康主体，渠道停用不擦除账号自身的冷却事实。
+func (k keyBuilder) account(id int64) string {
+	return k.prefix + "account:" + strconv.FormatInt(id, 10)
+}
+
+// accountConcurrency 是账号并发租约 zset：member 为 permit，score 为租约到期时刻。
+// 结构与 channelConcurrency 完全一致，因此清理、自愈与释放都能复用同一套语义。
+func (k keyBuilder) accountConcurrency(id int64) string {
+	return k.account(id) + concurrencyKeySuffix
+}
+
 func (k keyBuilder) provider(id int64) string {
 	return k.prefix + "provider:" + strconv.FormatInt(id, 10)
 }

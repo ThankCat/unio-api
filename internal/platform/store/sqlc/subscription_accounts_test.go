@@ -2,6 +2,7 @@ package sqlc_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -130,6 +131,65 @@ func TestUpdateAccountConfigBumpsRevision(t *testing.T) {
 	}
 	if updated.ProxyUrl.String != "http://proxy.example:8080" {
 		t.Fatalf("proxy_url = %q", updated.ProxyUrl.String)
+	}
+}
+
+// 账号配置变更要传播到渠道运行态围栏：改的是账号的并发，渠道自己的并发一个字都没动，
+// 但候选快照按 capacity_revision 判新旧，不推进这一版，新配置就要等到下次渠道自身变更才生效。
+func TestBumpChannelCapacityRevisionPropagatesAccountConfigChange(t *testing.T) {
+	ctx, tx, queries, cleanup := newModelChannelTestTx(t)
+	defer cleanup()
+
+	providerID := insertProvider(t, ctx, tx, "codex-provider", "enabled")
+	channelID := insertPoolChannel(t, ctx, tx, providerID, "codex-pool", nil)
+	account := createAccount(t, ctx, queries, channelID, "acct-propagate", 50)
+
+	before, err := queries.GetChannel(ctx, channelID)
+	if err != nil {
+		t.Fatalf("get channel: %v", err)
+	}
+
+	if _, err := queries.AdminUpdateSubscriptionAccountConfig(ctx, sqlc.AdminUpdateSubscriptionAccountConfigParams{
+		ID:               account.ID,
+		DisplayName:      "propagated",
+		ConcurrencyLimit: pgtype.Int4{Int32: 2, Valid: true},
+		Priority:         10,
+	}); err != nil {
+		t.Fatalf("update account config: %v", err)
+	}
+
+	bumped, err := queries.BumpChannelCapacityRevision(ctx, sqlc.BumpChannelCapacityRevisionParams{
+		ID:              channelID,
+		CurrentRevision: before.CapacityRevision,
+		NextRevision:    before.CapacityRevision + 1,
+	})
+	if err != nil {
+		t.Fatalf("bump capacity revision: %v", err)
+	}
+	if bumped.CapacityRevision != before.CapacityRevision+1 {
+		t.Fatalf("capacity_revision = %d, want %d", bumped.CapacityRevision, before.CapacityRevision+1)
+	}
+	// 渠道自己的并发容量必须原样保留：这次变的是账号，不是渠道。
+	if bumped.ConcurrencyLimit != before.ConcurrencyLimit {
+		t.Fatalf("channel concurrency changed: %v → %v", before.ConcurrencyLimit, bumped.ConcurrencyLimit)
+	}
+
+	// CAS 语义与 CommitChannelCapacityAtRevision 一致：拿旧 revision 的并发写入必须落空，
+	// 否则两个管理员同时改同一个池就会各自推进一版，Redis control 与库里对不上。
+	if _, err := queries.BumpChannelCapacityRevision(ctx, sqlc.BumpChannelCapacityRevisionParams{
+		ID:              channelID,
+		CurrentRevision: before.CapacityRevision,
+		NextRevision:    before.CapacityRevision + 1,
+	}); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("stale revision bump = %v, want pgx.ErrNoRows", err)
+	}
+	// 版本必须逐级推进，不允许跳号：Redis control 的 revision 与库里一一对应。
+	if _, err := queries.BumpChannelCapacityRevision(ctx, sqlc.BumpChannelCapacityRevisionParams{
+		ID:              channelID,
+		CurrentRevision: bumped.CapacityRevision,
+		NextRevision:    bumped.CapacityRevision + 2,
+	}); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("revision gap bump = %v, want pgx.ErrNoRows", err)
 	}
 }
 

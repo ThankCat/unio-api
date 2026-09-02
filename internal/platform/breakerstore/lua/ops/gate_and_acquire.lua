@@ -16,6 +16,10 @@ local integrity_marker = KEYS[10]
 local request_admission_key = KEYS[11]
 local fault_latch = KEYS[12]
 local instance_proof = KEYS[13]
+-- 订阅账号维度（池型渠道）。credential 型渠道传空串，下面所有账号分支都会被跳过，
+-- 脚本行为与引入号池之前逐字节一致。
+local account_key = KEYS[14]
+local account_conc_key = KEYS[15]
 
 local permit_id = ARGV[1]
 local fingerprint = ARGV[2]
@@ -36,6 +40,12 @@ local expected_integrity_epoch = ARGV[16]
 local expected_integrity_revision = ARGV[17]
 -- Provider control 围栏校验开关（enforce=1 时要求 control 存在、effective_status=enabled、无 pending、revision 匹配，§5.3.2）。
 local enforce_origin_control = tonumber(ARGV[18])
+-- 账号维度入参：credential 型渠道传 '0' / 0，与空 KEYS 一起构成「无账号」。
+local account_id = ARGV[19] or '0'
+-- 账号并发上限：0 表示不限（与渠道并发同语义）。调用方已完成 NULL→渠道默认→全局默认的回落。
+local account_conc_limit = tonumber(ARGV[20]) or 0
+-- 账号配置版本：账号并发/优先级/代理/状态变化时 +1，与渠道 capacity_revision 一起固化进 permit。
+local account_config_rev = ARGV[21] or '0'
 
 if redis.call('EXISTS', fault_latch) == 1 then return { 'denied', 'breaker_store_unavailable' } end
 local instance_matches = redis_instance_proof_matches(instance_proof)
@@ -228,6 +238,31 @@ local conc_used = active_zset_count(conc_key, now)
 if conc_used == nil then return { 'denied', 'runtime_sync_required' } end
 if eff_ch_conc > 0 and conc_used >= eff_ch_conc then return { 'denied', 'concurrency_full' } end
 
+-- 账号维度门禁（池型渠道）。与渠道门禁同处只读阶段：任一不通过都零资源变化，调用方可换号或换渠道。
+-- 拒绝原因刻意与渠道级区分：account_concurrency_full 允许换号重试，account_cooldown 不换号只换渠道。
+if account_key ~= '' then
+  local account_state = redis_key_type(account_key)
+  if account_state ~= 'none' and account_state ~= 'hash' then return { 'denied', 'runtime_sync_required' } end
+  if account_state == 'hash' then
+    -- 账号冷却（429 精确重置时刻）与临时不可调度（401 给刷新留窗口）都以「到期毫秒」表达，
+    -- 到点即自动恢复，无需后台清理；两者语义不同但对准入的效果一致：本账号此刻不可用。
+    local cooling_until = tonumber(redis.call('HGET', account_key, 'cooldown_until_ms'))
+    if cooling_until ~= nil and cooling_until > now then
+      return { 'denied', 'account_cooldown', cooling_until - now }
+    end
+    local unschedulable_until = tonumber(redis.call('HGET', account_key, 'unschedulable_until_ms'))
+    if unschedulable_until ~= nil and unschedulable_until > now then
+      return { 'denied', 'account_unschedulable', unschedulable_until - now }
+    end
+  end
+
+  local account_conc_used = active_zset_count(account_conc_key, now)
+  if account_conc_used == nil then return { 'denied', 'runtime_sync_required' } end
+  if account_conc_limit > 0 and account_conc_used >= account_conc_limit then
+    return { 'denied', 'account_concurrency_full' }
+  end
+end
+
 -- 统一写阶段：全部条件通过，创建 permit、占 half-open/并发租约。
 local lease_until = now + permit_ttl_ms
 
@@ -339,6 +374,14 @@ if conc_key ~= '' then
   redis.call('PEXPIRE', conc_key, lease_until - now + terminal_ttl_ms)
 end
 
+-- 账号槽与渠道槽在同一次原子调用内占用：不存在「渠道占上了、账号没占上」的半持有状态。
+if account_conc_key ~= '' then
+  -- 与渠道槽同样先清过期成员：在途计数本就只认未到期的 score，不清理只会让 zset 无上限地涨。
+  redis.call('ZREMRANGEBYSCORE', account_conc_key, '-inf', now)
+  redis.call('ZADD', account_conc_key, lease_until, permit_id)
+  redis.call('PEXPIRE', account_conc_key, lease_until - now + terminal_ttl_ms)
+end
+
 redis.call(
   'HSET',
   permit_key,
@@ -386,6 +429,14 @@ redis.call(
   ch_probe,
   'concurrency_channel_id',
   channel_id,
+  -- 账号身份固化进 permit：finish/abort 据此释放「当初占的那个账号」的槽，
+  -- 而不是「此刻路由认为该用的账号」——热更新期间两者可能已经不同。
+  'concurrency_account_id',
+  account_id,
+  -- 账号配置版本只固化不设围栏：改一次账号并发就掐断全部在途请求是不可接受的，
+  -- 新版本从下一次 acquire 起生效（渠道 capacity_revision 会同步推进）。这里留值供诊断。
+  'account_config_revision',
+  account_config_rev,
   'admission_enforced',
   '1',
   'channel_capacity_revision',

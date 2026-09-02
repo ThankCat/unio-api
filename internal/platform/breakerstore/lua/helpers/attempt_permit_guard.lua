@@ -42,6 +42,9 @@ local function validate_attempt_permit_lifecycle()
     { 'provider_half_open_probe', 15 },
     { 'channel_half_open_probe', 16 },
     { 'concurrency_channel_id', 6 },
+    -- 账号身份与渠道身份同权校验：调用方声称要收口的账号必须与 permit 固化的一致，
+    -- 否则一次 finish 就能归还别的账号的槽（credential 渠道两侧都是 '0'，恒相等）。
+    { 'concurrency_account_id', 17 },
   }
   for _, identity in ipairs(identities) do
     local stored = redis.call('HGET', permit_key, identity[1])
@@ -78,6 +81,10 @@ local function validate_attempt_permit_lifecycle()
   then
     return 'runtime_sync_required'
   end
+
+  -- 账号并发槽固定为 KEYS[6]（finish 与 abort 共用 attemptLifecycleKeys 前缀，下标一致）。
+  local account_conc_type = attempt_key_type(KEYS[6])
+  if account_conc_type ~= 'none' and account_conc_type ~= 'zset' then return 'runtime_sync_required' end
 
   if redis.call('HGET', permit_key, 'admission_enforced') ~= '1' then return 'runtime_sync_required' end
   -- permit 只冻结 Channel 并发（§1.2/§8：并发是唯一渠道级硬门槛）。

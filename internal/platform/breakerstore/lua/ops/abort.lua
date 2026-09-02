@@ -6,6 +6,8 @@ local permit_key = KEYS[2]
 local origin_key = KEYS[3]
 local channel_key = KEYS[4]
 local conc_key = KEYS[5]
+-- 账号并发槽（池型渠道）；credential 型渠道传空串，跳过归还。
+local account_conc_key = KEYS[6]
 local permit_id = ARGV[1]
 local now = now_ms()
 
@@ -15,6 +17,9 @@ if redis.call('HGET', permit_key, 'status') ~= 'active' then return { 'terminal_
 
 -- Channel 并发是唯一需要归还的渠道级资源；RPM/RPD/TPM 都不占用（§1.2/§8），无需精确归还。
 if conc_key ~= '' then redis.call('ZREM', conc_key, permit_id) end
+-- 账号并发槽：键由 permit 固化的 concurrency_account_id 推出（见 guard 的身份校验），
+-- 因此归还的必然是当初占的那个账号，热更新换号不会误放他人的槽。
+if account_conc_key ~= '' then redis.call('ZREM', account_conc_key, permit_id) end
 
 -- 释放本 permit 仍持有的 half-open 租约（不释放后来 permit 的租约）。
 local function release_probe(state_key, probe_field)

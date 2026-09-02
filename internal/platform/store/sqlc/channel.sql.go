@@ -177,6 +177,61 @@ func (q *Queries) ArchiveChannel(ctx context.Context, id int64) (int64, error) {
 	return result.RowsAffected(), nil
 }
 
+const bumpChannelCapacityRevision = `-- name: BumpChannelCapacityRevision :one
+UPDATE channels
+SET capacity_revision = $1,
+    updated_at = now()
+WHERE id = $2
+  AND capacity_revision = $3
+  AND $1 = $3 + 1
+RETURNING id, provider_id, name, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast, protocols, supply_form, account_default_concurrency
+`
+
+type BumpChannelCapacityRevisionParams struct {
+	NextRevision    int64
+	ID              int64
+	CurrentRevision int64
+}
+
+// BumpChannelCapacityRevision 同样只供 runtimecontrol.Publisher 的 BusinessCommit 事务调用：
+// 池内某个账号的调度参数（并发、优先级、代理、启停）变了，渠道自身的并发容量却没变，
+// 但运行态围栏必须跟着推进一版，否则候选快照会继续按旧账号配置准入。
+// 与 CommitChannelCapacityAtRevision 只差一处：不要求 concurrency_limit 真变化，
+// 因为这里变的本来就不是渠道自己的值。
+func (q *Queries) BumpChannelCapacityRevision(ctx context.Context, arg BumpChannelCapacityRevisionParams) (Channel, error) {
+	row := q.db.QueryRow(ctx, bumpChannelCapacityRevision, arg.NextRevision, arg.ID, arg.CurrentRevision)
+	var i Channel
+	err := row.Scan(
+		&i.ID,
+		&i.ProviderID,
+		&i.Name,
+		&i.AdapterKey,
+		&i.Credential,
+		&i.ConfigRevision,
+		&i.CapacityRevision,
+		&i.Status,
+		&i.Priority,
+		&i.StickyEnabled,
+		&i.StickyTtlMs,
+		&i.ResponseTimeoutMs,
+		&i.FirstTokenTimeoutMs,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.LastTestedAt,
+		&i.LastTestOk,
+		&i.LastTestLatencyMs,
+		&i.LastTestError,
+		&i.CredentialValid,
+		&i.ArchivedAt,
+		&i.ConcurrencyLimit,
+		&i.SupportsOpenaiFast,
+		&i.Protocols,
+		&i.SupplyForm,
+		&i.AccountDefaultConcurrency,
+	)
+	return i, err
+}
+
 const channelOpsDetail = `-- name: ChannelOpsDetail :one
 WITH cache_usage AS (
     SELECT u.id, u.request_record_id, u.uncached_input_tokens, u.uncached_input_tokens_state, u.cache_read_input_tokens, u.cache_read_input_tokens_state, u.cache_creation_5m_input_tokens, u.cache_creation_5m_input_tokens_state, u.cache_creation_1h_input_tokens, u.cache_creation_1h_input_tokens_state, u.output_tokens_total, u.output_tokens_total_state, u.reasoning_output_tokens, u.reasoning_output_tokens_state, u.usage_source, u.usage_mapping_version, u.created_at, u.cache_creation_30m_input_tokens, u.cache_creation_30m_input_tokens_state

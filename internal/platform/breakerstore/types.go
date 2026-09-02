@@ -140,6 +140,15 @@ const (
 	ReasonHalfOpenBusy DeniedReason = "half_open_busy"
 	// ReasonConcurrencyFull 是唯一允许进入全池短等的拒绝原因（§9.3）。
 	ReasonConcurrencyFull DeniedReason = "concurrency_full"
+	// ReasonAccountConcurrencyFull 表示所选订阅账号并发已满。它与渠道级 concurrency_full 分开，
+	// 因为处置不同：路由应当换池内另一个账号重试，而不是直接跳过整个渠道。
+	ReasonAccountConcurrencyFull DeniedReason = "account_concurrency_full"
+	// ReasonAccountCooldown 表示该账号处于上游 429 冷却（冷却到点自动恢复）。
+	// 换号可继续，换渠道也可，但不进入全池短等——冷却是分钟级资源，等待没有意义。
+	ReasonAccountCooldown DeniedReason = "account_cooldown"
+	// ReasonAccountUnschedulable 表示该账号被临时标记不可调度（如 401 后给令牌刷新留窗口）。
+	// 与冷却同样按「到期毫秒」表达，到点自愈。
+	ReasonAccountUnschedulable DeniedReason = "account_unschedulable"
 	// ReasonCooldown 表示渠道处于上游真实 429 冷却；绝不允许伪装成并发满进入等待（§6.3/§9.3）。
 	ReasonCooldown                DeniedReason = "cooldown"
 	ReasonModelPermissionPaused   DeniedReason = "model_permission_paused"
@@ -154,6 +163,17 @@ const (
 	ReasonUnknownRequestAdmission DeniedReason = "unknown_request_admission"
 	ReasonBreakerStoreUnavailable DeniedReason = "breaker_store_unavailable"
 )
+
+// carriesRemainingMs 标出「到点自愈」类拒绝：脚本额外回带剩余毫秒，调用方据此算 Retry-After。
+// 其余拒绝要么不随时间恢复（stale/permission），要么恢复时刻不可预告（并发满）。
+func (r DeniedReason) carriesRemainingMs() bool {
+	switch r {
+	case ReasonCooldown, ReasonAccountCooldown, ReasonAccountUnschedulable:
+		return true
+	default:
+		return false
+	}
+}
 
 // Config 是 gateway.circuit_breaker 的运行参数。
 type Config struct {
@@ -205,10 +225,18 @@ type AttemptPermit struct {
 
 	ProviderID int64
 	ChannelID  int64
+	// AccountID 是本 permit 冻结的订阅账号；credential 型渠道恒为 0。
+	// 收口时据此归还账号并发槽——固化身份保证释放的是当初占的那个号，
+	// 而不是此刻路由认为该用的号（热更新期间两者可能不同）。
+	AccountID int64
 
 	OriginRevision         int64
 	ProviderStatusRevision int64
 	ChannelConfigRevision  int64
+	// AccountConfigRevision 只固化不设围栏：改一次账号并发就掐断全部在途请求是不可接受的。
+	// 新配置从下一次 acquire 起生效——账号写入会同步推进渠道 capacity_revision，
+	// 让候选快照立即失效（见 BumpChannelCapacityRevision）。
+	AccountConfigRevision int64
 
 	ModelID          int64
 	UpstreamEndpoint UpstreamEndpoint
@@ -232,7 +260,8 @@ type AttemptAdmission struct {
 	Mode   AdmissionMode
 	Permit *AttemptPermit
 	Reason DeniedReason
-	// CooldownRemainingMs 仅在 Reason=cooldown 时为正，供全池均冷却时给出准确 Retry-After（§9.5）。
+	// CooldownRemainingMs 在「到点自愈」类拒绝（渠道 429 冷却、账号冷却、账号临时不可调度）时为正，
+	// 供全池均不可用时给出准确 Retry-After（§9.5）。其余拒绝恒为 0。
 	CooldownRemainingMs int64
 }
 

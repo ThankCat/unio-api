@@ -47,6 +47,9 @@ type Store struct {
 	permissionRecheckClaim    *redis.Script
 	permissionRecheckComplete *redis.Script
 
+	accountRuntimeMark *redis.Script
+	accountRuntimeRead *redis.Script
+
 	recordTPMObservation  *redis.Script
 	correctTPMObservation *redis.Script
 
@@ -117,6 +120,9 @@ func NewStore(client redis.Cmdable, keyNamespace string, observers ...OperationO
 		clearPermission:           redis.NewScript(luaScript("attempt.clear_permission")),
 		permissionRecheckClaim:    redis.NewScript(luaScript("permission.recheck_claim")),
 		permissionRecheckComplete: redis.NewScript(luaScript("permission.recheck_complete")),
+
+		accountRuntimeMark: redis.NewScript(luaScript("account.runtime_mark")),
+		accountRuntimeRead: redis.NewScript(luaScript("account.runtime_read")),
 
 		recordTPMObservation:  redis.NewScript(luaScript("observation.record_tpm")),
 		correctTPMObservation: redis.NewScript(luaScript("observation.correct_tpm")),
@@ -233,6 +239,15 @@ type AcquireAttemptInput struct {
 	ProviderID int64
 	ChannelID  int64
 
+	// AccountID 是池型渠道本次选中的订阅账号；credential 型渠道恒为 0，账号维度整体跳过。
+	// 选号在路由层完成，这里只负责把「该账号此刻是否可用、是否还有槽」纳入同一次原子校验。
+	AccountID int64
+	// AccountConcurrencyLimit 是已完成回落的账号并发上限（账号 → 渠道默认 → 全局默认），
+	// 0 表示不限，与渠道并发同语义。
+	AccountConcurrencyLimit int64
+	// AccountConfigRevision 随账号并发/优先级/代理/状态变化递增，固化进 permit 供收口比对。
+	AccountConfigRevision int64
+
 	OriginRevision         int64
 	ProviderStatusRevision int64
 	ChannelConfigRevision  int64
@@ -279,6 +294,9 @@ func (s *Store) AcquireAttempt(ctx context.Context, in AcquireAttemptInput) (adm
 		s.keys.admissionRequest(in.RequestAdmissionID),
 		s.keys.runtimeInfrastructureFault(),
 		s.keys.runtimeReconciliationProof(),
+		// 账号运行态与账号并发槽：credential 渠道传空串，脚本内所有账号分支被跳过。
+		s.accountRuntimeKeyFor(in.AccountID),
+		s.accountConcurrencyKeyFor(in.AccountID),
 	}
 	enforceOrigin := 0
 	if in.EnforceProviderControl {
@@ -303,6 +321,9 @@ func (s *Store) AcquireAttempt(ctx context.Context, in AcquireAttemptInput) (adm
 		in.IntegrityEpoch,
 		strconv.FormatInt(in.IntegrityRevision, 10),
 		enforceOrigin,
+		strconv.FormatInt(in.AccountID, 10),
+		strconv.FormatInt(in.AccountConcurrencyLimit, 10),
+		strconv.FormatInt(in.AccountConfigRevision, 10),
 	}
 
 	res, err := s.gate.Run(ctx, s.client, keys, argv...).Result()
@@ -331,7 +352,8 @@ func (s *Store) AcquireAttempt(ctx context.Context, in AcquireAttemptInput) (adm
 		}
 		denied := AttemptAdmission{Mode: AdmissionDenied, Reason: reason}
 		// cooldown 拒绝额外携带剩余毫秒，供全池均冷却时返回准确 Retry-After（§9.5）。
-		if reason == ReasonCooldown && len(arr) > 2 {
+		// 账号级冷却同理：全池账号都在冷却时，Retry-After 取其中最早恢复的那个。
+		if reason.carriesRemainingMs() && len(arr) > 2 {
 			if remaining, ok := redisInt64(arr[2]); ok && remaining > 0 {
 				denied.CooldownRemainingMs = remaining
 			}
@@ -368,9 +390,11 @@ func (s *Store) permitFromAcquire(in AcquireAttemptInput, arr []interface{}) *At
 		IntegrityRevision:      in.IntegrityRevision,
 		ProviderID:             in.ProviderID,
 		ChannelID:              in.ChannelID,
+		AccountID:              in.AccountID,
 		OriginRevision:         in.OriginRevision,
 		ProviderStatusRevision: in.ProviderStatusRevision,
 		ChannelConfigRevision:  in.ChannelConfigRevision,
+		AccountConfigRevision:  in.AccountConfigRevision,
 		ModelID:                in.ModelID,
 		UpstreamEndpoint:       in.UpstreamEndpoint,
 		RequestMode:            in.RequestMode,
@@ -400,8 +424,28 @@ func (s *Store) attemptLifecycleKeys(permit AttemptPermit) []string {
 		s.keys.permit(permit.PermitID),
 		s.keys.provider(permit.ProviderID),
 		s.keys.channel(permit.ChannelID),
-		s.keys.channel(permit.ChannelID) + ":conc",
+		s.keys.channel(permit.ChannelID) + concurrencyKeySuffix,
+		// 账号并发槽固定占第 6 位，finish 与 abort 共用该前缀，脚本内下标一致。
+		// 键由 permit 固化的 AccountID 推出：收口释放的必然是当初占的那个账号，
+		// 即便此刻路由已经因为热更新换了号。credential 渠道为空串，脚本跳过归还。
+		s.accountConcurrencyKeyFor(permit.AccountID),
 	}
+}
+
+// accountConcurrencyKeyFor 把「无账号」表达为空串，与 Lua 中「键为空串即跳过该维度」的既有约定一致。
+func (s *Store) accountConcurrencyKeyFor(accountID int64) string {
+	if accountID <= 0 {
+		return ""
+	}
+	return s.keys.accountConcurrency(accountID)
+}
+
+// accountRuntimeKeyFor 同上，指向账号运行态 hash（冷却、临时不可调度）。
+func (s *Store) accountRuntimeKeyFor(accountID int64) string {
+	if accountID <= 0 {
+		return ""
+	}
+	return s.keys.account(accountID)
 }
 
 func (s *Store) providerEvidenceKeys(providerID int64, category ProviderEvidenceCategory) []string {
@@ -447,6 +491,8 @@ func attemptLifecycleArgs(permit AttemptPermit) []interface{} {
 		strconv.FormatInt(permit.ChannelStateGeneration, 10),
 		boolArg(permit.ProviderHalfOpenProbe),
 		boolArg(permit.ChannelHalfOpenProbe),
+		// 账号身份固定占第 17 位，由 guard 与渠道身份同权校验，防止 finish 归还他人的槽。
+		strconv.FormatInt(permit.AccountID, 10),
 	}
 }
 

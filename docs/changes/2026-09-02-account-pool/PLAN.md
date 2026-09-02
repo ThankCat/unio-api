@@ -118,7 +118,7 @@
 
 ## 二、运行态与原子准入（unio-gateway）
 
-- [ ] `internal/platform/breakerstore`：账号并发槽
+- [x] `internal/platform/breakerstore`：账号并发槽
   - 新键：账号并发 ZSET（成员为 permit id，分数为 Redis 服务端时间戳），TTL 自愈，沿用现有渠道并发槽
     的键命名与清理模式；
   - `lua/ops/gate_and_acquire.lua` 扩展：新增账号维度入参（account_id、账号并发上限、账号 revision），
@@ -127,12 +127,39 @@
   - 账号槽满返回可区分的 denial 原因（`account_concurrency_full`），供路由换号重试；
   - `finish.lua` / `abort.lua` 同步释放账号槽；异常残留由 TTL 回收。
   - 现有 credential 型渠道传空账号维度，脚本走原路径，行为逐字节不变（用现有测试守住）。
+  - **计划外补的两处**：① `renew.lua` 也必须续期账号槽——原计划只列了 finish/abort，漏掉续期会让长流
+    请求的账号租约先于渠道租约到期，在途数被系统性少算、账号并发上限形同虚设，且全程不报错；
+    ② acquire 写阶段对账号 ZSET 补 `ZREMRANGEBYSCORE`，与渠道槽同样清理过期成员，否则热点账号的
+    zset 只涨不减。
+  - 账号身份（`concurrency_account_id`）与渠道身份同权进入 permit guard：认错账号的收口一律拒绝，
+    且零资源变化。`account_config_revision` **只固化不设围栏**——改一次账号并发就掐断全部在途请求
+    不可接受，新配置从下一次 acquire 起生效。
 
-- [ ] 账号运行态 control（Redis）：账号冷却至（`reset_at` 绝对时间戳）、临时不可调度至、用量暂停标记、
-      疑似代理故障标记。与 Provider/Channel control 同一套读写与围栏风格。
+- [x] 账号运行态 control（Redis）：`SetAccountCooldown` / `MarkAccountUnschedulable` /
+      `PauseAccountUsage` 三写 + 对应 clear，`AccountRuntimeMany` 批量读（供候选快照聚合空闲槽位）。
+      三种状态共用一个 hash 且只由一个 Lua 脚本维护，键 TTL 取三者最晚到期——按单个状态各自 PEXPIRE
+      会把另一个状态提前抹掉。
+  - **与渠道 429 冷却的语义差异（实现时才发现，需回写蓝图）**：渠道冷却只增不减，账号冷却按最近一次
+    观测**覆盖**。理由就是官方核对表里的那条——付费即时重置会让 `reset_at` 变小，只增不减会把配额
+    已恢复的账号继续锁住数小时。用量暂停同理。本地判定的临时隔离仍取最晚到期（叠加语义）。
+  - 「疑似代理故障」不单列状态，落为 `unschedulable_reason = proxy_suspect`，与
+    `token_refresh` / `manual` 并列，运维界面按 reason 出徽章。
+  - **用量暂停是路由过滤链上的一条，不是准入硬门槛**：已选中的请求继续放行，只是下一轮不再选它。
+    这样阈值判断的时效性问题最多多发一个请求，而不会把请求打回客户。第三节过滤链据此实现。
 
-- [ ] **账号配置热更新传播**（边界 20）：账号 `config_revision` 变化时提升所属 Channel 的
-      `capacity_revision`，使新快照与 `AttemptPermit` 立即感知；在途 permit 按固化身份收口。
+- [x] **账号配置热更新传播**（边界 20）的平台侧原语：新增 `BumpChannelCapacityRevision`（CAS 推进
+      `channels.capacity_revision`，不要求渠道并发真变化）。既有 `CommitChannelCapacityAtRevision`
+      带 `concurrency_limit IS DISTINCT FROM` 条件，账号改动时渠道并发没变，用它推不动版本。
+  - **服务层调用顺延至第九节**：账号写入须与 `BumpChannelCapacityRevision` 同事务，并经
+    `runtimecontrol.Publisher` 两阶段发布，与渠道容量编辑同一条路径。账号管理服务尚不存在，
+    在这里补会先造出一个没有调用方的编排层。
+
+> **批次二交叉验证结论**：`go build` / `go vet` / `gofmt` 干净；真实 Redis 全量 `go test ./...` 通过，
+> 带 `DATABASE_URL` 时失败集合与批次一记录的两个既有失败完全一致，未引入新失败。
+> **`make check-lua` 在 HEAD 上就是失败的**（用 detached worktree 对照确认）：luacheck 5 warnings
+> （2 处超长代码行 + 3 处未使用局部/参数，分布在 acquire / finish / observe_channels / snapshot_many）、
+> stylua 8 个文件有格式差异。本批次新增的两个脚本 luacheck 与 stylua 全清，警告数与格式差异数一个没涨。
+> 这道检查在修好之前无法当门禁用，后续批次仍以「警告数不增」为准；要修的话应单独一个 `style(lua)` 提交。
 
 ## 三、路由与选号（unio-gateway）
 

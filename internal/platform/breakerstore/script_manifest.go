@@ -21,6 +21,8 @@ var luaScriptManifest = []luaScriptSpec{
 	{name: "attempt.record_sample", main: "lua/ops/record_sample.lua"},
 	{name: "attempt.pause_permission", main: "lua/ops/pause_permission.lua"},
 	{name: "attempt.clear_permission", main: "lua/ops/clear_permission.lua"},
+	{name: "account.runtime_mark", main: "lua/ops/account_runtime_mark.lua"},
+	{name: "account.runtime_read", main: "lua/ops/account_runtime_read.lua"},
 	{name: "permission.recheck_claim", main: "lua/ops/permission_recheck_claim.lua"},
 	{name: "permission.recheck_complete", main: "lua/ops/permission_recheck_complete.lua"},
 

@@ -6,6 +6,8 @@ local permit_key = KEYS[2]
 local origin_key = KEYS[3]
 local channel_key = KEYS[4]
 local conc_key = KEYS[5]
+-- 账号并发槽（池型渠道）；credential 型渠道传空串，跳过续期。
+local account_conc_key = KEYS[6]
 local permit_id = ARGV[1]
 local now = now_ms()
 
@@ -25,6 +27,16 @@ if conc_key ~= '' then
   if redis.call('ZSCORE', conc_key, permit_id) ~= false then
     redis.call('ZADD', conc_key, new_lease, permit_id)
     redis.call('PEXPIRE', conc_key, new_lease - now + terminal_ttl)
+  end
+end
+
+-- 账号槽必须与渠道槽同步续期：漏掉这一步，长流请求的账号租约会先到期，
+-- active_zset_count 就不再把它计入在途，账号并发被系统性少算并超发。
+-- 与渠道槽同样先验 ZSCORE：已归还的槽不因续期复活。
+if account_conc_key ~= '' then
+  if redis.call('ZSCORE', account_conc_key, permit_id) ~= false then
+    redis.call('ZADD', account_conc_key, new_lease, permit_id)
+    redis.call('PEXPIRE', account_conc_key, new_lease - now + terminal_ttl)
   end
 end
 

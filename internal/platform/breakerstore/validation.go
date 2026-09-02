@@ -83,6 +83,31 @@ func validateAcquireAttemptInput(in AcquireAttemptInput) error {
 	if in.InputEstimate < 0 || in.InputEstimate > maxLuaExactInteger {
 		return configInvalid("attempt token estimate must be a non-negative Lua-exact integer")
 	}
+	if err := validateAttemptAccount(in.AccountID, in.AccountConfigRevision, &in.AccountConcurrencyLimit); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateAttemptAccount 守住账号维度的「要么整套给齐、要么整套为零」。
+// 只给上限不给 ID 是最危险的一种传参错误：脚本会静默跳过全部账号门禁，
+// 表现为账号并发形同虚设，而不是任何一处报错。
+func validateAttemptAccount(accountID, configRevision int64, concurrencyLimit *int64) error {
+	if accountID < 0 {
+		return configInvalid("attempt account id must not be negative")
+	}
+	if accountID == 0 {
+		if configRevision != 0 || (concurrencyLimit != nil && *concurrencyLimit != 0) {
+			return configInvalid("attempt account fields require a positive account id")
+		}
+		return nil
+	}
+	if configRevision <= 0 {
+		return configInvalid("attempt account config revision must be positive")
+	}
+	if concurrencyLimit != nil && (*concurrencyLimit < 0 || *concurrencyLimit > maxLuaExactInteger) {
+		return configInvalid("attempt account concurrency limit must be a non-negative Lua-exact integer")
+	}
 	return nil
 }
 
@@ -127,6 +152,9 @@ func validateAttemptPermit(permit AttemptPermit) error {
 	}
 	if permit.ProviderStateGeneration <= 0 || permit.ChannelStateGeneration <= 0 {
 		return configInvalid("permit state generations must be positive")
+	}
+	if err := validateAttemptAccount(permit.AccountID, permit.AccountConfigRevision, nil); err != nil {
+		return err
 	}
 	if !permit.UpstreamEndpoint.valid() {
 		return configInvalid("unknown permit upstream operation")
