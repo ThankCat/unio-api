@@ -30,6 +30,7 @@ func TestCORSPreflightAllowsEveryRoutedMethod(t *testing.T) {
 		http.MethodGet,
 		http.MethodPost,
 		http.MethodPatch,
+		http.MethodPut,
 		http.MethodDelete,
 		http.MethodOptions,
 	} {

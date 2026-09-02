@@ -503,7 +503,7 @@ func TestCORSPreflightAllowsAuthenticatedGet(t *testing.T) {
 		t.Fatalf("expected preflight 204, got %d", rec.Code)
 	}
 	// 方法集由 consoleapi/middleware/cors.go 定义，两边必须一致。
-	if methods := rec.Header().Get("Access-Control-Allow-Methods"); methods != "GET, POST, PATCH, DELETE, OPTIONS" {
+	if methods := rec.Header().Get("Access-Control-Allow-Methods"); methods != "GET, POST, PATCH, PUT, DELETE, OPTIONS" {
 		t.Fatalf("unexpected allowed methods %q", methods)
 	}
 }
