@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/ThankCat/unio-gateway/internal/core/accountpool"
 	"github.com/ThankCat/unio-gateway/internal/core/billing"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
 	"github.com/ThankCat/unio-gateway/internal/core/servicetier"
@@ -75,6 +76,11 @@ type Candidate struct {
 
 	// Balance 是 balanced 调度使用的容量、健康与权重事实，供日志、trace 和 Admin 复用。
 	Balance BalanceScore
+
+	// AccountPool 是池型候选在本请求内冻结的账号快照（credential 型为 nil）。
+	// 冻结而非每轮重读：同一请求内的换号重试必须基于同一份名单，否则「同账号绝不重复」
+	// 会踩在一份中途变化的集合上。
+	AccountPool *accountpool.Pool
 }
 
 // CandidatePlan 是 authorization 与 attempt 共用的保守 fallback 计划。
@@ -162,6 +168,26 @@ func (p CandidatePlan) CandidateMaxOutputTokens() int64 {
 // 复用该类型，避免协议 service 各自实现不同的 fallback 风险边界。
 type Executor struct {
 	registry CandidateCapabilityRegistry
+
+	// 池型渠道的账号读取器。未注入时池型候选一律按 account_pool_unavailable 排除——
+	// credential 型渠道完全不经过这两个依赖，既有装配与单测因此无需改动。
+	accountPool    AccountPoolStore
+	accountRuntime AccountRuntimeStore
+}
+
+// ExecutorOption 调整 Executor 的可选依赖。
+type ExecutorOption func(*Executor)
+
+// WithAccountPool 注入池型渠道的账号事实来源（数据库配置 + Redis 运行态）。
+// 两者必须成对注入：只有账号名单没有运行态，就会把正在冷却的号当成可用。
+func WithAccountPool(pool AccountPoolStore, runtime AccountRuntimeStore) ExecutorOption {
+	return func(e *Executor) {
+		if pool == nil || runtime == nil {
+			return
+		}
+		e.accountPool = pool
+		e.accountRuntime = runtime
+	}
 }
 
 // BalanceConfig 是 Redis committed routing-balance control 的五项评分参数（objective_v1，§7/§14.6）。
@@ -180,12 +206,16 @@ type BalanceConfig struct {
 }
 
 // NewExecutor 创建共享 lifecycle executor。
-func NewExecutor(registry CandidateCapabilityRegistry) *Executor {
+func NewExecutor(registry CandidateCapabilityRegistry, opts ...ExecutorOption) *Executor {
 	if registry == nil {
 		panic("lifecycle: adapter capability registry is required")
 	}
 
-	return &Executor{registry: registry}
+	e := &Executor{registry: registry}
+	for _, opt := range opts {
+		opt(e)
+	}
+	return e
 }
 
 // PrepareCandidates 按 capability、熔断可用性和候选级保守估算生成 fallback plan。
@@ -275,6 +305,42 @@ func (e *Executor) PrepareCandidates(ctx context.Context, params PrepareCandidat
 		// Without the Redis snapshot there is no authoritative runtime signal, so preserve SQL order
 		// with neutral scores instead of consulting retired in-process breaker/health hooks.
 		available = append(available, filtered...)
+	}
+	// 池型候选的资格与容量都下沉到账号层：一个可调度账号都没有的池不进候选（「池空」与
+	// breaker open 是两个事实），拿得到账号的池用全池空闲槽位聚合替换渠道并发，
+	// 作为五项评分中并发那一项的输入——公式与权重不变，只换了容量事实的来源。
+	accountPools := e.loadAccountPools(ctx, filtered)
+	if len(accountPools) > 0 {
+		poolAvailable := make([]routing.ChatRouteCandidate, 0, len(available))
+		for _, candidate := range available {
+			snapshot, isPool := accountPools[candidate.Channel.ID]
+			if !isPool {
+				poolAvailable = append(poolAvailable, candidate)
+				continue
+			}
+			if !snapshot.usable() {
+				if snapshot.Reason == accountPoolReasonCooldown {
+					rateLimitedSnapshots++
+					if recovery := snapshot.Pool.EarliestRecoveryMs(); recovery > 0 &&
+						(minCooldownRemainingMs == 0 || recovery < minCooldownRemainingMs) {
+						minCooldownRemainingMs = recovery
+					}
+				}
+				delete(runtimeInputsByChannel, candidate.Channel.ID)
+				excluded = append(excluded, CandidateExclusion{
+					ChannelID: candidate.Channel.ID, RouteIndex: routeIndexes[candidate.Channel.ID],
+					Reason: snapshot.Reason, Route: candidate,
+				})
+				continue
+			}
+			if inputs, scored := runtimeInputsByChannel[candidate.Channel.ID]; scored {
+				used, limit, known := snapshot.Pool.Capacity()
+				inputs.Concurrency = CapacitySignal{Used: used, Limit: limit, Known: known}
+				runtimeInputsByChannel[candidate.Channel.ID] = inputs
+			}
+			poolAvailable = append(poolAvailable, candidate)
+		}
+		available = poolAvailable
 	}
 	var unavailableErr error
 	if len(available) == 0 {
@@ -381,12 +447,17 @@ func (e *Executor) PrepareCandidates(ctx context.Context, params PrepareCandidat
 			)
 		}
 
-		plan.Candidates = append(plan.Candidates, Candidate{
+		prepared := Candidate{
 			RouteIndex:    routeIndexes[candidate.Channel.ID],
 			Route:         candidate,
 			InputEstimate: inputTokens,
 			Balance:       scores[candidate.Channel.ID],
-		})
+		}
+		if snapshot, isPool := accountPools[candidate.Channel.ID]; isPool {
+			pool := snapshot.Pool
+			prepared.AccountPool = &pool
+		}
+		plan.Candidates = append(plan.Candidates, prepared)
 		if inputTokens > plan.ConservativeInputTokens {
 			plan.ConservativeInputTokens = inputTokens
 		}
@@ -417,14 +488,18 @@ func (e *Executor) PrepareCandidates(ctx context.Context, params PrepareCandidat
 }
 
 // stickyTemporaryBypassReason 判断绑定渠道是否只因临时运行态被候选准备阶段排除。
-// 当前只有 Channel 级 429 cooldown 属于这种情况；它不代表绑定失效。
+// Channel 级 429 cooldown 与「池内账号全部冷却」都属于这种情况：两者都到点自愈，
+// 不代表绑定失效，本次绕行但保留绑定。
 func (p CandidatePlan) stickyTemporaryBypassReason(channelID int64) (string, bool) {
 	for _, excluded := range p.Excluded {
 		if excluded.ChannelID != channelID {
 			continue
 		}
-		if excluded.Reason == string(breakerstore.CandidateSnapshotRateLimited) {
+		switch excluded.Reason {
+		case string(breakerstore.CandidateSnapshotRateLimited):
 			return string(breakerstore.ReasonCooldown), true
+		case accountPoolReasonCooldown:
+			return accountPoolReasonCooldown, true
 		}
 		return "", false
 	}

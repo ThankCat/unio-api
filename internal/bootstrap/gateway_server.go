@@ -247,6 +247,7 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 	chatCompletionService := NewChatGateway(
 		deps.DB,
 		queries,
+		breakerStore,
 		chatRouter,
 		adapterRegistry,
 		deps.Config.Worker,
@@ -256,6 +257,7 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 	responsesService := NewResponsesGateway(
 		deps.DB,
 		queries,
+		breakerStore,
 		chatRouter,
 		adapterRegistry,
 		deps.Config.Worker,
@@ -266,6 +268,7 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 	messagesService := NewMessagesGateway(
 		deps.DB,
 		queries,
+		breakerStore,
 		chatRouter,
 		adapterRegistry,
 		deps.Config.Worker,

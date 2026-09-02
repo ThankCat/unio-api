@@ -7,6 +7,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/ThankCat/unio-gateway/internal/core/accountpool"
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
@@ -253,6 +254,8 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 	capacityWaitLogged := false
 	var capacityWaitDuration time.Duration
 	attemptedChannels := make(map[int64]bool, len(params.Candidates))
+	// 池型候选按账号取 permit，同一账号在单请求内绝不重复（边界 6）；credential 型候选不写这张表。
+	attemptedAccounts := make(map[int64]bool)
 	permitAcquired := false
 
 scan:
@@ -287,13 +290,12 @@ scan:
 			}
 
 			var permitOwner *AttemptPermitOwner
+			var permitAccount accountpool.Member
 			if r.permitManager != nil {
-				admission, owner, err := r.permitManager.Acquire(ctx, AttemptPermitAcquireParams{
-					Candidate:        candidate,
-					UpstreamEndpoint: endpoint,
-					RequestMode:      breakerstore.ModeNonStream,
-					InputEstimate:    candidateInputTokens,
-				})
+				admission, owner, account, err := r.acquireCandidatePermit(
+					ctx, prepared, endpoint, breakerstore.ModeNonStream, candidateInputTokens, attemptedAccounts,
+				)
+				permitAccount = account
 				if err != nil {
 					if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
 						l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
@@ -423,12 +425,14 @@ scan:
 				var fallbackOwner *AttemptPermitOwner
 				if r.permitManager != nil {
 					// Transparent fallback 是同一 Channel 的第二次 transport（不同 upstream_endpoint），
-					// 不是候选切换，因此不参与全池短等。
+					// 不是候选切换，因此不参与全池短等，也不重新选号——换端点不换号，
+					// 否则同一次逻辑尝试的两段会落到两个上游账号上。
 					admission, owner, acquireErr := r.permitManager.Acquire(ctx, AttemptPermitAcquireParams{
 						Candidate:        candidate,
 						UpstreamEndpoint: fallback.UpstreamEndpoint,
 						RequestMode:      breakerstore.ModeNonStream,
 						InputEstimate:    candidateInputTokens,
+						Account:          permitAccount,
 					})
 					if acquireErr != nil {
 						if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {

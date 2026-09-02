@@ -80,6 +80,8 @@ func TestFindModelCandidatesFiltersByIngressProtocol(t *testing.T) {
 	createChannelPriceForTest(t, ctx, queries, openaiChannelID, modelID, now)
 	createChannelPriceForTest(t, ctx, queries, anthropicChannelID, modelID, now)
 	createModelPriceForTest(t, ctx, queries, modelID, now)
+	// 服务商需有当前生效充值汇率（D-02），否则其下渠道一律不进候选。
+	createProviderRechargeRateForTest(t, ctx, queries, providerID, now)
 
 	openaiCandidates, err := queries.FindModelCandidates(ctx, sqlc.FindModelCandidatesParams{
 		RequestedModelID: requestedModel,

@@ -22,6 +22,7 @@ import (
 func NewChatGateway(
 	db lifecycle.ChatTxBeginner,
 	queries *sqlc.Queries,
+	accountRuntime lifecycle.AccountRuntimeStore,
 	router gateway.ChatRouter,
 	registry *lifecycle.AdapterRegistry,
 	workerConfig config.WorkerConfig,
@@ -57,7 +58,7 @@ func NewChatGateway(
 		ledgerService,
 		gatewayConfig.MaxOutputTokensFallback,
 	)
-	candidatePreparer := lifecycle.NewExecutor(registry)
+	candidatePreparer := lifecycle.NewExecutor(registry, lifecycle.WithAccountPool(queries, accountRuntime))
 
 	// 避免 typed-nil 接口陷阱：nil *metrics.Metrics 必须以 nil 接口传入，
 	// 否则 service 内的 nil 判断会失效并在调用时 panic。
@@ -87,6 +88,7 @@ func NewChatGateway(
 func NewResponsesGateway(
 	db lifecycle.ChatTxBeginner,
 	queries *sqlc.Queries,
+	accountRuntime lifecycle.AccountRuntimeStore,
 	router responsesgateway.ChatRouter,
 	registry *lifecycle.AdapterRegistry,
 	workerConfig config.WorkerConfig,
@@ -123,7 +125,7 @@ func NewResponsesGateway(
 		ledgerService,
 		gatewayConfig.MaxOutputTokensFallback,
 	)
-	candidatePreparer := lifecycle.NewExecutor(registry)
+	candidatePreparer := lifecycle.NewExecutor(registry, lifecycle.WithAccountPool(queries, accountRuntime))
 
 	var chatMetrics lifecycle.MetricsRecorder
 	if metricsRecorder != nil {
@@ -148,6 +150,7 @@ func NewResponsesGateway(
 func NewMessagesGateway(
 	db lifecycle.ChatTxBeginner,
 	queries *sqlc.Queries,
+	accountRuntime lifecycle.AccountRuntimeStore,
 	router anthropicmessages.MessagesRouter,
 	registry *lifecycle.AdapterRegistry,
 	workerConfig config.WorkerConfig,
@@ -183,7 +186,7 @@ func NewMessagesGateway(
 		ledgerService,
 		gatewayConfig.MaxOutputTokensFallback,
 	)
-	candidatePreparer := lifecycle.NewExecutor(registry)
+	candidatePreparer := lifecycle.NewExecutor(registry, lifecycle.WithAccountPool(queries, accountRuntime))
 
 	var chatMetrics lifecycle.MetricsRecorder
 	if metricsRecorder != nil {

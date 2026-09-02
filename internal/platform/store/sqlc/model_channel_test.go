@@ -321,6 +321,9 @@ func TestFindModelCandidatesOrdersAndFilters(t *testing.T) {
 	createChannelPriceForTest(t, ctx, queries, secondaryChannelID, modelID, now)
 	// 模型需有基准价（× 售价倍率得客户售价），否则候选被过滤。
 	createModelPriceForTest(t, ctx, queries, modelID, now)
+	// 服务商需有当前生效充值汇率（D-02），否则其下渠道一律不进候选。
+	createProviderRechargeRateForTest(t, ctx, queries, enabledProviderID, now)
+	createProviderRechargeRateForTest(t, ctx, queries, disabledProviderID, now)
 
 	got, err := queries.FindModelCandidates(ctx, modelCandidatesParams(requestedModel))
 	if err != nil {
@@ -380,6 +383,67 @@ func TestFindModelCandidatesOrdersAndFilters(t *testing.T) {
 	}
 }
 
+// TestFindModelCandidatesRequiresSchedulableAccountForPoolChannel 冻结池型渠道的候选资格：
+// 池的供给单元是账号，零可调度账号的池不产生候选（「池空」与 breaker open 是两个事实），
+// 有一个 enabled 账号即恢复候选。credential 型渠道不受该条件影响。
+func TestFindModelCandidatesRequiresSchedulableAccountForPoolChannel(t *testing.T) {
+	ctx, tx, queries, cleanup := newModelChannelTestTx(t)
+	defer cleanup()
+
+	suffix := time.Now().UnixNano()
+	now := time.Now().UTC()
+
+	providerID := insertProvider(t, ctx, tx, fmt.Sprintf("pool-provider-%d", suffix), "enabled")
+	defaultConcurrency := int32(3)
+	poolChannelID := insertPoolChannel(t, ctx, tx, providerID, fmt.Sprintf("pool-channel-%d", suffix), &defaultConcurrency)
+	if _, err := tx.Exec(ctx, `UPDATE channels SET status = 'enabled' WHERE id = $1`, poolChannelID); err != nil {
+		t.Fatalf("enable pool channel: %v", err)
+	}
+
+	requestedModel := fmt.Sprintf("openai/pool-model-%d", suffix)
+	modelID := insertModel(t, ctx, tx, requestedModel, "openai", "enabled")
+	insertChannelModel(t, ctx, tx, poolChannelID, modelID, "gpt-5-codex", "enabled")
+	createModelPriceForTest(t, ctx, queries, modelID, now)
+	createChannelPriceForTest(t, ctx, queries, poolChannelID, modelID, now)
+	createProviderRechargeRateForTest(t, ctx, queries, providerID, now)
+
+	empty, err := queries.FindModelCandidates(ctx, modelCandidatesParams(requestedModel))
+	if err != nil {
+		t.Fatalf("find candidates for empty pool: %v", err)
+	}
+	if len(empty) != 0 {
+		t.Fatalf("empty pool must not produce candidates, got %d: %#v", len(empty), empty)
+	}
+
+	account := createAccount(t, ctx, queries, poolChannelID, fmt.Sprintf("acct-pool-%d", suffix), 50)
+	// 导入落 disabled：还没显式启用之前，池依然算空。
+	stillEmpty, err := queries.FindModelCandidates(ctx, modelCandidatesParams(requestedModel))
+	if err != nil {
+		t.Fatalf("find candidates for disabled-only pool: %v", err)
+	}
+	if len(stillEmpty) != 0 {
+		t.Fatalf("pool with only disabled accounts must not produce candidates, got %d", len(stillEmpty))
+	}
+
+	enableAccount(t, ctx, queries, account.ID)
+	got, err := queries.FindModelCandidates(ctx, modelCandidatesParams(requestedModel))
+	if err != nil {
+		t.Fatalf("find candidates for populated pool: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("populated pool must produce 1 candidate, got %d: %#v", len(got), got)
+	}
+	if got[0].SupplyForm != "pool" {
+		t.Fatalf("candidate supply_form = %q, want pool", got[0].SupplyForm)
+	}
+	if got[0].Credential != "" {
+		t.Fatalf("pool channel must not carry a channel credential, got %q", got[0].Credential)
+	}
+	if !got[0].AccountDefaultConcurrency.Valid || got[0].AccountDefaultConcurrency.Int32 != defaultConcurrency {
+		t.Fatalf("account_default_concurrency = %#v, want %d", got[0].AccountDefaultConcurrency, defaultConcurrency)
+	}
+}
+
 // createChannelPriceForTest 创建一条 enabled 渠道-模型成本价（成本 1/4），供路由「已配成本」过滤与计费测试（DEC-026）。
 // effective_from 取 at-1h、effective_to 为空，保证在 at（及之后）时刻生效。
 func createChannelPriceForTest(t *testing.T, ctx context.Context, queries *sqlc.Queries, channelID, modelID int64, at time.Time) sqlc.CreateChannelPriceRow {
@@ -422,6 +486,25 @@ func createModelPriceForTest(t *testing.T, ctx context.Context, queries *sqlc.Qu
 		EffectiveTo:    nullTimestamptz(),
 	}); err != nil {
 		t.Fatalf("create model price: %v", err)
+	}
+}
+
+// createProviderRechargeRateForTest 创建一条当前生效的服务商充值汇率（1.0，USD）。
+// D-02 严格拦截：FindModelCandidates 要求服务商有当前生效充值汇率，否则其渠道一律不进候选。
+// 汇率取 1.0 使倍率路径成本口径与基准价一致，不影响毛利守卫。
+func createProviderRechargeRateForTest(t *testing.T, ctx context.Context, queries *sqlc.Queries, providerID int64, at time.Time) {
+	t.Helper()
+
+	if _, err := queries.CreateProviderRechargeRate(ctx, sqlc.CreateProviderRechargeRateParams{
+		ProviderID:       providerID,
+		ProviderCurrency: "USD",
+		Rate:             numeric(1),
+		Status:           "enabled",
+		Source:           "manual",
+		EffectiveFrom:    timestamptz(at.Add(-time.Hour)),
+		EffectiveTo:      nullTimestamptz(),
+	}); err != nil {
+		t.Fatalf("create provider recharge rate: %v", err)
 	}
 }
 

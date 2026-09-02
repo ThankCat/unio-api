@@ -31,6 +31,9 @@ SELECT
     c.config_revision AS channel_config_revision,
     c.capacity_revision AS channel_capacity_revision,
     c.credential,
+    c.supply_form,
+    -- 账号并发回落链的中间档：账号 concurrency_limit 为 NULL 时用它，仍为 NULL 时用全局默认。
+    c.account_default_concurrency,
     c.supports_openai_fast,
     c.response_timeout_ms,
     c.first_token_timeout_ms,
@@ -181,6 +184,16 @@ WHERE m.model_id = $3
   AND c.status = 'enabled'
   AND c.credential_valid
   AND p.status = 'enabled'
+  -- 池型渠道的供给单元是账号：一个可调度账号都没有时不产生候选，与「渠道被熔断」是两回事，
+  -- 运维界面据此把「池空」和 breaker open 显示成两个事实。账号自身 enabled 即可，
+  -- 渠道与服务商两层已由上面的条件保证（绑定式语义：可调度 = 账号 ∧ 渠道 ∧ 服务商）。
+  AND (
+      c.supply_form <> 'pool'
+      OR EXISTS (
+          SELECT 1 FROM subscription_accounts sa
+          WHERE sa.channel_id = c.id AND sa.status = 'enabled'
+      )
+  )
   -- 已定价（DEC-031）：base 基准价 INNER JOIN 已保证存在；成本可解析 = 绝对覆盖存在 OR 价格倍率存在。
   AND (cost.id IS NOT NULL OR mult.id IS NOT NULL)
   -- D-02 严格拦截：服务商未配置当前生效充值汇率时，其渠道不进入路由候选（真实成本口径不明，禁止产生新结算）。
@@ -213,6 +226,8 @@ type FindModelCandidatesRow struct {
 	ChannelConfigRevision              int64
 	ChannelCapacityRevision            int64
 	Credential                         string
+	SupplyForm                         string
+	AccountDefaultConcurrency          pgtype.Int4
 	SupportsOpenaiFast                 bool
 	ResponseTimeoutMs                  pgtype.Int4
 	FirstTokenTimeoutMs                pgtype.Int4
@@ -284,6 +299,9 @@ type FindModelCandidatesRow struct {
 
 // FindModelCandidates 按请求模型与入口协议查找可用 channel 候选。
 // 供给的根是 Model：能服务该模型的渠道即候选。
+//  0. 供给形态：credential 型渠道持一份 API Key（存量形态）；pool 型渠道自身不持凭据，
+//     凭据在其下的订阅账号上，故池内至少要有一个 enabled 账号才算「能服务」——
+//     零账号池允许存在（建池后还没导号），但不产生候选；
 //  1. 供给过滤：model/channel/provider/binding 四级 enabled + 凭据有效 + 协议匹配；
 //     协议用 protocols 数组包含判定，一条渠道可同时服务 openai 与 anthropic；
 //  2. 已定价过滤：候选必须有 model_prices 基准价（base，INNER JOIN 保证），且渠道成本可解析——
@@ -320,6 +338,8 @@ func (q *Queries) FindModelCandidates(ctx context.Context, arg FindModelCandidat
 			&i.ChannelConfigRevision,
 			&i.ChannelCapacityRevision,
 			&i.Credential,
+			&i.SupplyForm,
+			&i.AccountDefaultConcurrency,
 			&i.SupportsOpenaiFast,
 			&i.ResponseTimeoutMs,
 			&i.FirstTokenTimeoutMs,

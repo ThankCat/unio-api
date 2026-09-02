@@ -106,15 +106,17 @@
   - `sql/queries/admin/subscription_accounts.sql`：CRUD、列表（含聚合计数）、状态流转、台账读写。
   - `sqlc generate` 后提交生成代码。
 
-- [ ] 候选查询：现有候选 SQL 增加 `supply_form`，并对池型渠道保证「至少一个可调度账号」才产出候选
-      （零账号池允许存在但不成为候选，边界 12）。**顺延至批次三**：候选 SQL 的改造与候选快照的
-      账号聚合是同一件事，分开做会产生一个「查得出候选但拿不到账号」的中间态。
+- [x] 候选查询：现有候选 SQL 增加 `supply_form` 与 `account_default_concurrency`，并对池型渠道要求
+      「至少一个 enabled 账号」才产出候选（零账号池允许存在但不成为候选，边界 12）。
+      同时放宽 `buildChatRouteCandidate` 的凭据非空校验——池型渠道凭据恒为空串（DB CHECK 保证），
+      供给单元换成了账号。
 
-> **批次一已知既有失败（非本次引入）**：`TestFindModelCandidatesFiltersByIngressProtocol` 与
-> `TestFindModelCandidatesOrdersAndFilters` 在本地 dev 库上返回 0 候选而失败。已用严格对照确认——
-> 代码与数据库同时回退到基线仍失败，切到 `develop` 分支仍失败——属既有问题，本批次未引入也未修复。
-> 批次三改候选查询前需要先查清它（很可能是本地 dev 库缺少定价/汇率种子数据），否则无法用这两个
-> 测试守住候选改造。
+> **批次一记录的两个既有失败已定位并修复（批次三）**：`TestFindModelCandidatesFiltersByIngressProtocol`
+> 与 `TestFindModelCandidatesOrdersAndFilters` 返回 0 候选，与本地 dev 库的种子数据无关——
+> 是 `000065_provider_recharge_rates`（2026-08-31）给候选查询加了 D-02 严格拦截
+> （`recharge.id IS NOT NULL`）之后，这两个用例的 fixture 从未补上 `provider_recharge_rates` 行。
+> 修法是给测试加 `createProviderRechargeRateForTest` 并在两处调用（纯测试改动）。
+> 这条对后续有约束：**任何新增的候选用例都必须给 provider 配一条当前生效充值汇率**，否则恒为 0 候选。
 
 ## 二、运行态与原子准入（unio-gateway）
 
@@ -163,26 +165,49 @@
 
 ## 三、路由与选号（unio-gateway）
 
-- [ ] `internal/core/routing`：候选快照对池型渠道额外拉取账号运行态列表，产出两项：
-  - 资格：至少一个可调度账号；全部冷却 → 渠道按 cooldown 处理，`Retry-After` 取最早恢复时间；
-  - 并发容量分输入：全池空闲槽位聚合 / 上限聚合（五项评分公式与权重**不变**）。
+- [x] 候选快照对池型渠道额外拉取账号列表（Postgres）与账号运行态（Redis），产出两项：
+  - 资格：至少一个可调度账号；全部被运行态挡住 → 候选按 cooldown 排除，`Retry-After` 取最早恢复时间；
+  - 并发容量分输入：全池空闲槽位聚合 / 上限聚合（五项评分公式与权重**不变**，只换容量事实的来源）。
+  - 落点是 `lifecycle`（`account_pool.go`）而非 `internal/core/routing`：routing 只做 SQL → 候选的映射，
+    运行态读取与资格判定一直在 `Executor.PrepareCandidates`，放 routing 会把 Redis 依赖倒灌进 core。
+  - 三种排除原因分开表达，不能合并：`account_pool_cooldown`（到点自愈，可给 Retry-After）/
+    `account_pool_empty`（两次查询之间账号被停用）/ `account_pool_unavailable`（账号事实读不出来，
+    与 Redis 运行态同样 fail-closed）。
+  - **未注入账号读取器时池型候选一律排除**：既有装配与单测因此零改动，且不会出现「放行一个没有凭据的候选」。
 
-- [ ] 池内选号（新增，位于 lifecycle 候选执行层）：
-  1. Sticky 绑定账号优先（命中后复验可用性）；
-  2. 过滤链：账号 ∧ Channel ∧ Provider enabled、不在冷却、未临时不可调度、用量未达阈值；
-  3. 排序：priority → 实时负载率 → 最久未使用（LRU）；**同档随机打散**；
-  4. 按序逐号 `AttemptPermit`；账号槽满取下一个；
+- [x] 池内选号（`internal/core/accountpool`，纯函数 + `lifecycle/account_selection.go` 接线）：
+  1. Sticky 绑定账号优先（`Order` 已支持 sticky 置顶，**调用方本期恒传 0**，见第四点顺延说明）；
+  2. 过滤链：账号 enabled（SQL 保证）、不在冷却、未临时不可调度、用量未达阈值；
+     Channel ∧ Provider 两层由候选查询的上层条件保证（绑定式语义）；
+  3. 排序：priority → 实时负载率 → 最久未使用（LRU）；**同档随机打散**——实现为「先整体打散再稳定排序」，
+     等价键之间保留的就是随机顺序，比排序后逐段打散少一层易错的分段逻辑；
+  4. 按序逐号 `AttemptPermit`；账号槽满/账号冷却取下一个，**渠道级拒绝立即返回**（换号得到同一答案）；
   5. 全部账号满 → 该 Channel 记 `concurrency_full` 跳下一候选（进入既有全池短等语义）。
-  - 混合拒绝映射（边界 5）：池内存在「仅并发满」的账号即报 `concurrency_full`（可等待），
-    全部因冷却才报 cooldown——全池短等的进入条件依赖该映射的确定性。
+  - 混合拒绝映射（边界 5）已实现并有测试：池内存在「仅并发满」的账号即报 `concurrency_full`（可等待），
+    全部因冷却/临时不可调度才报 cooldown 并带最早恢复时刻。
+  - **单请求内单池最多试 5 个账号**（`accountAttemptBudget`）：池可能挂几十个号，逐个试到底会把一次
+    请求的准入耗时放大成 N 次 Redis 往返；试过几个都没槽，换渠道比继续换号更快。
+  - **并发上限回落链末端定为「不限」而非全局 `channel_limit`**（与批次二注释里的措辞不同，以此处为准）：
+    那个全局默认限的是整条渠道，拿它去限每个账号会把「渠道最多 10 个在途」悄悄变成「每号各 10 个」。
+    渠道级上限在 Lua 门禁里仍先于账号槽生效，池整体不失保护。要不要单开一个账号级全局默认，
+    等运营真的需要时再加，不先造一个没人配的旋钮。
 
 - [ ] **同渠道换号重试**（边界 6，修改 ADR-0016 既有契约）：放开「同 Channel 不同账号可重试」，设次数
-      上限；同一账号在单请求内禁止重复。需要显式测试守住「同账号绝不重复」。
+      上限；同一账号在单请求内禁止重复。
+  - 已完成的一半：**准入阶段**的换号（账号槽满/冷却 → 池内取下一个号）与「同账号绝不重复」
+    （请求级 `attemptedAccounts`，跨候选共享）都已实现并有显式测试。
+  - **顺延的一半**：*传输失败后*的同渠道换号（可重试上游错误 → 换号再打同一渠道）。它要改的是
+    `attemptedChannels` 这条「禁止 A → B → A」的状态机，非流式与流式两个 460+ 行的候选循环都要动，
+    与 Sticky 账号维度是同一处改动。单独一个批次做，不和选号混在一起。
 
 - [ ] Sticky（`internal/platform/stickysession`）：绑定值增加 `account_id`，CAS 同时比较
       `(channel_id, account_id, binding_version)`；换键空间让旧绑定自然 miss（TTL 30 分钟，无需迁移）。
   - 绑定账号冷却/并发满 → 临时绕行，保留绑定不续期，绕行优先落同渠道其他账号；
   - 绑定账号禁用/归档/吊销 → 确认失效，CAS 清绑。
+  - 选号侧已就位：`Pool.Order(stickyAccountID, ...)` 的置顶与「绑定账号被运行态挡住则跳过」都已实现
+    并有测试，只差把真实 `account_id` 从 sticky 绑定里取出来传进去。
+  - 已顺带落地：`stickyTemporaryBypassReason` 认 `account_pool_cooldown` 为临时绕行——
+    池内账号全部冷却与渠道 429 冷却同属到点自愈，都不该清绑定。
 
 - [ ] 会话键提取（`internal/core/sessionhint`）：在现有显式信号之上补**内容派生哈希兜底**——无
       `prompt_cache_key`/`session-id` 时对消息前缀做定长哈希。边界：只哈希有界前缀、只存哈希不落原文、
@@ -191,6 +216,17 @@
 - [ ] 缓存画像口径（边界 10）：「池内换号」与「跨渠道切换」同口径排除出渠道缓存画像。
 
 - [ ] Routing trace：只记实际尝试过的账号与池内选号事实，不记全池逐号评分（边界 14）。
+  - 事实源已具备：`acquireCandidatePermit` 返回本次冻结的账号，`attemptedAccounts` 是请求级的
+    「实际试过哪些号」，两者都还没接进 `RunResult` / trace。与账号维度请求记录（第七节）一起做更省事。
+
+> **批次三交叉验证结论**：`go build` / `go vet` 干净；改动文件 `gofmt` 全清
+> （`internal/bootstrap/gateway_server.go` 在 HEAD 上就未格式化，已用 stash 对照确认，未顺手改）。
+> 带 `REDIS_ADDR` + `DATABASE_URL` 的全量 `go test ./...` **108 个包全绿**——批次一、二记录的两个
+> 既有失败随本批次的 fixture 修复一并消失，失败集合现在是空的。后续批次可以直接用「全绿」当门禁。
+> `make check-lua` 未跑：本批次没有改 Lua，其既有失败状态与批次二记录一致。
+>
+> **本批次没做、留给下一批的**：传输失败后的同渠道换号、Sticky 账号维度、会话键兜底、缓存画像口径、
+> routing trace 账号事实。这五项都要动同两个候选循环或 sticky 绑定值，合并成一个批次比拆开安全。
 
 ## 四、Codex adapter（unio-gateway）
 

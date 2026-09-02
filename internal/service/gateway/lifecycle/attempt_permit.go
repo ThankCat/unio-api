@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/ThankCat/unio-gateway/internal/core/accountpool"
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
@@ -126,6 +127,10 @@ type AttemptPermitAcquireParams struct {
 	UpstreamEndpoint requestlog.UpstreamEndpoint
 	RequestMode      breakerstore.RequestMode
 	InputEstimate    int64
+
+	// Account 是池型候选本次选中的订阅账号；credential 型候选留零值，脚本内账号维度整体跳过。
+	// 账号身份随 permit 一起固化：收口归还的必然是当初占的那个号，而不是此刻路由认为该用的号。
+	Account accountpool.Member
 }
 
 // Acquire 独立强读 admission+routing revision，并要求二者属于同一 ready integrity epoch。
@@ -166,6 +171,9 @@ func (m *AttemptPermitManager) Acquire(ctx context.Context, params AttemptPermit
 		ChannelCapacityRevision:   params.Candidate.ChannelCapacityRevision,
 		EnforceProviderControl:    true,
 		InputEstimate:             params.InputEstimate,
+		AccountID:                 params.Account.ID,
+		AccountConcurrencyLimit:   params.Account.Limit,
+		AccountConfigRevision:     params.Account.ConfigRevision,
 	}
 	if err := requestadmission.BindAttemptInput(ctx, &in); err != nil {
 		m.recordPermitOperation("acquire", permitErrorResult(err))
@@ -267,13 +275,16 @@ func breakerEndpoint(operation requestlog.UpstreamEndpoint) breakerstore.Upstrea
 }
 
 func attemptAdmissionFingerprint(in breakerstore.AcquireAttemptInput) string {
+	// 账号维度进指纹：permit 是按 (permit_id, fingerprint) 幂等的，同一个 permit 换个账号重放
+	// 必须被判成 conflict，而不是悄悄占用另一个号的槽位。
 	payload := fmt.Sprintf(
-		"%s|%s|%s|%d|%d|%d|%d|%d|%d|%s|%s|%d|%d|%d|%d|%d",
+		"%s|%s|%s|%d|%d|%d|%d|%d|%d|%s|%s|%d|%d|%d|%d|%d|%d|%d|%d",
 		in.PermitID, in.RequestAdmissionID, in.IntegrityEpoch, in.IntegrityRevision,
 		in.ProviderID, in.ChannelID, in.OriginRevision, in.ProviderStatusRevision,
 		in.ChannelConfigRevision, in.UpstreamEndpoint, in.RequestMode, in.ModelID,
 		in.GlobalConcurrencyRevision, in.CircuitBreakerRevision,
 		in.ChannelCapacityRevision, in.InputEstimate,
+		in.AccountID, in.AccountConcurrencyLimit, in.AccountConfigRevision,
 	)
 	sum := sha256.Sum256([]byte(payload))
 	return fmt.Sprintf("%x", sum[:])

@@ -94,6 +94,13 @@ type ChatRouteCandidate struct {
 	Channel                 channel.Runtime
 	UpstreamModel           string
 
+	// SupplyForm 决定凭据与容量来自渠道自身还是池内账号。credential 型候选走存量路径，
+	// 池型候选在准入前还要选出一个账号，并按账号维度核算容量与健康。
+	SupplyForm channel.SupplyForm
+	// AccountDefaultConcurrency 是池型渠道的账号默认并发上限（nil 继承全局默认，0 不限，>0 上限）。
+	// 账号自身 concurrency_limit 为 NULL 时回落到它，credential 型候选恒为 nil。
+	AccountDefaultConcurrency *int64
+
 	// MaxOutputTokens 是该候选逻辑模型 models.max_output_tokens（0 表示未配置）。
 	// 客户未显式给出输出上限时，authorization 用它（取候选最大值）做保守冻结上界，
 	// 避免按全局兜底偏小导致预冻结不足、超额进平台核销。
@@ -421,8 +428,11 @@ func optionalDurationMs(v pgtype.Int8) *time.Duration {
 
 func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindModelCandidatesRow) (ChatRouteCandidate, error) {
 	// 渠道凭据明文存储（产品决策）：直接取用，仅防御性校验非空（DB 已 NOT NULL + CHECK <> ''）。
+	// 池型渠道的凭据在账号上，渠道自身凭据恒为空串（DB CHECK 保证）：这里要的不是「放宽校验」，
+	// 而是换一个供给单元——账号在准入阶段选出，出站前才取凭据。
+	supplyForm := channel.SupplyForm(row.SupplyForm)
 	apiKey := strings.TrimSpace(row.Credential)
-	if apiKey == "" {
+	if apiKey == "" && !supplyForm.IsPool() {
 		return ChatRouteCandidate{}, failure.Wrap(
 			failure.CodeRoutingCredentialResolveFailed,
 			ErrChannelCredentialMissing,
@@ -589,20 +599,22 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindModel
 	}
 
 	return ChatRouteCandidate{
-		ModelDBID:               row.ModelDbID,
-		ProviderID:              row.ProviderID,
-		OriginRevision:          row.ProviderOriginRevision,
-		ProviderStatusRevision:  row.ProviderStatusRevision,
-		ChannelConfigRevision:   row.ChannelConfigRevision,
-		ChannelCapacityRevision: row.ChannelCapacityRevision,
-		AdapterKey:              row.AdapterKey,
-		Protocol:                row.Protocol,
-		SupportsOpenAIFast:      row.SupportsOpenaiFast,
-		MaxOutputTokens:         maxOutputTokens,
-		ConcurrencyLimit:        int4LimitPtr(row.ChannelConcurrencyLimit),
-		Priority:                row.Priority,
-		StickyEnabled:           optionalBool(row.ChannelStickyEnabled),
-		StickyTTL:               optionalDurationMs(row.ChannelStickyTtlMs),
+		ModelDBID:                 row.ModelDbID,
+		ProviderID:                row.ProviderID,
+		OriginRevision:            row.ProviderOriginRevision,
+		ProviderStatusRevision:    row.ProviderStatusRevision,
+		ChannelConfigRevision:     row.ChannelConfigRevision,
+		ChannelCapacityRevision:   row.ChannelCapacityRevision,
+		AdapterKey:                row.AdapterKey,
+		Protocol:                  row.Protocol,
+		SupportsOpenAIFast:        row.SupportsOpenaiFast,
+		SupplyForm:                supplyForm,
+		AccountDefaultConcurrency: int4LimitPtr(row.AccountDefaultConcurrency),
+		MaxOutputTokens:           maxOutputTokens,
+		ConcurrencyLimit:          int4LimitPtr(row.ChannelConcurrencyLimit),
+		Priority:                  row.Priority,
+		StickyEnabled:             optionalBool(row.ChannelStickyEnabled),
+		StickyTTL:                 optionalDurationMs(row.ChannelStickyTtlMs),
 		Channel: channel.Runtime{
 			ID:                row.ChannelID,
 			Name:              row.ChannelName,

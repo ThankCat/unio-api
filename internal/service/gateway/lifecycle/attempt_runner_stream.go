@@ -309,6 +309,8 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 	capacityWaitLogged := false
 	var capacityWaitDuration time.Duration
 	attemptedChannels := make(map[int64]bool, len(params.Candidates))
+	// 池型候选按账号取 permit，同一账号在单请求内绝不重复（边界 6）；credential 型候选不写这张表。
+	attemptedAccounts := make(map[int64]bool)
 	permitAcquired := false
 
 scan:
@@ -340,12 +342,9 @@ scan:
 
 			var permitOwner *AttemptPermitOwner
 			if r.permitManager != nil {
-				admission, owner, err := r.permitManager.Acquire(ctx, AttemptPermitAcquireParams{
-					Candidate:        candidate,
-					UpstreamEndpoint: l.upstreamEndpoint(),
-					RequestMode:      breakerstore.ModeStream,
-					InputEstimate:    candidateInputTokens,
-				})
+				admission, owner, _, err := r.acquireCandidatePermit(
+					ctx, prepared, l.upstreamEndpoint(), breakerstore.ModeStream, candidateInputTokens, attemptedAccounts,
+				)
 				if err != nil {
 					if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
 						l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
