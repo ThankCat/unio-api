@@ -54,13 +54,13 @@
 
 ## 一、数据库（unio-gateway）
 
-- [ ] 迁移 `000068_channel_supply_form`：`channels` 增列
+- [x] 迁移 `000068_channel_supply_form`：`channels` 增列
   - `supply_form text NOT NULL DEFAULT 'credential'`，`CHECK (supply_form IN ('credential','pool'))`；
   - `account_default_concurrency integer`（池型的账号默认并发；NULL 继承全局，0 不限，正数上限）；
   - 约束：`supply_form='pool'` 时 `credential` 必须为空串；`supply_form='credential'` 时保持非空语义。
   - 存量行全部落 `credential`，行为不变。
 
-- [ ] 迁移 `000069_subscription_accounts`：
+- [x] 迁移 `000069_subscription_accounts`：
 
   ```sql
   CREATE TABLE public.subscription_accounts (
@@ -93,13 +93,13 @@
 
   凭据存储沿用渠道凭据的明文口径（边界 22：要加密应连渠道凭据一起做，不单独为账号开新口径）。
 
-- [ ] 迁移 `000070_subscription_ledger`：订阅台账（账号维度，周期、金额、币种、生效区间、备注），
+- [x] 迁移 `000070_subscription_ledger`：订阅台账（账号维度，周期、金额、币种、生效区间、备注），
       用于离线算摊销单价与利用率。
 
-- [ ] 迁移 `000071_request_records_account`：`request_records` 增 `account_id bigint`（可空，快照列，
+- [x] 迁移 `000071_request_records_account`：`request_records` 增 `account_id bigint`（可空，快照列，
       不加外键约束以免影响归档），索引 `(account_id, created_at DESC)`。
 
-- [ ] sqlc 查询：
+- [x] sqlc 查询：
   - `sql/queries/gateway/subscription_accounts.sql`：`ListSchedulableAccountsByChannel :many`
     （候选快照用，只取调度必需列）、`GetAccountCredentials :one`、`UpdateAccountTokens :exec`、
     `UpdateAccountUsageSnapshot :exec`、`TouchAccountLastSuccess :exec`。
@@ -107,7 +107,14 @@
   - `sqlc generate` 后提交生成代码。
 
 - [ ] 候选查询：现有候选 SQL 增加 `supply_form`，并对池型渠道保证「至少一个可调度账号」才产出候选
-      （零账号池允许存在但不成为候选，边界 12）。
+      （零账号池允许存在但不成为候选，边界 12）。**顺延至批次三**：候选 SQL 的改造与候选快照的
+      账号聚合是同一件事，分开做会产生一个「查得出候选但拿不到账号」的中间态。
+
+> **批次一已知既有失败（非本次引入）**：`TestFindModelCandidatesFiltersByIngressProtocol` 与
+> `TestFindModelCandidatesOrdersAndFilters` 在本地 dev 库上返回 0 候选而失败。已用严格对照确认——
+> 代码与数据库同时回退到基线仍失败，切到 `develop` 分支仍失败——属既有问题，本批次未引入也未修复。
+> 批次三改候选查询前需要先查清它（很可能是本地 dev 库缺少定价/汇率种子数据），否则无法用这两个
+> 测试守住候选改造。
 
 ## 二、运行态与原子准入（unio-gateway）
 
