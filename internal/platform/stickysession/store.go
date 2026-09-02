@@ -28,22 +28,27 @@ import (
 // BindingVersion 是 CAS 身份计数而非兼容版本号：每次新建绑定都会得到一个新的 version，
 // 因此 CAS 必须同时比较 channel_id 和 binding_version，只比 channel_id 会让
 // 「A 被清除后又被另一个请求重新绑定到 A」被误判为同一个绑定。
+//
+// AccountID 是号池改造引入的第三个身份分量（池型渠道绑到具体账号，credential 型恒 0）。
+// schema 升 v2 并由调用方换键空间：旧 v1 值不迁移，靠 TTL 自然消失。
 type binding struct {
 	Version         int   `json:"v"`
 	ChannelID       int64 `json:"channel_id"`
+	AccountID       int64 `json:"account_id"`
 	BindingVersion  int64 `json:"binding_version"`
 	LastSuccessAtMs int64 `json:"last_success_at_ms"`
 }
 
-// bindingSchemaVersion 标记单一 canonical value schema。
-const bindingSchemaVersion = 1
+// bindingSchemaVersion 标记单一 canonical value schema（v2：绑定值含 account_id）。
+const bindingSchemaVersion = 2
 
 // opTimeout 是单次 sticky Redis 操作的独立短超时：sticky 在候选准备热路径上，
 // Redis 抖动时宁可放弃粘性也不能拖慢请求（§10.11）。
 const opTimeout = 200 * time.Millisecond
 
-// refreshIfCurrentLua 仅在 (channel_id, binding_version) 完全匹配时滑动续期。
+// refreshIfCurrentLua 仅在 (channel_id, account_id, binding_version) 完全匹配时滑动续期。
 // 任何不匹配都返回 0（cas_conflict），绝不覆盖别的请求建立的新绑定。
+// account_id 缺失按 0 比较（credential 型渠道的绑定不带账号分量）。
 const refreshIfCurrentLua = `
 local raw = redis.call("GET", KEYS[1])
 if not raw then
@@ -56,14 +61,17 @@ end
 if tonumber(decoded.channel_id) ~= tonumber(ARGV[1]) then
   return 0
 end
-if tonumber(decoded.binding_version) ~= tonumber(ARGV[2]) then
+if (tonumber(decoded.account_id) or 0) ~= tonumber(ARGV[2]) then
   return 0
 end
-redis.call("SET", KEYS[1], ARGV[3], "XX", "PX", ARGV[4])
+if tonumber(decoded.binding_version) ~= tonumber(ARGV[3]) then
+  return 0
+end
+redis.call("SET", KEYS[1], ARGV[4], "XX", "PX", ARGV[5])
 return 1
 `
 
-// clearIfCurrentLua 仅在 (channel_id, binding_version) 完全匹配时删除绑定。
+// clearIfCurrentLua 仅在 (channel_id, account_id, binding_version) 完全匹配时删除绑定。
 // CAS 失败说明绑定已被其他请求改变，本请求不得删除新绑定（§10.9）。
 const clearIfCurrentLua = `
 local raw = redis.call("GET", KEYS[1])
@@ -78,7 +86,10 @@ end
 if tonumber(decoded.channel_id) ~= tonumber(ARGV[1]) then
   return 0
 end
-if tonumber(decoded.binding_version) ~= tonumber(ARGV[2]) then
+if (tonumber(decoded.account_id) or 0) ~= tonumber(ARGV[2]) then
+  return 0
+end
+if tonumber(decoded.binding_version) ~= tonumber(ARGV[3]) then
   return 0
 end
 redis.call("DEL", KEYS[1])
@@ -126,8 +137,10 @@ func newBindingVersion() int64 {
 }
 
 // Binding 是一次 Lookup 的完整绑定事实（CAS 需要 version，审计需要 last success 时间）。
+// AccountID 为 0 表示绑定不带账号分量（credential 型渠道）。
 type Binding struct {
 	ChannelID      int64
+	AccountID      int64
 	BindingVersion int64
 	LastSuccessAt  time.Time
 }
@@ -158,7 +171,7 @@ func (s *Store) Lookup(ctx context.Context, key string) LookupResult {
 	var current binding
 	if err := json.Unmarshal([]byte(raw), &current); err != nil ||
 		current.Version != bindingSchemaVersion ||
-		current.ChannelID <= 0 || current.BindingVersion <= 0 {
+		current.ChannelID <= 0 || current.BindingVersion <= 0 || current.AccountID < 0 {
 		// 损坏值当 miss：不读也不写，让它随 TTL 自然消失或被下一次 BindIfAbsent 覆盖。
 		logging.Warn(s.logger, "routing", "sticky", "sticky binding invalid",
 			stickyLogFields(ctx, stickyKeyLogFields(key, zap.String("reason", "invalid_schema"))...)...,
@@ -169,6 +182,7 @@ func (s *Store) Lookup(ctx context.Context, key string) LookupResult {
 		Found: true,
 		Binding: Binding{
 			ChannelID:      current.ChannelID,
+			AccountID:      current.AccountID,
 			BindingVersion: current.BindingVersion,
 			LastSuccessAt:  time.UnixMilli(current.LastSuccessAtMs),
 		},
@@ -184,8 +198,9 @@ type CASResult struct {
 
 // BindIfAbsent 仅在当前无绑定时写入新绑定（§10.5）。同会话首轮并发请求各自成功时，
 // 只有第一个 CAS 成功者建立绑定，其他请求得到 Conflict 且不得覆盖。
-func (s *Store) BindIfAbsent(ctx context.Context, key string, channelID int64, ttl time.Duration) (Binding, CASResult) {
-	if channelID <= 0 || ttl <= 0 {
+// accountID 为 0 表示绑定不带账号分量（credential 型渠道），负数视为无效入参。
+func (s *Store) BindIfAbsent(ctx context.Context, key string, channelID, accountID int64, ttl time.Duration) (Binding, CASResult) {
+	if channelID <= 0 || accountID < 0 || ttl <= 0 {
 		return Binding{}, CASResult{}
 	}
 	opCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), opTimeout)
@@ -193,6 +208,7 @@ func (s *Store) BindIfAbsent(ctx context.Context, key string, channelID int64, t
 
 	next := Binding{
 		ChannelID:      channelID,
+		AccountID:      accountID,
 		BindingVersion: s.newVersion(),
 		LastSuccessAt:  time.Now(),
 	}
@@ -216,18 +232,18 @@ func (s *Store) BindIfAbsent(ctx context.Context, key string, channelID int64, t
 	return next, CASResult{Applied: true}
 }
 
-// RefreshIfCurrent 仅在绑定仍是 (channelID, bindingVersion) 时滑动续期完整 TTL（§10.5）。
+// RefreshIfCurrent 仅在绑定仍是 (channelID, accountID, bindingVersion) 时滑动续期完整 TTL（§10.5）。
 // 续期保留同一 binding_version：这是同一个绑定的延寿，不是新绑定。
 func (s *Store) RefreshIfCurrent(
-	ctx context.Context, key string, channelID, bindingVersion int64, ttl time.Duration,
+	ctx context.Context, key string, channelID, accountID, bindingVersion int64, ttl time.Duration,
 ) (Binding, CASResult) {
-	if channelID <= 0 || bindingVersion <= 0 || ttl <= 0 {
+	if channelID <= 0 || accountID < 0 || bindingVersion <= 0 || ttl <= 0 {
 		return Binding{}, CASResult{}
 	}
 	opCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), opTimeout)
 	defer cancel()
 
-	next := Binding{ChannelID: channelID, BindingVersion: bindingVersion, LastSuccessAt: time.Now()}
+	next := Binding{ChannelID: channelID, AccountID: accountID, BindingVersion: bindingVersion, LastSuccessAt: time.Now()}
 	value, err := encodeBinding(next)
 	if err != nil {
 		logging.Warn(s.logger, "routing", "sticky", "sticky operation failed",
@@ -237,7 +253,7 @@ func (s *Store) RefreshIfCurrent(
 	}
 	applied, err := s.client.Eval(
 		opCtx, refreshIfCurrentLua, []string{s.keyPrefix + key},
-		channelID, bindingVersion, value, ttl.Milliseconds(),
+		channelID, accountID, bindingVersion, value, ttl.Milliseconds(),
 	).Int64()
 	if err != nil {
 		logging.Warn(s.logger, "routing", "sticky", "sticky operation failed",
@@ -251,17 +267,17 @@ func (s *Store) RefreshIfCurrent(
 	return next, CASResult{Applied: true}
 }
 
-// ClearIfCurrent 仅在绑定仍是 (channelID, bindingVersion) 时删除（§10.7）。
+// ClearIfCurrent 仅在绑定仍是 (channelID, accountID, bindingVersion) 时删除（§10.7）。
 // CAS 失败说明绑定已被其他请求改变，本请求不得删除新绑定。
-func (s *Store) ClearIfCurrent(ctx context.Context, key string, channelID, bindingVersion int64) CASResult {
-	if channelID <= 0 || bindingVersion <= 0 {
+func (s *Store) ClearIfCurrent(ctx context.Context, key string, channelID, accountID, bindingVersion int64) CASResult {
+	if channelID <= 0 || accountID < 0 || bindingVersion <= 0 {
 		return CASResult{}
 	}
 	opCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), opTimeout)
 	defer cancel()
 
 	applied, err := s.client.Eval(
-		opCtx, clearIfCurrentLua, []string{s.keyPrefix + key}, channelID, bindingVersion,
+		opCtx, clearIfCurrentLua, []string{s.keyPrefix + key}, channelID, accountID, bindingVersion,
 	).Int64()
 	if err != nil {
 		logging.Warn(s.logger, "routing", "sticky", "sticky operation failed",
@@ -295,6 +311,7 @@ func encodeBinding(b Binding) (string, error) {
 	raw, err := json.Marshal(binding{
 		Version:         bindingSchemaVersion,
 		ChannelID:       b.ChannelID,
+		AccountID:       b.AccountID,
 		BindingVersion:  b.BindingVersion,
 		LastSuccessAtMs: b.LastSuccessAt.UnixMilli(),
 	})

@@ -55,11 +55,12 @@ const (
 
 // StickyStore 定义 sticky 核心依赖的绑定存取能力（Redis 实现在 platform/stickysession）。
 // 实现必须 fail-open：读失败当 miss、写失败只报告 StoreUnavailable（§10.11）。
+// accountID 是绑定值的第三个身份分量（号池改造）：credential 型渠道恒传 0。
 type StickyStore interface {
 	Lookup(ctx context.Context, key string) stickysession.LookupResult
-	BindIfAbsent(ctx context.Context, key string, channelID int64, ttl time.Duration) (stickysession.Binding, stickysession.CASResult)
-	RefreshIfCurrent(ctx context.Context, key string, channelID, bindingVersion int64, ttl time.Duration) (stickysession.Binding, stickysession.CASResult)
-	ClearIfCurrent(ctx context.Context, key string, channelID, bindingVersion int64) stickysession.CASResult
+	BindIfAbsent(ctx context.Context, key string, channelID, accountID int64, ttl time.Duration) (stickysession.Binding, stickysession.CASResult)
+	RefreshIfCurrent(ctx context.Context, key string, channelID, accountID, bindingVersion int64, ttl time.Duration) (stickysession.Binding, stickysession.CASResult)
+	ClearIfCurrent(ctx context.Context, key string, channelID, accountID, bindingVersion int64) stickysession.CASResult
 }
 
 // StickyEventRecorder 记录会话粘性路由事件（动作枚举 + pinned_*/pin_lost）。
@@ -264,6 +265,15 @@ func (s *StickySession) BoundChannelID() int64 {
 	return s.bound.ChannelID
 }
 
+// BoundAccountIDFor 返回绑定在指定渠道上的账号 ID；未绑定该渠道或绑定不带账号分量时为 0。
+// 池内选号用它做 Sticky 账号置顶（第二阶段选号的第一步）。
+func (s *StickySession) BoundAccountIDFor(channelID int64) int64 {
+	if s == nil || s.bound.ChannelID == 0 || s.bound.ChannelID != channelID {
+		return 0
+	}
+	return s.bound.AccountID
+}
+
 // ResolvedChannelID returns the binding observed at the start of this request.
 func (s *StickySession) ResolvedChannelID() int64 {
 	if s == nil {
@@ -341,8 +351,18 @@ func (s *StickySession) ApplyPlanOutcome(ctx context.Context, plan CandidatePlan
 // 第三种情况是「不做隐式 Rebind」的直接体现：A 只会在原 TTL 内保留，
 // 若持续不可用就自然过期，不需要额外迟滞状态。真正的改绑只能来自
 // 先 ClearIfCurrent(A) 之后的 BindIfAbsent(B)（§10.9）。
+//
+// credential 型渠道走本方法（账号分量恒 0）；池型渠道由 runner 调 BindSuccessWithAccount。
 func (s *StickySession) BindSuccess(ctx context.Context, candidate routing.ChatRouteCandidate) {
-	if !s.Enabled() || candidate.Channel.ID <= 0 {
+	s.BindSuccessWithAccount(ctx, candidate, 0)
+}
+
+// BindSuccessWithAccount 是 BindSuccess 的账号维度形态（号池改造）：
+//   - 绑定值含 (channel_id, account_id, binding_version)，CAS 三分量齐比；
+//   - Bound(A, a1) 而成功的是 (A, a2)：账号级临时绕行——保留原绑定不续期，
+//     与「绕到别的渠道」同一语义。真正的账号改绑只能来自确认失效后的清绑 + 新建。
+func (s *StickySession) BindSuccessWithAccount(ctx context.Context, candidate routing.ChatRouteCandidate, accountID int64) {
+	if !s.Enabled() || candidate.Channel.ID <= 0 || accountID < 0 {
 		return
 	}
 	enabled, ttl := s.router.policy(candidate)
@@ -355,13 +375,23 @@ func (s *StickySession) BindSuccess(ctx context.Context, candidate routing.ChatR
 
 	switch {
 	case s.bound.ChannelID == 0:
-		next, result := s.router.store.BindIfAbsent(ctx, s.key, channelID, ttl)
+		next, result := s.router.store.BindIfAbsent(ctx, s.key, channelID, accountID, ttl)
 		s.applyWriteResult(ctx, result, StickyActionBindIfAbsent, "complete_success", next, ttl)
-	case s.bound.ChannelID == channelID:
+	case s.bound.ChannelID == channelID && s.bound.AccountID == accountID:
 		next, result := s.router.store.RefreshIfCurrent(
-			ctx, s.key, channelID, s.bound.BindingVersion, ttl,
+			ctx, s.key, channelID, accountID, s.bound.BindingVersion, ttl,
 		)
 		s.applyWriteResult(ctx, result, StickyActionRefreshIfCurrent, "complete_success", next, ttl)
+	case s.bound.ChannelID == channelID:
+		// 同渠道但换了账号成功：账号级临时绕行，保留原绑定不续期（§10.6 的账号形态）。
+		s.setAction(ctx, StickyActionPreserveOnTemporaryBypass, "temporary_bypass_success_on_other_account")
+		s.router.inc(string(StickyActionPreserveOnTemporaryBypass))
+		s.router.logSticky(ctx, "sticky preserve_on_temporary_bypass", s.logFields(
+			zap.Int64("sticky_channel_id", s.bound.ChannelID),
+			zap.Int64("sticky_account_id", s.bound.AccountID),
+			zap.Int64("succeeded_account_id", accountID),
+			zap.String("reason", "temporary_bypass_success_on_other_account"),
+		)...)
 	default:
 		// 绕到了别的渠道并成功：保留原绑定，两边 TTL 都不刷新（§10.6）。
 		s.setAction(ctx, StickyActionPreserveOnTemporaryBypass, "temporary_bypass_success_on_other_channel")
@@ -422,8 +452,8 @@ func (s *StickySession) clearIfCurrent(ctx context.Context, reason string) {
 	if !s.Enabled() || s.bound.ChannelID == 0 {
 		return
 	}
-	channelID, version := s.bound.ChannelID, s.bound.BindingVersion
-	result := s.router.store.ClearIfCurrent(ctx, s.key, channelID, version)
+	channelID, accountID, version := s.bound.ChannelID, s.bound.AccountID, s.bound.BindingVersion
+	result := s.router.store.ClearIfCurrent(ctx, s.key, channelID, accountID, version)
 	switch {
 	case result.StoreUnavailable:
 		s.setAction(ctx, StickyActionStoreUnavailable, reason)
@@ -470,16 +500,18 @@ func (s *StickySession) PreserveOnTemporaryBypass(ctx context.Context, channelID
 	)...)
 }
 
-// stickyRedisKey 构造绑定键：sticky:{protocol}:{route_id}:{api_key_id}:{model_id}:{session_hash}。
+// stickyRedisKey 构造绑定键：sticky:v2:{protocol}:{api_key_id}:{model_id}:{session_hash}。
 // sessionKey 是客户端可控任意串，入键前定长哈希：防长度/基数膨胀与键注入，也避免把原始会话
 // 标识写进 Redis key 或日志；原值仍原样转发上游。
+// v2：绑定值扩为含 account_id（号池改造）。换键空间让 v1 旧绑定自然 miss，
+// TTL 30 分钟内自行消失，无需迁移。
 func stickyRedisKey(protocol string, apiKeyID, modelID int64, sessionKey string) string {
 	return stickyRedisKeyFromHash(protocol, apiKeyID, modelID, hashStickySessionKey(sessionKey))
 }
 
 func stickyRedisKeyFromHash(protocol string, apiKeyID, modelID int64, sessionHash string) string {
 	return fmt.Sprintf(
-		"sticky:%s:%d:%d:%s",
+		"sticky:v2:%s:%d:%d:%s",
 		protocol, apiKeyID, modelID, sessionHash,
 	)
 }

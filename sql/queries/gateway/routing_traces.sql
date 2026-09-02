@@ -9,7 +9,8 @@ INSERT INTO routing_decision_traces (
     sticky_action, sticky_reason, sticky_after_channel_id, sticky_after_version,
     trace_status, schema_version, eligible_count, baseline_order, actual_scan_order,
     attempted_channel_ids, selected_channel_id, fallback_count, final_result,
-    capacity_wait_ms, capacity_wait_result, trace_payload
+    capacity_wait_ms, capacity_wait_result, trace_payload,
+    attempted_account_ids, selected_account_id
 ) VALUES (
     sqlc.arg(request_record_id), sqlc.arg(mode),
     sqlc.arg(requested_model_id), sqlc.arg(protocol), sqlc.arg(endpoint),
@@ -20,7 +21,8 @@ INSERT INTO routing_decision_traces (
     sqlc.arg(trace_status), sqlc.arg(schema_version), sqlc.arg(eligible_count),
     sqlc.arg(baseline_order), sqlc.arg(actual_scan_order), sqlc.arg(attempted_channel_ids),
     sqlc.narg(selected_channel_id), sqlc.arg(fallback_count), sqlc.narg(final_result),
-    sqlc.narg(capacity_wait_ms), sqlc.narg(capacity_wait_result), sqlc.arg(trace_payload)
+    sqlc.narg(capacity_wait_ms), sqlc.narg(capacity_wait_result), sqlc.arg(trace_payload),
+    sqlc.arg(attempted_account_ids), sqlc.narg(selected_account_id)
 )
 ON CONFLICT (request_record_id) DO UPDATE SET
     pool_size = EXCLUDED.pool_size,
@@ -41,6 +43,8 @@ ON CONFLICT (request_record_id) DO UPDATE SET
     baseline_order = EXCLUDED.baseline_order,
     actual_scan_order = EXCLUDED.actual_scan_order,
     attempted_channel_ids = EXCLUDED.attempted_channel_ids,
+    attempted_account_ids = EXCLUDED.attempted_account_ids,
+    selected_account_id = COALESCE(EXCLUDED.selected_account_id, routing_decision_traces.selected_account_id),
     selected_channel_id = COALESCE(EXCLUDED.selected_channel_id, routing_decision_traces.selected_channel_id),
     fallback_count = EXCLUDED.fallback_count,
     final_result = COALESCE(EXCLUDED.final_result, routing_decision_traces.final_result),

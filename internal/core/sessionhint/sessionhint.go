@@ -8,6 +8,8 @@ package sessionhint
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"regexp"
 	"strings"
@@ -58,6 +60,41 @@ func OpenAISessionHint(ctx context.Context, promptCacheKey *string) Hint {
 		return Hint{Key: key, Source: "session_id_header"}
 	}
 	return Hint{}
+}
+
+// contentHashPrefixLimit 是内容派生哈希消费的最大前缀字节数。
+// 多轮对话共享同一开头（system + 首条用户消息），有界前缀足以把同一会话的请求聚到一起；
+// 读更多字节只会让「同会话追加了新消息」的请求彼此分裂，反而破坏亲和。
+const contentHashPrefixLimit = 2048
+
+// ContentDerivedHint 是显式会话信号缺失时的兜底（第三节内容派生哈希）：
+// 对消息前缀做定长哈希充当会话身份。三条边界（蓝图定稿）：
+//   - 只哈希有界前缀（contentHashPrefixLimit），不整篇扫描；
+//   - 只存哈希不落原文——返回值已是 SHA-256 hex，Redis 键与日志都不会出现内容；
+//   - 相同前缀共享身份仅用于缓存亲和，不赋任何业务语义。
+//
+// 反向桥接落地后，不发 prompt_cache_key/session-id 的通用 chat 客户端主要靠它命中 sticky。
+func ContentDerivedHint(parts ...string) Hint {
+	h := sha256.New()
+	written := 0
+	for _, part := range parts {
+		if written >= contentHashPrefixLimit {
+			break
+		}
+		remain := contentHashPrefixLimit - written
+		if len(part) > remain {
+			part = part[:remain]
+		}
+		_, _ = h.Write([]byte(part))
+		written += len(part)
+	}
+	if written == 0 {
+		return Hint{}
+	}
+	return Hint{
+		Key:    "content:" + hex.EncodeToString(h.Sum(nil)[:16]),
+		Source: "content_hash",
+	}
 }
 
 // AnthropicSessionKey 按 Anthropic 族提取顺序产出 sticky 会话键（决议 5）：

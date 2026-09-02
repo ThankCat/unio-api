@@ -789,7 +789,8 @@ INSERT INTO routing_decision_traces (
     sticky_action, sticky_reason, sticky_after_channel_id, sticky_after_version,
     trace_status, schema_version, eligible_count, baseline_order, actual_scan_order,
     attempted_channel_ids, selected_channel_id, fallback_count, final_result,
-    capacity_wait_ms, capacity_wait_result, trace_payload
+    capacity_wait_ms, capacity_wait_result, trace_payload,
+    attempted_account_ids, selected_account_id
 ) VALUES (
     $1, $2,
     $3, $4, $5,
@@ -800,7 +801,8 @@ INSERT INTO routing_decision_traces (
     $15, $16, $17,
     $18, $19, $20,
     $21, $22, $23,
-    $24, $25, $26
+    $24, $25, $26,
+    $27, $28
 )
 ON CONFLICT (request_record_id) DO UPDATE SET
     pool_size = EXCLUDED.pool_size,
@@ -821,6 +823,8 @@ ON CONFLICT (request_record_id) DO UPDATE SET
     baseline_order = EXCLUDED.baseline_order,
     actual_scan_order = EXCLUDED.actual_scan_order,
     attempted_channel_ids = EXCLUDED.attempted_channel_ids,
+    attempted_account_ids = EXCLUDED.attempted_account_ids,
+    selected_account_id = COALESCE(EXCLUDED.selected_account_id, routing_decision_traces.selected_account_id),
     selected_channel_id = COALESCE(EXCLUDED.selected_channel_id, routing_decision_traces.selected_channel_id),
     fallback_count = EXCLUDED.fallback_count,
     final_result = COALESCE(EXCLUDED.final_result, routing_decision_traces.final_result),
@@ -857,6 +861,8 @@ type UpsertRoutingDecisionTraceParams struct {
 	CapacityWaitMs        pgtype.Int4
 	CapacityWaitResult    pgtype.Text
 	TracePayload          []byte
+	AttemptedAccountIds   []int64
+	SelectedAccountID     pgtype.Int8
 }
 
 // 每个进入路由规划的请求恰好一条 trace：规划开始写 partial，生命周期结束幂等升级为 complete（§13.1）。
@@ -890,6 +896,8 @@ func (q *Queries) UpsertRoutingDecisionTrace(ctx context.Context, arg UpsertRout
 		arg.CapacityWaitMs,
 		arg.CapacityWaitResult,
 		arg.TracePayload,
+		arg.AttemptedAccountIds,
+		arg.SelectedAccountID,
 	)
 	return err
 }

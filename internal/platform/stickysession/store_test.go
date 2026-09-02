@@ -22,7 +22,7 @@ func TestBindIfAbsentWritesCanonicalValueAndTTL(t *testing.T) {
 	store, client, server := newTestStore(t)
 	ctx := context.Background()
 
-	bound, result := store.BindIfAbsent(ctx, "session", 7, 30*time.Minute)
+	bound, result := store.BindIfAbsent(ctx, "session", 7, 0, 30*time.Minute)
 	if !result.Applied || result.Conflict || result.StoreUnavailable {
 		t.Fatalf("first bind must apply: %+v", result)
 	}
@@ -58,8 +58,8 @@ func TestBindIfAbsentLosesToExistingBinding(t *testing.T) {
 	store, _, server := newTestStore(t)
 	ctx := context.Background()
 
-	first, _ := store.BindIfAbsent(ctx, "session", 7, 30*time.Minute)
-	_, second := store.BindIfAbsent(ctx, "session", 8, time.Hour)
+	first, _ := store.BindIfAbsent(ctx, "session", 7, 0, 30*time.Minute)
+	_, second := store.BindIfAbsent(ctx, "session", 8, 0, time.Hour)
 	if second.Applied || !second.Conflict {
 		t.Fatalf("second concurrent bind must report CAS conflict: %+v", second)
 	}
@@ -76,7 +76,7 @@ func TestRefreshIfCurrentSlidesTTLAndKeepsVersion(t *testing.T) {
 	store, client, server := newTestStore(t)
 	ctx := context.Background()
 
-	bound, _ := store.BindIfAbsent(ctx, "session", 7, 5*time.Minute)
+	bound, _ := store.BindIfAbsent(ctx, "session", 7, 0, 5*time.Minute)
 	// 把 last_success 往前挪，才能观察续期确实推进了时间。
 	older := binding{
 		Version: bindingSchemaVersion, ChannelID: 7, BindingVersion: bound.BindingVersion,
@@ -90,7 +90,7 @@ func TestRefreshIfCurrentSlidesTTLAndKeepsVersion(t *testing.T) {
 		t.Fatalf("seed older binding: %v", err)
 	}
 
-	next, result := store.RefreshIfCurrent(ctx, "session", 7, bound.BindingVersion, 30*time.Minute)
+	next, result := store.RefreshIfCurrent(ctx, "session", 7, 0, bound.BindingVersion, 30*time.Minute)
 	if !result.Applied {
 		t.Fatalf("refresh with matching identity must apply: %+v", result)
 	}
@@ -113,17 +113,17 @@ func TestRefreshIfCurrentRejectsStaleIdentity(t *testing.T) {
 	store, _, server := newTestStore(t)
 	ctx := context.Background()
 
-	stale, _ := store.BindIfAbsent(ctx, "session", 7, 10*time.Minute)
-	if applied := store.ClearIfCurrent(ctx, "session", 7, stale.BindingVersion); !applied.Applied {
+	stale, _ := store.BindIfAbsent(ctx, "session", 7, 0, 10*time.Minute)
+	if applied := store.ClearIfCurrent(ctx, "session", 7, 0, stale.BindingVersion); !applied.Applied {
 		t.Fatalf("precondition clear failed: %+v", applied)
 	}
 	// 同一个 channel 被重新绑定 → 新的 binding_version。
-	fresh, _ := store.BindIfAbsent(ctx, "session", 7, 10*time.Minute)
+	fresh, _ := store.BindIfAbsent(ctx, "session", 7, 0, 10*time.Minute)
 	if fresh.BindingVersion == stale.BindingVersion {
 		t.Fatal("rebinding the same channel must produce a new binding_version")
 	}
 
-	_, result := store.RefreshIfCurrent(ctx, "session", 7, stale.BindingVersion, time.Hour)
+	_, result := store.RefreshIfCurrent(ctx, "session", 7, 0, stale.BindingVersion, time.Hour)
 	if result.Applied || !result.Conflict {
 		t.Fatalf("stale binding_version must lose the CAS even on the same channel: %+v", result)
 	}
@@ -131,7 +131,7 @@ func TestRefreshIfCurrentRejectsStaleIdentity(t *testing.T) {
 		t.Fatalf("stale refresh changed TTL: %v", ttl)
 	}
 
-	_, wrongChannel := store.RefreshIfCurrent(ctx, "session", 8, fresh.BindingVersion, time.Hour)
+	_, wrongChannel := store.RefreshIfCurrent(ctx, "session", 8, 0, fresh.BindingVersion, time.Hour)
 	if wrongChannel.Applied || !wrongChannel.Conflict {
 		t.Fatalf("mismatched channel must lose the CAS: %+v", wrongChannel)
 	}
@@ -141,19 +141,19 @@ func TestClearIfCurrentOnlyRemovesTheMatchingBinding(t *testing.T) {
 	store, _, _ := newTestStore(t)
 	ctx := context.Background()
 
-	bound, _ := store.BindIfAbsent(ctx, "session", 7, 30*time.Minute)
+	bound, _ := store.BindIfAbsent(ctx, "session", 7, 0, 30*time.Minute)
 
-	if result := store.ClearIfCurrent(ctx, "session", 8, bound.BindingVersion); result.Applied || !result.Conflict {
+	if result := store.ClearIfCurrent(ctx, "session", 8, 0, bound.BindingVersion); result.Applied || !result.Conflict {
 		t.Fatalf("clearing a different channel must be a CAS conflict: %+v", result)
 	}
-	if result := store.ClearIfCurrent(ctx, "session", 7, bound.BindingVersion+1); result.Applied || !result.Conflict {
+	if result := store.ClearIfCurrent(ctx, "session", 7, 0, bound.BindingVersion+1); result.Applied || !result.Conflict {
 		t.Fatalf("clearing a different version must be a CAS conflict: %+v", result)
 	}
 	if lookup := store.Lookup(ctx, "session"); !lookup.Found {
 		t.Fatal("failed CAS clears must not delete the binding")
 	}
 
-	if result := store.ClearIfCurrent(ctx, "session", 7, bound.BindingVersion); !result.Applied {
+	if result := store.ClearIfCurrent(ctx, "session", 7, 0, bound.BindingVersion); !result.Applied {
 		t.Fatalf("matching clear must apply: %+v", result)
 	}
 	if lookup := store.Lookup(ctx, "session"); lookup.Found {
@@ -163,7 +163,7 @@ func TestClearIfCurrentOnlyRemovesTheMatchingBinding(t *testing.T) {
 
 func TestClearIfCurrentOnMissingBindingIsConflictNotError(t *testing.T) {
 	store, _, _ := newTestStore(t)
-	result := store.ClearIfCurrent(context.Background(), "absent", 7, 1)
+	result := store.ClearIfCurrent(context.Background(), "absent", 7, 0, 1)
 	if result.Applied || result.StoreUnavailable || !result.Conflict {
 		t.Fatalf("clearing an absent binding must be a benign conflict: %+v", result)
 	}
@@ -174,11 +174,13 @@ func TestLookupTreatsNonCanonicalValueAsMiss(t *testing.T) {
 	ctx := context.Background()
 	for name, value := range map[string]string{
 		"legacy integer":  "7",
-		"legacy v2":       `{"v":2,"channel_id":7,"bound_at_ms":1}`,
-		"legacy v3":       `{"v":3,"channel_id":7,"last_success_at_ms":1}`,
+		"v2 wrong shape":  `{"v":2,"channel_id":7,"bound_at_ms":1}`,
+		"legacy v1":       `{"v":1,"channel_id":7,"binding_version":1,"last_success_at_ms":1}`,
+		"future v3":       `{"v":3,"channel_id":7,"binding_version":1,"last_success_at_ms":1}`,
 		"missing version": `{"channel_id":7,"binding_version":1,"last_success_at_ms":1}`,
-		"zero channel":    `{"v":1,"channel_id":0,"binding_version":1,"last_success_at_ms":1}`,
-		"zero binding":    `{"v":1,"channel_id":7,"binding_version":0,"last_success_at_ms":1}`,
+		"zero channel":    `{"v":2,"channel_id":0,"binding_version":1,"last_success_at_ms":1}`,
+		"zero binding":    `{"v":2,"channel_id":7,"binding_version":0,"last_success_at_ms":1}`,
+		"negative account": `{"v":2,"channel_id":7,"account_id":-1,"binding_version":1,"last_success_at_ms":1}`,
 		"not json":        `not-json`,
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -195,20 +197,20 @@ func TestLookupTreatsNonCanonicalValueAsMiss(t *testing.T) {
 func TestStoreFailuresAreReportedButNeverFatal(t *testing.T) {
 	store, client, server := newTestStore(t)
 	ctx := context.Background()
-	bound, _ := store.BindIfAbsent(ctx, "session", 7, 30*time.Minute)
+	bound, _ := store.BindIfAbsent(ctx, "session", 7, 0, 30*time.Minute)
 	server.Close()
 	_ = client
 
 	if lookup := store.Lookup(ctx, "session"); lookup.Found || !lookup.StoreUnavailable {
 		t.Fatalf("lookup on a dead store must report store_unavailable: %+v", lookup)
 	}
-	if _, result := store.BindIfAbsent(ctx, "session", 8, time.Minute); !result.StoreUnavailable {
+	if _, result := store.BindIfAbsent(ctx, "session", 8, 0, time.Minute); !result.StoreUnavailable {
 		t.Fatalf("bind on a dead store must report store_unavailable: %+v", result)
 	}
-	if _, result := store.RefreshIfCurrent(ctx, "session", 7, bound.BindingVersion, time.Minute); !result.StoreUnavailable {
+	if _, result := store.RefreshIfCurrent(ctx, "session", 7, 0, bound.BindingVersion, time.Minute); !result.StoreUnavailable {
 		t.Fatalf("refresh on a dead store must report store_unavailable: %+v", result)
 	}
-	if result := store.ClearIfCurrent(ctx, "session", 7, bound.BindingVersion); !result.StoreUnavailable {
+	if result := store.ClearIfCurrent(ctx, "session", 7, 0, bound.BindingVersion); !result.StoreUnavailable {
 		t.Fatalf("clear on a dead store must report store_unavailable: %+v", result)
 	}
 }

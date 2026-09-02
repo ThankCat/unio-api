@@ -2,11 +2,13 @@ package lifecycle
 
 import (
 	"context"
+
 	"errors"
 	"time"
 
 	"go.uber.org/zap"
 
+	"github.com/ThankCat/unio-gateway/internal/core/accountpool"
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
@@ -304,18 +306,19 @@ func RunStreamGeneric[C any](ctx context.Context, r *AttemptRunner, params RunSt
 	var lastErr error
 	var denials attemptDenialSummary
 	// 全池短等（§9.3/§9.4）：先扫描完整候选池；只有「从未取得 permit 且全部只因并发满」才等待一次并重扫一次。
-	// attemptedChannels 从状态机上禁止 A -> B -> A（§3.5）。
+	// channelTransports 从状态机上禁止 A -> B -> A（§3.5）；池型渠道的传输预算含一次换号重试（边界 6）。
 	capacityWaitUsed := false
 	capacityWaitLogged := false
 	var capacityWaitDuration time.Duration
-	attemptedChannels := make(map[int64]bool, len(params.Candidates))
+	scanCandidates := expandPoolRetryCandidates(params.Candidates)
+	channelTransports := make(map[int64]int, len(params.Candidates))
 	// 池型候选按账号取 permit，同一账号在单请求内绝不重复（边界 6）；credential 型候选不写这张表。
 	attemptedAccounts := make(map[int64]bool)
 	permitAcquired := false
 
 scan:
 	for pass := 0; ; pass++ {
-		for candIdx, prepared := range params.Candidates {
+		for candIdx, prepared := range scanCandidates {
 			index := prepared.RouteIndex
 			candidate := prepared.Route
 			candidateInputTokens := prepared.InputEstimate
@@ -323,8 +326,8 @@ scan:
 				candidateInputTokens = params.ConservativeInputTokens
 			}
 
-			// 已真实发起过上游调用的 Channel 不得再次调用（§3.5 禁止 A -> B -> A）。
-			if attemptedChannels[candidate.Channel.ID] {
+			// 真实上游调用次数达到预算的 Channel 不得再次调用（§3.5；池型预算给换号重试留了一次）。
+			if channelTransports[candidate.Channel.ID] >= transportBudget(prepared) {
 				continue
 			}
 
@@ -341,10 +344,14 @@ scan:
 			}
 
 			var permitOwner *AttemptPermitOwner
+			var permitAccount accountpool.Member
 			if r.permitManager != nil {
-				admission, owner, _, err := r.acquireCandidatePermit(
-					ctx, prepared, l.upstreamEndpoint(), breakerstore.ModeStream, candidateInputTokens, attemptedAccounts,
+				acquire, err := r.acquireCandidatePermit(
+					ctx, prepared, l.upstreamEndpoint(), breakerstore.ModeStream, candidateInputTokens,
+					params.Sticky.BoundAccountIDFor(candidate.Channel.ID), attemptedAccounts,
 				)
+				admission := acquire.Admission
+				permitAccount = acquire.Account
 				if err != nil {
 					if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
 						l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
@@ -363,9 +370,13 @@ scan:
 						l.MarkRequestFailed(ctx, requestRecord, string(failure.CodeGatewayBreakerStoreUnavailable), err)
 						return result, err
 					}
+					// 池已在本请求内试尽：不是池状态事实，不进拒绝汇总（每个号的真实拒因已记录过）。
+					if admission.Reason == breakerstore.ReasonAccountPoolExhausted {
+						continue
+					}
 					denials.Record(admission)
 					skipReason := attemptDeniedSkipReason(admission.Reason)
-					result.recordScan(pass, candidate.Channel.ID, false, skipReason)
+					result.recordScan(pass, candidate.Channel.ID, false, skipReason, acquire.TriedAccountIDs)
 					r.recordRoutingSkip(skipReason)
 					r.logRouting(ctx, "routing candidate skipped",
 						zap.Int64("channel_id", candidate.Channel.ID),
@@ -378,13 +389,13 @@ scan:
 					case breakerstore.ReasonConcurrencyFull, breakerstore.ReasonCooldown:
 						params.Sticky.PreserveOnTemporaryBypass(ctx, candidate.Channel.ID, string(admission.Reason))
 					}
-					if candIdx+1 < len(params.Candidates) {
+					if candIdx+1 < len(scanCandidates) {
 						result.RoutingFallback = true
 						l.RecordBalanceFallback(candidate.ModelDBID, skipReason)
 					}
 					continue
 				}
-				permitOwner = owner
+				permitOwner = acquire.Owner
 				permitAcquired = true
 				if capacityWaitUsed && pass > 0 {
 					result.CapacityWaitResult = string(capacityWaitAcquired)
@@ -393,7 +404,7 @@ scan:
 						capacityWaitLogged = true
 					}
 				}
-				result.recordScan(pass, candidate.Channel.ID, true, "")
+				result.recordScan(pass, candidate.Channel.ID, true, "", acquire.TriedAccountIDs)
 				// Install the terminal fallback before attempt persistence and stream setup can fail or panic.
 				defer abortAttemptPermitOnExit(ctx, permitOwner)
 			}
@@ -420,9 +431,9 @@ scan:
 				l.MarkRequestFailed(ctx, requestRecord, "request_attempt_create_failed", err)
 				return result, err
 			}
-			result.recordTransportAttempt(candidate, l.upstreamEndpoint())
-			// 真实上游调用即将发生：登记 Channel，后续（含短等重扫）不得再次调用它（§3.5）。
-			attemptedChannels[candidate.Channel.ID] = true
+			result.recordTransportAttempt(candidate, l.upstreamEndpoint(), permitAccount.ID)
+			// 真实上游调用即将发生：消耗该 Channel 的传输预算（§3.5；池型的预算含一次换号重试）。
+			channelTransports[candidate.Channel.ID]++
 
 			// emitted 表示是否已向客户端写出过 SSE 帧。一旦写出开始就不能再 fallback，否则同一个 SSE
 			// 响应会混入不同上游内容。
@@ -588,7 +599,8 @@ scan:
 				// 仅路线 D（上游完整服务、仅缺 usage）视为成功 attempt 参与 sticky 绑定；
 				// 取消/中断不绑（渠道未完整交付，不据此改写粘性事实）。
 				if outcome == metrics.ChatOutcomeSuccess {
-					params.Sticky.BindSuccess(ctx, candidate)
+					params.Sticky.BindSuccessWithAccount(ctx, candidate, permitAccount.ID)
+					result.SelectedAccountID = permitAccount.ID
 				}
 
 				result.Outcome = outcome
@@ -987,7 +999,7 @@ scan:
 
 				// 客户帧写出前的可重试错误切换候选：前一候选可能已在上游产生成本却不会被结算（P2-3），记指标供监控。
 				l.RecordRetryableFallback(err)
-				if candIdx+1 < len(params.Candidates) {
+				if candIdx+1 < len(scanCandidates) {
 					result.RoutingFallback = true
 					category, _ := adapter.UpstreamCategoryOf(err)
 					l.RecordBalanceFallback(candidate.ModelDBID, "upstream_"+string(category))
@@ -1079,8 +1091,9 @@ scan:
 			// 流式正常结束（路线 A）：所有 chunk 与收尾帧已写出，交付完成。
 			l.MarkDeliveryCompleted(ctx, requestRecord)
 
-			// attempt 成功：sticky bind/改绑（决议 2）。
-			params.Sticky.BindSuccess(ctx, candidate)
+			// attempt 成功：sticky bind/改绑（决议 2）；池型渠道把账号一并写入绑定值。
+			params.Sticky.BindSuccessWithAccount(ctx, candidate, permitAccount.ID)
+			result.SelectedAccountID = permitAccount.ID
 
 			// 零价渠道误配监控（P2-4）：售价快照全部非正即客户侧 $0 收入，记指标供运维定位误配渠道。
 			if candidate.SalePrice.IsEffectivelyFree() {

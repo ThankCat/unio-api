@@ -36,6 +36,7 @@ type fakeStickyStore struct {
 type stickyWriteCall struct {
 	key            string
 	channelID      int64
+	accountID      int64
 	bindingVersion int64
 	ttl            time.Duration
 }
@@ -61,9 +62,9 @@ func (s *fakeStickyStore) Lookup(_ context.Context, key string) stickysession.Lo
 }
 
 func (s *fakeStickyStore) BindIfAbsent(
-	_ context.Context, key string, channelID int64, ttl time.Duration,
+	_ context.Context, key string, channelID, accountID int64, ttl time.Duration,
 ) (stickysession.Binding, stickysession.CASResult) {
-	s.bindCalls = append(s.bindCalls, stickyWriteCall{key: key, channelID: channelID, ttl: ttl})
+	s.bindCalls = append(s.bindCalls, stickyWriteCall{key: key, channelID: channelID, accountID: accountID, ttl: ttl})
 	if s.unavailable {
 		return stickysession.Binding{}, stickysession.CASResult{StoreUnavailable: true}
 	}
@@ -71,23 +72,23 @@ func (s *fakeStickyStore) BindIfAbsent(
 		return stickysession.Binding{}, stickysession.CASResult{Conflict: true}
 	}
 	next := stickysession.Binding{
-		ChannelID: channelID, BindingVersion: s.allocVersion(), LastSuccessAt: time.Now(),
+		ChannelID: channelID, AccountID: accountID, BindingVersion: s.allocVersion(), LastSuccessAt: time.Now(),
 	}
 	s.bindings[key] = next
 	return next, stickysession.CASResult{Applied: true}
 }
 
 func (s *fakeStickyStore) RefreshIfCurrent(
-	_ context.Context, key string, channelID, bindingVersion int64, ttl time.Duration,
+	_ context.Context, key string, channelID, accountID, bindingVersion int64, ttl time.Duration,
 ) (stickysession.Binding, stickysession.CASResult) {
 	s.refreshCalls = append(s.refreshCalls, stickyWriteCall{
-		key: key, channelID: channelID, bindingVersion: bindingVersion, ttl: ttl,
+		key: key, channelID: channelID, accountID: accountID, bindingVersion: bindingVersion, ttl: ttl,
 	})
 	if s.unavailable {
 		return stickysession.Binding{}, stickysession.CASResult{StoreUnavailable: true}
 	}
 	current, ok := s.bindings[key]
-	if !ok || current.ChannelID != channelID || current.BindingVersion != bindingVersion {
+	if !ok || current.ChannelID != channelID || current.AccountID != accountID || current.BindingVersion != bindingVersion {
 		return stickysession.Binding{}, stickysession.CASResult{Conflict: true}
 	}
 	current.LastSuccessAt = time.Now()
@@ -96,16 +97,16 @@ func (s *fakeStickyStore) RefreshIfCurrent(
 }
 
 func (s *fakeStickyStore) ClearIfCurrent(
-	_ context.Context, key string, channelID, bindingVersion int64,
+	_ context.Context, key string, channelID, accountID, bindingVersion int64,
 ) stickysession.CASResult {
 	s.clearCalls = append(s.clearCalls, stickyWriteCall{
-		key: key, channelID: channelID, bindingVersion: bindingVersion,
+		key: key, channelID: channelID, accountID: accountID, bindingVersion: bindingVersion,
 	})
 	if s.unavailable {
 		return stickysession.CASResult{StoreUnavailable: true}
 	}
 	current, ok := s.bindings[key]
-	if !ok || current.ChannelID != channelID || current.BindingVersion != bindingVersion {
+	if !ok || current.ChannelID != channelID || current.AccountID != accountID || current.BindingVersion != bindingVersion {
 		return stickysession.CASResult{Conflict: true}
 	}
 	delete(s.bindings, key)
@@ -425,13 +426,13 @@ func TestStickyResolveClearsBindingWhenChannelDisablesSticky(t *testing.T) {
 // TestStickyRedisKeyIncludesModelAndHashesSession 冻结 §10.1 的 key 形状。
 func TestStickyRedisKeyIncludesModelAndHashesSession(t *testing.T) {
 	key := stickyRedisKey(routing.ProtocolOpenAI, 42, 31, "raw-session-key")
-	if !strings.HasPrefix(key, "sticky:openai:42:31:") {
+	if !strings.HasPrefix(key, "sticky:v2:openai:42:31:") {
 		t.Fatalf("unexpected key prefix: %s", key)
 	}
 	if strings.Contains(key, "raw-session-key") {
 		t.Fatalf("raw session key must be hashed, got %s", key)
 	}
-	if hash := strings.TrimPrefix(key, "sticky:openai:42:31:"); len(hash) != 32 {
+	if hash := strings.TrimPrefix(key, "sticky:v2:openai:42:31:"); len(hash) != 32 {
 		t.Fatalf("expected a 32-hex hash, got %q (len %d)", hash, len(hash))
 	}
 	if key != stickyRedisKey(routing.ProtocolOpenAI, 42, 31, "raw-session-key") {

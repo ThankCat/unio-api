@@ -144,6 +144,11 @@ type RunResult struct {
 	ActualScanOrder     []int64
 	AttemptedChannelIDs []int64
 
+	// AttemptedAccountIDs 只含真实发起过上游调用的订阅账号（池型渠道，边界 14：
+	// 只记实际尝试过的账号，不记全池逐号评分）；SelectedAccountID 是最终成功传输的账号，0=非池。
+	AttemptedAccountIDs []int64
+	SelectedAccountID   int64
+
 	// AcquireResults 按扫描顺序记录每个候选的 acquire 结果，供 trace 解释「为什么跳过它」。
 	AcquireResults []AcquireOutcome
 
@@ -165,32 +170,45 @@ type TransportAttempt struct {
 
 // AcquireOutcome 是一轮全池扫描中对某个候选的 acquire 结果（§13.3）。
 // Pass 从 0 开始；短等之后的重扫是 pass=1。
+// TriedAccountIDs 是该次扫描内池型候选真实向 Redis 发起过 acquire 的账号（credential 型为空）。
 type AcquireOutcome struct {
-	Pass      int    `json:"pass"`
-	ChannelID int64  `json:"channel_id"`
-	Admitted  bool   `json:"admitted"`
-	Reason    string `json:"reason,omitempty"`
+	Pass            int     `json:"pass"`
+	ChannelID       int64   `json:"channel_id"`
+	Admitted        bool    `json:"admitted"`
+	Reason          string  `json:"reason,omitempty"`
+	TriedAccountIDs []int64 `json:"tried_account_ids,omitempty"`
 }
 
-func (r *RunResult) recordScan(pass int, channelID int64, admitted bool, reason string) {
+func (r *RunResult) recordScan(pass int, channelID int64, admitted bool, reason string, triedAccounts []int64) {
 	r.ActualScanOrder = append(r.ActualScanOrder, channelID)
 	r.AcquireResults = append(r.AcquireResults, AcquireOutcome{
 		Pass: pass, ChannelID: channelID, Admitted: admitted, Reason: reason,
+		TriedAccountIDs: triedAccounts,
 	})
 }
 
-func (r *RunResult) recordTransportAttempt(candidate routing.ChatRouteCandidate, endpoint requestlog.UpstreamEndpoint) {
+func (r *RunResult) recordTransportAttempt(candidate routing.ChatRouteCandidate, endpoint requestlog.UpstreamEndpoint, accountID int64) {
 	r.Attempts++
 	r.TransportChain = append(r.TransportChain, TransportAttempt{
 		ChannelID:        candidate.Channel.ID,
 		UpstreamEndpoint: endpoint,
 	})
-	for _, existing := range r.AttemptedChannelIDs {
-		if existing == candidate.Channel.ID {
-			return
-		}
+	if accountID > 0 && !containsID(r.AttemptedAccountIDs, accountID) {
+		r.AttemptedAccountIDs = append(r.AttemptedAccountIDs, accountID)
+	}
+	if containsID(r.AttemptedChannelIDs, candidate.Channel.ID) {
+		return
 	}
 	r.AttemptedChannelIDs = append(r.AttemptedChannelIDs, candidate.Channel.ID)
+}
+
+func containsID(ids []int64, id int64) bool {
+	for _, existing := range ids {
+		if existing == id {
+			return true
+		}
+	}
+	return false
 }
 
 // RunNonStreamCodes 是共享非流式候选循环里的审计 code/reason 覆盖项。
@@ -249,18 +267,21 @@ func (r *AttemptRunner) RunNonStream(ctx context.Context, params RunNonStreamPar
 	var lastErr error
 	var denials attemptDenialSummary
 	// 全池短等（§9.3/§9.4）：第一轮扫描完整候选池；只有「没有取得任何 permit 且全部只因并发满」
-	// 才允许等待一次，然后只做一次完整重扫。attemptedChannels 从状态机上禁止 A -> B -> A（§3.5）。
+	// 才允许等待一次，然后只做一次完整重扫。channelTransports 从状态机上禁止 A -> B -> A（§3.5）——
+	// credential 型预算恒 1；池型预算 poolChannelTransportBudget（边界 6：同渠道换号重试），
+	// 展开后的候选列表把重试机会紧排在原候选之后（A(a1) → A(a2) → B）。
 	capacityWaitUsed := false
 	capacityWaitLogged := false
 	var capacityWaitDuration time.Duration
-	attemptedChannels := make(map[int64]bool, len(params.Candidates))
+	scanCandidates := expandPoolRetryCandidates(params.Candidates)
+	channelTransports := make(map[int64]int, len(params.Candidates))
 	// 池型候选按账号取 permit，同一账号在单请求内绝不重复（边界 6）；credential 型候选不写这张表。
 	attemptedAccounts := make(map[int64]bool)
 	permitAcquired := false
 
 scan:
 	for pass := 0; ; pass++ {
-		for candIdx, prepared := range params.Candidates {
+		for candIdx, prepared := range scanCandidates {
 			index := prepared.RouteIndex
 			candidate := prepared.Route
 			candidateInputTokens := prepared.InputEstimate
@@ -272,8 +293,9 @@ scan:
 				endpoint = params.EndpointForCandidate(candidate)
 			}
 
-			// 同一 logical request 内，已真实发起过上游调用的 Channel 不得再次调用（§3.5 禁止 A -> B -> A）。
-			if attemptedChannels[candidate.Channel.ID] {
+			// 同一 logical request 内，真实上游调用次数达到预算的 Channel 不得再次调用
+			//（§3.5 禁止 A -> B -> A；池型的预算给「同渠道换号重试」留了一次机会）。
+			if channelTransports[candidate.Channel.ID] >= transportBudget(prepared) {
 				continue
 			}
 
@@ -292,10 +314,12 @@ scan:
 			var permitOwner *AttemptPermitOwner
 			var permitAccount accountpool.Member
 			if r.permitManager != nil {
-				admission, owner, account, err := r.acquireCandidatePermit(
-					ctx, prepared, endpoint, breakerstore.ModeNonStream, candidateInputTokens, attemptedAccounts,
+				acquire, err := r.acquireCandidatePermit(
+					ctx, prepared, endpoint, breakerstore.ModeNonStream, candidateInputTokens,
+					params.Sticky.BoundAccountIDFor(candidate.Channel.ID), attemptedAccounts,
 				)
-				permitAccount = account
+				admission := acquire.Admission
+				permitAccount = acquire.Account
 				if err != nil {
 					if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
 						l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
@@ -314,9 +338,13 @@ scan:
 						l.MarkRequestFailed(ctx, requestRecord, string(failure.CodeGatewayBreakerStoreUnavailable), err)
 						return result, err
 					}
+					// 池已在本请求内试尽：不是池状态事实，不进拒绝汇总（每个号的真实拒因已记录过）。
+					if admission.Reason == breakerstore.ReasonAccountPoolExhausted {
+						continue
+					}
 					denials.Record(admission)
 					skipReason := attemptDeniedSkipReason(admission.Reason)
-					result.recordScan(pass, candidate.Channel.ID, false, skipReason)
+					result.recordScan(pass, candidate.Channel.ID, false, skipReason, acquire.TriedAccountIDs)
 					r.recordRoutingSkip(skipReason)
 					r.logRouting(ctx, "routing candidate skipped",
 						zap.Int64("channel_id", candidate.Channel.ID),
@@ -330,13 +358,13 @@ scan:
 					case breakerstore.ReasonConcurrencyFull, breakerstore.ReasonCooldown:
 						params.Sticky.PreserveOnTemporaryBypass(ctx, candidate.Channel.ID, string(admission.Reason))
 					}
-					if candIdx+1 < len(params.Candidates) {
+					if candIdx+1 < len(scanCandidates) {
 						result.RoutingFallback = true
 						l.RecordBalanceFallback(candidate.ModelDBID, skipReason)
 					}
 					continue
 				}
-				permitOwner = owner
+				permitOwner = acquire.Owner
 				permitAcquired = true
 				if capacityWaitUsed && pass > 0 {
 					result.CapacityWaitResult = string(capacityWaitAcquired)
@@ -345,7 +373,7 @@ scan:
 						capacityWaitLogged = true
 					}
 				}
-				result.recordScan(pass, candidate.Channel.ID, true, "")
+				result.recordScan(pass, candidate.Channel.ID, true, "", acquire.TriedAccountIDs)
 				// Arm the terminal fallback before attempt persistence or any other fallible work.
 				// Abort is first-terminal-wins, so this is a no-op after the normal Finish/Abort path.
 				defer abortAttemptPermitOnExit(ctx, permitOwner)
@@ -372,9 +400,9 @@ scan:
 				l.MarkRequestFailed(ctx, requestRecord, "request_attempt_create_failed", err)
 				return result, err
 			}
-			result.recordTransportAttempt(candidate, endpoint)
-			// 真实上游调用即将发生：登记 Channel，后续（含短等重扫）不得再次调用它（§3.5）。
-			attemptedChannels[candidate.Channel.ID] = true
+			result.recordTransportAttempt(candidate, endpoint, permitAccount.ID)
+			// 真实上游调用即将发生：消耗该 Channel 的传输预算（§3.5；池型的预算含一次换号重试）。
+			channelTransports[candidate.Channel.ID]++
 
 			upstreamStart := time.Now()
 			success, timingFacts, err := r.invokeNonStreamAttempt(ctx, requestRecord, candidate, attemptRecord, permitOwner, candidateInputTokens, params.Invoke)
@@ -465,7 +493,7 @@ scan:
 						case breakerstore.ReasonConcurrencyFull, breakerstore.ReasonCooldown:
 							params.Sticky.PreserveOnTemporaryBypass(ctx, candidate.Channel.ID, string(admission.Reason))
 						}
-						if candIdx+1 < len(params.Candidates) {
+						if candIdx+1 < len(scanCandidates) {
 							l.RecordBalanceFallback(candidate.ModelDBID, skipReason)
 						}
 						continue
@@ -495,7 +523,7 @@ scan:
 					l.MarkRequestFailed(ctx, requestRecord, "request_attempt_create_failed", createErr)
 					return result, createErr
 				}
-				result.recordTransportAttempt(candidate, fallback.UpstreamEndpoint)
+				result.recordTransportAttempt(candidate, fallback.UpstreamEndpoint, permitAccount.ID)
 				attemptRecord = fallbackAttempt
 
 				upstreamStart = time.Now()
@@ -562,8 +590,10 @@ scan:
 					return result, err
 				}
 				// 可重试错误切换候选：前一候选可能已在上游产生成本却不会被结算（P2-3），记指标供监控。
+				// 池型候选的下一项就是自身的换号重试位（expandPoolRetryCandidates），
+				// 因此 A(a1) 失败后先试 A(a2)，再落到 B。
 				l.RecordRetryableFallback(err)
-				if candIdx+1 < len(params.Candidates) {
+				if candIdx+1 < len(scanCandidates) {
 					result.RoutingFallback = true
 					category, _ := adapter.UpstreamCategoryOf(err)
 					l.RecordBalanceFallback(candidate.ModelDBID, "upstream_"+string(category))
@@ -634,9 +664,11 @@ scan:
 			}
 
 			// attempt 成功：sticky bind/改绑（决议 2）。跳过/失败候选不会走到这里，天然不覆盖绑定。
-			params.Sticky.BindSuccess(ctx, candidate)
+			// 池型渠道把账号一并写入绑定值（credential 型 permitAccount.ID 恒 0，行为不变）。
+			params.Sticky.BindSuccessWithAccount(ctx, candidate, permitAccount.ID)
 
 			result.Outcome = metrics.ChatOutcomeSuccess
+			result.SelectedAccountID = permitAccount.ID
 			result.Delivery = l.NewNonStreamDeliveryFinalizer(ctx, requestRecord)
 			return result, nil
 		}

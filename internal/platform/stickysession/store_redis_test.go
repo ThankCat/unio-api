@@ -40,41 +40,66 @@ func TestRealRedisCASContract(t *testing.T) {
 	store := newRealRedisStore(t)
 	ctx := context.Background()
 
-	bound, result := store.BindIfAbsent(ctx, "session", 7, 30*time.Minute)
+	bound, result := store.BindIfAbsent(ctx, "session", 7, 21, 30*time.Minute)
 	if !result.Applied || bound.BindingVersion <= 0 {
 		t.Fatalf("bind_if_absent on real redis: binding=%+v result=%+v", bound, result)
 	}
-	if _, second := store.BindIfAbsent(ctx, "session", 8, time.Hour); !second.Conflict {
+	if _, second := store.BindIfAbsent(ctx, "session", 8, 22, time.Hour); !second.Conflict {
 		t.Fatalf("second bind must conflict on real redis: %+v", second)
 	}
 
-	// Lua CAS 必须同时比较 channel_id 与 binding_version。
-	if _, mismatch := store.RefreshIfCurrent(ctx, "session", 8, bound.BindingVersion, time.Hour); !mismatch.Conflict {
+	// Lua CAS 必须同时比较 channel_id、account_id 与 binding_version（v2 三分量）。
+	if _, mismatch := store.RefreshIfCurrent(ctx, "session", 8, 21, bound.BindingVersion, time.Hour); !mismatch.Conflict {
 		t.Fatalf("refresh with a wrong channel must conflict: %+v", mismatch)
 	}
-	if _, mismatch := store.RefreshIfCurrent(ctx, "session", 7, bound.BindingVersion+1, time.Hour); !mismatch.Conflict {
+	if _, mismatch := store.RefreshIfCurrent(ctx, "session", 7, 99, bound.BindingVersion, time.Hour); !mismatch.Conflict {
+		t.Fatalf("refresh with a wrong account must conflict: %+v", mismatch)
+	}
+	if _, mismatch := store.RefreshIfCurrent(ctx, "session", 7, 21, bound.BindingVersion+1, time.Hour); !mismatch.Conflict {
 		t.Fatalf("refresh with a wrong version must conflict: %+v", mismatch)
 	}
-	if _, ok := store.RefreshIfCurrent(ctx, "session", 7, bound.BindingVersion, time.Hour); !ok.Applied {
+	if _, ok := store.RefreshIfCurrent(ctx, "session", 7, 21, bound.BindingVersion, time.Hour); !ok.Applied {
 		t.Fatalf("refresh with the matching identity must apply: %+v", ok)
 	}
 
 	if lookup := store.Lookup(ctx, "session"); !lookup.Found ||
-		lookup.Binding.ChannelID != 7 || lookup.Binding.BindingVersion != bound.BindingVersion {
+		lookup.Binding.ChannelID != 7 || lookup.Binding.AccountID != 21 ||
+		lookup.Binding.BindingVersion != bound.BindingVersion {
 		t.Fatalf("real-redis lookup must round-trip the CAS identity: %+v", lookup)
 	}
 
-	if mismatch := store.ClearIfCurrent(ctx, "session", 7, bound.BindingVersion+1); !mismatch.Conflict {
+	if mismatch := store.ClearIfCurrent(ctx, "session", 7, 21, bound.BindingVersion+1); !mismatch.Conflict {
 		t.Fatalf("clear with a wrong version must conflict: %+v", mismatch)
+	}
+	if mismatch := store.ClearIfCurrent(ctx, "session", 7, 99, bound.BindingVersion); !mismatch.Conflict {
+		t.Fatalf("clear with a wrong account must conflict: %+v", mismatch)
 	}
 	if lookup := store.Lookup(ctx, "session"); !lookup.Found {
 		t.Fatal("a failed CAS clear must not delete the binding on real redis")
 	}
-	if ok := store.ClearIfCurrent(ctx, "session", 7, bound.BindingVersion); !ok.Applied {
+	if ok := store.ClearIfCurrent(ctx, "session", 7, 21, bound.BindingVersion); !ok.Applied {
 		t.Fatalf("clear with the matching identity must apply: %+v", ok)
 	}
 	if lookup := store.Lookup(ctx, "session"); lookup.Found {
 		t.Fatalf("binding must be gone after a matching clear: %+v", lookup)
+	}
+}
+
+// TestRealRedisCredentialBindingHasNoAccountComponent 冻结 credential 型渠道的零账号分量行为：
+// account_id=0 的绑定照常 CAS，与账号 CAS 不互相干扰。
+func TestRealRedisCredentialBindingHasNoAccountComponent(t *testing.T) {
+	store := newRealRedisStore(t)
+	ctx := context.Background()
+
+	bound, result := store.BindIfAbsent(ctx, "credential", 7, 0, time.Minute)
+	if !result.Applied {
+		t.Fatalf("credential bind: %+v", result)
+	}
+	if _, ok := store.RefreshIfCurrent(ctx, "credential", 7, 0, bound.BindingVersion, time.Minute); !ok.Applied {
+		t.Fatalf("credential refresh must apply with account 0: %+v", ok)
+	}
+	if cleared := store.ClearIfCurrent(ctx, "credential", 7, 0, bound.BindingVersion); !cleared.Applied {
+		t.Fatalf("credential clear must apply with account 0: %+v", cleared)
 	}
 }
 
@@ -85,7 +110,7 @@ func TestRealRedisBindingVersionStaysLuaExact(t *testing.T) {
 	ctx := context.Background()
 
 	for i := 0; i < 50; i++ {
-		bound, result := store.BindIfAbsent(ctx, "version-range", 7, time.Minute)
+		bound, result := store.BindIfAbsent(ctx, "version-range", 7, 0, time.Minute)
 		if !result.Applied {
 			t.Fatalf("bind %d: %+v", i, result)
 		}
@@ -93,10 +118,10 @@ func TestRealRedisBindingVersionStaysLuaExact(t *testing.T) {
 			t.Fatalf("binding_version %d is outside the Lua-exact range", bound.BindingVersion)
 		}
 		// 相邻 version 必须被 Lua 区分开。
-		if _, offByOne := store.RefreshIfCurrent(ctx, "version-range", 7, bound.BindingVersion+1, time.Minute); !offByOne.Conflict {
+		if _, offByOne := store.RefreshIfCurrent(ctx, "version-range", 7, 0, bound.BindingVersion+1, time.Minute); !offByOne.Conflict {
 			t.Fatalf("version %d+1 was not distinguishable in Lua: %+v", bound.BindingVersion, offByOne)
 		}
-		if cleared := store.ClearIfCurrent(ctx, "version-range", 7, bound.BindingVersion); !cleared.Applied {
+		if cleared := store.ClearIfCurrent(ctx, "version-range", 7, 0, bound.BindingVersion); !cleared.Applied {
 			t.Fatalf("cleanup clear %d: %+v", i, cleared)
 		}
 	}

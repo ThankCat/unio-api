@@ -101,6 +101,10 @@ type RoutingDecisionTraceInput struct {
 	FinalResult         string
 	CapacityWaitMs      *int64
 	CapacityWaitResult  string
+
+	// 账号维度（边界 14）：只记真实发起过上游调用的账号与最终选中账号，不记全池逐号评分。
+	AttemptedAccountIDs []int64
+	SelectedAccountID   int64
 }
 
 // tracePayload 是 §13.3 要求的完整结构化路由过程。
@@ -116,6 +120,7 @@ type tracePayload struct {
 	AcquireResults   []AcquireOutcome      `json:"acquire_results"`
 	Attempts         []TransportAttempt    `json:"attempts"`
 	AttemptedChannel []int64               `json:"attempted_channel_ids"`
+	AttemptedAccount []int64               `json:"attempted_account_ids"`
 	Sticky           tracePayloadSticky    `json:"sticky"`
 	CapacityWait     tracePayloadWait      `json:"capacity_wait"`
 	ScoreConfig      tracePayloadScoreCfg  `json:"score_config"`
@@ -328,6 +333,7 @@ func (r *RoutingTraceRecorder) record(ctx context.Context, in RoutingDecisionTra
 		AcquireResults:   nonNilAcquireOutcomes(in.AcquireResults),
 		Attempts:         nonNilTransportAttempts(in.FallbackChain),
 		AttemptedChannel: nonNilInt64s(in.AttemptedChannelIDs),
+		AttemptedAccount: nonNilInt64s(in.AttemptedAccountIDs),
 		Sticky: tracePayloadSticky{
 			KeyPresent: audit.KeyPresent, BeforeChannelID: audit.BeforeChannelID,
 			BeforeVersion: audit.BeforeVersion, Action: string(audit.Action), Reason: audit.Reason,
@@ -408,7 +414,9 @@ func (r *RoutingTraceRecorder) record(ctx context.Context, in RoutingDecisionTra
 		BaselineOrder:         nonNilInt64s(in.Plan.BaselineOrder),
 		ActualScanOrder:       nonNilInt64s(in.ActualScanOrder),
 		AttemptedChannelIds:   nonNilInt64s(in.AttemptedChannelIDs),
+		AttemptedAccountIds:   nonNilInt64s(in.AttemptedAccountIDs),
 		SelectedChannelID:     optionalTraceInt64(in.SelectedChannelID),
+		SelectedAccountID:     optionalTraceInt64(in.SelectedAccountID),
 		FallbackCount:         int32(in.FallbackCount),
 		FinalResult:           optionalTraceText(in.FinalResult),
 		CapacityWaitMs:        optionalTraceInt32(in.CapacityWaitMs),
@@ -619,6 +627,8 @@ func (l *RequestLifecycle) CompleteRoutingTrace(
 	in.Status = TraceStatusComplete
 	in.ActualScanOrder = result.ActualScanOrder
 	in.AttemptedChannelIDs = result.AttemptedChannelIDs
+	in.AttemptedAccountIDs = result.AttemptedAccountIDs
+	in.SelectedAccountID = result.SelectedAccountID
 	in.AcquireResults = result.AcquireResults
 	in.FallbackChain = result.TransportChain
 	in.FallbackOccurred = result.RoutingFallback

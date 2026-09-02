@@ -149,6 +149,10 @@ const (
 	// ReasonAccountUnschedulable 表示该账号被临时标记不可调度（如 401 后给令牌刷新留窗口）。
 	// 与冷却同样按「到期毫秒」表达，到点自愈。
 	ReasonAccountUnschedulable DeniedReason = "account_unschedulable"
+	// ReasonAccountPoolExhausted 表示该池在本请求内已无未尝试账号（请求级事实，非池状态）。
+	// 由路由层合成，不来自 Lua；调用方应跳过该候选且不将其计入拒绝汇总——
+	// 每个号真实的拒绝原因在首次尝试时已被记录。
+	ReasonAccountPoolExhausted DeniedReason = "account_pool_exhausted"
 	// ReasonCooldown 表示渠道处于上游真实 429 冷却；绝不允许伪装成并发满进入等待（§6.3/§9.3）。
 	ReasonCooldown                DeniedReason = "cooldown"
 	ReasonModelPermissionPaused   DeniedReason = "model_permission_paused"

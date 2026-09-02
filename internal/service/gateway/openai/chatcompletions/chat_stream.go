@@ -83,6 +83,10 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 	// 会话粘性（大 uncache 缺口 P0）：提取会话键并 lookup 既有绑定，置顶绑定渠道；
 	// 粘住渠道已被硬摘除（不在池/熔断）时清绑定重选（R5）。
 	stickyHint := sessionhint.OpenAISessionHint(ctx, req.PromptCacheKey)
+	if stickyHint.Key == "" {
+		// 内容派生兜底（第三节）：无显式会话信号的通用 chat 客户端按消息前缀哈希聚合会话。
+		stickyHint = chatContentHint(req)
+	}
 	stickySession := s.sticky.Resolve(ctx, lifecycle.StickyResolveParams{
 		Protocol:   routing.ProtocolOpenAI,
 		APIKeyID:   principal.APIKeyID,

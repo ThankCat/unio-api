@@ -63,10 +63,11 @@ func TestAcquireCandidatePermitFallsThroughSaturatedAccounts(t *testing.T) {
 	})
 	attempted := map[int64]bool{}
 
-	admission, owner, account, err := runner.acquireCandidatePermit(
+	acquire, err := runner.acquireCandidatePermit(
 		ctx, poolCandidate(1, 2, 3), requestlog.UpstreamEndpointResponses,
-		breakerstore.ModeNonStream, 10, attempted,
+		breakerstore.ModeNonStream, 10, 0, attempted,
 	)
+	admission, owner, account := acquire.Admission, acquire.Owner, acquire.Account
 	if err != nil {
 		t.Fatalf("acquire: %v", err)
 	}
@@ -93,10 +94,11 @@ func TestAcquireCandidatePermitNeverRetriesSameAccount(t *testing.T) {
 	runner, store, ctx := newAccountSelectionRunner([]breakerstore.AttemptAdmission{grantedPermit()})
 	attempted := map[int64]bool{1: true, 2: true}
 
-	admission, owner, account, err := runner.acquireCandidatePermit(
+	acquire, err := runner.acquireCandidatePermit(
 		ctx, poolCandidate(1, 2, 3), requestlog.UpstreamEndpointResponses,
-		breakerstore.ModeNonStream, 10, attempted,
+		breakerstore.ModeNonStream, 10, 0, attempted,
 	)
+	admission, owner, account := acquire.Admission, acquire.Owner, acquire.Account
 	if err != nil {
 		t.Fatalf("acquire: %v", err)
 	}
@@ -117,10 +119,11 @@ func TestAcquireCandidatePermitMapsConcurrencyFullPoolToWaitableDenial(t *testin
 		deniedAccountConcurrency(),
 	})
 
-	admission, owner, _, err := runner.acquireCandidatePermit(
+	acquire, err := runner.acquireCandidatePermit(
 		ctx, poolCandidate(1, 2), requestlog.UpstreamEndpointResponses,
-		breakerstore.ModeNonStream, 10, map[int64]bool{},
+		breakerstore.ModeNonStream, 10, 0, map[int64]bool{},
 	)
+	admission, owner := acquire.Admission, acquire.Owner
 	if err != nil || owner != nil {
 		t.Fatalf("expected a plain denial, owner=%v err=%v", owner, err)
 	}
@@ -137,10 +140,11 @@ func TestAcquireCandidatePermitMapsFullyCooledPoolToCooldown(t *testing.T) {
 		{Mode: breakerstore.AdmissionDenied, Reason: breakerstore.ReasonAccountUnschedulable, CooldownRemainingMs: 3_000},
 	})
 
-	admission, _, _, err := runner.acquireCandidatePermit(
+	acquire, err := runner.acquireCandidatePermit(
 		ctx, poolCandidate(1, 2), requestlog.UpstreamEndpointResponses,
-		breakerstore.ModeNonStream, 10, map[int64]bool{},
+		breakerstore.ModeNonStream, 10, 0, map[int64]bool{},
 	)
+	admission := acquire.Admission
 	if err != nil {
 		t.Fatalf("acquire: %v", err)
 	}
@@ -156,10 +160,11 @@ func TestAcquireCandidatePermitStopsOnChannelScopedDenial(t *testing.T) {
 		grantedPermit(),
 	})
 
-	admission, _, _, err := runner.acquireCandidatePermit(
+	acquire, err := runner.acquireCandidatePermit(
 		ctx, poolCandidate(1, 2, 3), requestlog.UpstreamEndpointResponses,
-		breakerstore.ModeNonStream, 10, map[int64]bool{},
+		breakerstore.ModeNonStream, 10, 0, map[int64]bool{},
 	)
+	admission := acquire.Admission
 	if err != nil {
 		t.Fatalf("acquire: %v", err)
 	}
@@ -176,10 +181,11 @@ func TestAcquireCandidatePermitKeepsCredentialChannelUnchanged(t *testing.T) {
 	runner, store, ctx := newAccountSelectionRunner([]breakerstore.AttemptAdmission{grantedPermit()})
 	attempted := map[int64]bool{}
 
-	_, owner, account, err := runner.acquireCandidatePermit(
+	acquire, err := runner.acquireCandidatePermit(
 		ctx, Candidate{Route: candidateRoute(8, "openai")}, requestlog.UpstreamEndpointResponses,
-		breakerstore.ModeNonStream, 10, attempted,
+		breakerstore.ModeNonStream, 10, 0, attempted,
 	)
+	owner, account := acquire.Owner, acquire.Account
 	if err != nil || owner == nil {
 		t.Fatalf("acquire owner=%v err=%v", owner, err)
 	}
