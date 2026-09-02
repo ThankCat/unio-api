@@ -4,6 +4,30 @@
 > wire 证据：`unio-gateway/sandbox/codex/wire/samples/*.json`（真实抓包脱敏样例，实现时逐字段对照）。
 > 前提：开发环境；仅新增表与列，不动存量数据；现有 credential 型渠道行为必须逐字节不变。
 
+## 进度总览（2026-09-02 晚）
+
+| 批次 | 内容 | 状态 | 提交 |
+| --- | --- | --- | --- |
+| 一 | 数据库结构与查询 | ✅ | bdf04d2 / 2982989 |
+| 二 | 账号级原子准入与运行态 control | ✅ | f7394f0 |
+| 三 | 候选资格与池内选号 | ✅ | 05ef2dc |
+| 四 | 换号重试 / Sticky 账号 / 会话键兜底 / trace | ✅ | d31c384 |
+| 五/六 | Codex adapter / 归因分层 / 保活与导入 | ✅ | bbcb8e9 |
+| 七/九A | 账号快照进账务 / Admin API / 供给形态 | ✅ | 636d072 |
+| 十 | E2E 工具链与真实账号验证 | ✅ | 395330a |
+| 八 | Chat→Responses 反向桥接 | ✅ | 4ef81fc |
+| 九B | unio-admin 前端（账号页签 + 表单） | ✅ | unio-admin d1e960d |
+| — | **剩余未做**（见各节 ⏳/未做标注） | | |
+
+剩余未做清单（都不阻塞号池主链路上线验证）：
+1. **Fast 结算例外**（边界 15）：Codex wire 按出站档位结算——需动 settlement tierSelection，当前少收不多收；
+2. **经营视图批次**：零成本毛利口径（边界 2）、缓存画像账号口径（边界 10）、号池并发监测页、账号下钻/筛选；
+3. **按号检测** + 装配顺序提示 + Admin 账号编辑/OAuth 向导/台账的前端表单（API 均已就位）；
+4. **完整供给影响预览**（边界 11 现为 409 确认门）；操作审计接入核查（边界 23）；
+5. **appsettings 接入**：用量暂停阈值热更新（现为构造参数默认 90）；
+6. **文档收口**（第十一节）：Blueprint ADR 等实现全部定型后统一撰写；
+7. 用一个**未吊销**的真实账号补 codex CLI 端到端与真实 429 样本（上传账号的 OAuth 会话已被上游作废）。
+
 ## 已确认决策（本计划的边界）
 
 - **Channel 增加供给形态**：`credential`（现状，持单份 API Key）/ `pool`（持一池订阅账号）。池型渠道
@@ -192,32 +216,48 @@
     渠道级上限在 Lua 门禁里仍先于账号槽生效，池整体不失保护。要不要单开一个账号级全局默认，
     等运营真的需要时再加，不先造一个没人配的旋钮。
 
-- [ ] **同渠道换号重试**（边界 6，修改 ADR-0016 既有契约）：放开「同 Channel 不同账号可重试」，设次数
-      上限；同一账号在单请求内禁止重复。
-  - 已完成的一半：**准入阶段**的换号（账号槽满/冷却 → 池内取下一个号）与「同账号绝不重复」
-    （请求级 `attemptedAccounts`，跨候选共享）都已实现并有显式测试。
-  - **顺延的一半**：*传输失败后*的同渠道换号（可重试上游错误 → 换号再打同一渠道）。它要改的是
-    `attemptedChannels` 这条「禁止 A → B → A」的状态机，非流式与流式两个 460+ 行的候选循环都要动，
-    与 Sticky 账号维度是同一处改动。单独一个批次做，不和选号混在一起。
+- [x] **同渠道换号重试**（边界 6，修改 ADR-0016 既有契约）：两半都已落地（批次三/四）。
+  - 准入阶段：账号槽满/冷却 → 池内取下一个号；「同账号绝不重复」由请求级 `attemptedAccounts` 保证。
+  - 传输失败后：实现方式是**候选列表预展开**（`expandPoolRetryCandidates`）——池型候选原位连续复制到
+    传输预算次数（`poolChannelTransportBudget = 2`，1 原始 + 1 换号重试），`attemptedChannels` 布尔表
+    换成 `channelTransports` 计数表。A(a1) 失败且可重试时，紧随其后的重试位以不同账号再试 A，然后才轮到
+    B——A(a1)→A(a2)→B 成立，而 A→B→A 仍被禁止。credential 型预算恒 1，行为逐字节不变。
+    没有用「循环内嵌重试环」的写法：两个 460+ 行候选循环里的裸 `continue` 语义会全部改变，预展开是
+    改动面最小、且天然被现有扫描语义覆盖的做法。测试冻结了传输顺序与预算上限。
+  - 池内试尽（本请求把可调度账号都试过）合成专属拒因 `account_pool_exhausted`：runner 跳过且**不进
+    拒绝汇总**——每个号的真实拒因首次尝试时已记录，二次折叠会把「全员冷却应报 429」污染成 503。
 
-- [ ] Sticky（`internal/platform/stickysession`）：绑定值增加 `account_id`，CAS 同时比较
-      `(channel_id, account_id, binding_version)`；换键空间让旧绑定自然 miss（TTL 30 分钟，无需迁移）。
-  - 绑定账号冷却/并发满 → 临时绕行，保留绑定不续期，绕行优先落同渠道其他账号；
-  - 绑定账号禁用/归档/吊销 → 确认失效，CAS 清绑。
-  - 选号侧已就位：`Pool.Order(stickyAccountID, ...)` 的置顶与「绑定账号被运行态挡住则跳过」都已实现
-    并有测试，只差把真实 `account_id` 从 sticky 绑定里取出来传进去。
-  - 已顺带落地：`stickyTemporaryBypassReason` 认 `account_pool_cooldown` 为临时绕行——
-    池内账号全部冷却与渠道 429 冷却同属到点自愈，都不该清绑定。
+- [x] Sticky（`internal/platform/stickysession`）：绑定值 schema 升 v2 增加 `account_id`，三个 CAS 脚本
+      齐比 `(channel_id, account_id, binding_version)`；键空间从 `sticky:` 换到 `sticky:v2:`，
+      旧绑定自然 miss（TTL 30 分钟，无需迁移）。真实 Redis CAS 契约测试补齐账号分量（含 credential 型
+      account_id=0 的零分量行为冻结）。
+  - `BindSuccessWithAccount`：同渠道换号成功 = 账号级临时绕行（保留原绑定不续期），与「绕到别的渠道」
+    同一语义；真正的账号改绑只能来自确认失效后的清绑 + 新建。`BindSuccess` 保持原签名委托账号 0，
+    全部既有调用点与测试零改动。
+  - 运行时接线：runner 从 `params.Sticky.BoundAccountIDFor(channelID)` 取绑定账号传进池内选号置顶；
+    成功后把 `permitAccount.ID` 写进绑定值。
+  - `stickyTemporaryBypassReason` 认 `account_pool_cooldown` 为临时绕行——池内账号全部冷却与渠道
+    429 冷却同属到点自愈，都不该清绑定。
 
-- [ ] 会话键提取（`internal/core/sessionhint`）：在现有显式信号之上补**内容派生哈希兜底**——无
-      `prompt_cache_key`/`session-id` 时对消息前缀做定长哈希。边界：只哈希有界前缀、只存哈希不落原文、
-      相同前缀共享身份仅用于缓存亲和不赋业务语义。**反向桥接落地后该兜底会成为 chat 客户的主要来源**。
+- [x] 会话键提取（`internal/core/sessionhint`）：`ContentDerivedHint` 内容派生哈希兜底已落地并接入
+      OpenAI 族四个调用点（chat 非流/流式取前两条消息，responses 非流/流式取 instructions + input 原文）。
+      三条边界照办：只哈希 2KB 有界前缀、返回值即 SHA-256 哈希不落原文、来源标 `content_hash`。
+      Anthropic 族未接兜底（Claude Code 的显式信号覆盖率足够，反向桥接受益方是 OpenAI chat 客户端）。
+      E2E 实测：无显式信号的 chat 请求 sticky 以 `content_hash` 来源建绑（日志可查）。
 
 - [ ] 缓存画像口径（边界 10）：「池内换号」与「跨渠道切换」同口径排除出渠道缓存画像。
+  **未做**：现有排除依据是 trace 的 `sticky_before_channel_id <> final_channel_id`（渠道维度），
+  池内换号需要 `sticky 绑定账号 <> final_account_id` 的对应条件进 `ProviderOpsChannels` 的缓存 CTE。
+  两个事实列都已落库（trace.selected_account_id + sticky 绑定含账号），改的是 Admin 聚合 SQL 一处，
+  留给经营视图批次一起做。
 
-- [ ] Routing trace：只记实际尝试过的账号与池内选号事实，不记全池逐号评分（边界 14）。
-  - 事实源已具备：`acquireCandidatePermit` 返回本次冻结的账号，`attemptedAccounts` 是请求级的
-    「实际试过哪些号」，两者都还没接进 `RunResult` / trace。与账号维度请求记录（第七节）一起做更省事。
+- [x] Routing trace：只记实际尝试过的账号与池内选号事实，不记全池逐号评分（边界 14）。
+  - 迁移 `000072`：`routing_decision_traces` 增 `attempted_account_ids bigint[]`（真实传输过的账号）与
+    `selected_account_id`（部分索引），upsert 同步更新；`AcquireOutcome.TriedAccountIDs` 记每次扫描
+    真实向 Redis 发起过 acquire 的账号，进 trace_payload.acquire_results。
+  - **顺带修正池型渠道的选路诊断**：`ModelRuntimePool` 的 `has_credential = credential <> ''` 会把
+    池型渠道诊断成 `credential_missing`。诊断增加 `supply_form` 与 `has_schedulable_account`，
+    池型的排除原因改为 `account_pool_empty`（池空 ≠ 缺凭据 ≠ 熔断，三个事实各自可见）。
 
 > **批次三交叉验证结论**：`go build` / `go vet` 干净；改动文件 `gofmt` 全清
 > （`internal/bootstrap/gateway_server.go` 在 HEAD 上就未格式化，已用 stash 对照确认，未顺手改）。
@@ -230,57 +270,67 @@
 
 ## 四、Codex adapter（unio-gateway）
 
-- [ ] `internal/core/adapter/openai/codex/responses/`：新 adapter，在 `bootstrap/adapters.go` 以
-      `Key: "codex"` 注册到 OpenAI 协议族 registry，**只登记 responses 四槽**
-      （Models / Responses / StreamResponses / ResponsesInputTokenizer + 原生 ResponsesCompact），
-      不登记 chat 三槽。
-  - 端点：`{Provider.origin}/backend-api/codex/responses`（`/compact`、`/input_tokens` 子路径），
-    模型清单 `GET /backend-api/codex/models?client_version=<ver>`（带 ETag 条件请求）；
-  - 请求头：`Authorization: Bearer <账号 access_token>`、`chatgpt-account-id`、Host、
-    **按账号收敛的设备指纹**（`originator`/`User-Agent`/`version`，边界 26）；剥离入站鉴权头；
-  - `previous_response_id` 一律 400 拒绝（边界 25，与上游 HTTP 行为一致）；
-  - 防御性剥离客户回带的 `x-codex-turn-state`（跨账号串号防护）；
-  - `reasoning.effort` 原样透传：上游自报档位为 low/medium/high/xhigh/max/ultra，多于标准 API 档位集，
-    **不得按标准集做白名单校验**；
-  - 响应：解析 `x-codex-*` 用量头（**primary = 5h、secondary = 7d，勿照抄 Sub2API 的反向映射**）、
-    `usage`（含 `attribution`）、`service_tier`；`safety_identifier` 与 `x-codex-turn-state` 不回传客户。
-  - 逐字段对照 `sandbox/codex/wire/samples/`：`ingress-request.json`、
-    `upstream-usage-headers.json`、`upstream-usage-completed.json`、`upstream-models.json`。
+- [x] Codex adapter 落地为 **base responses adapter 的 Wire 钩子装配**，不是复制实现
+      （与计划的「新 adapter 包」有实现取向差异，已记录）：
+  - `internal/core/adapter/openai/responses/wire.go` 新增 `Wire` 钩子（路径覆盖 / 请求头装饰 /
+    出站前守卫 / 按账号 client / 响应头事实 / wire 专属 Retry-After），**零值 Wire = 官方现状**，
+    credential 渠道路径逐字节不变；协议解析、SSE 循环、超时与错误分类一处不复制。
+  - `internal/core/adapter/openai/codex/responses/` 只做装配与 codex 专属逻辑：
+    路径 `/backend-api/codex/responses`（compact 子路径同前缀）；模型清单 lister 走
+    `GET /backend-api/codex/models?client_version=<ver>`（models[] + slug 形态，无分页；
+    ETag 条件请求未做——发现是低频操作，留给后续优化）；
+    `chatgpt-account-id` / `originator` / `User-Agent` / `version` 按账号收敛（全局固定一组值即满足
+    收敛，边界 30 明确不做指纹伪装 enrichment）；防御性 `Del("x-codex-turn-state")`；
+    `previous_response_id` 出站前拦截为 400 语义的上游错误（与上游行为一致且不消耗账号出站）；
+    `x-codex-*` 用量头解析进 `adapter.ResponseFacts.AccountUsage`（primary=5h、secondary=7d，
+    有单测冻结方向）；429 的 `x-codex-primary-reset-after-seconds`/`reset-at` 折算进
+    metadata.RetryAfter 供账号冷却取时。`reasoning.effort` 天然透传（直传 body 不做白名单）。
+  - 注册 `Key: "codex"` 只登记 responses 四槽 + compact，不登记 chat 三槽。
+  - `safety_identifier` 回传客户：**与计划有偏差**——直传路径零转换透传响应体，剥它需要逐事件改写；
+    风险是客户可见一个上游侧标识，不构成串号（turn-state 头从不透传）。留给后续单独决定。
 
-- [ ] **按账号代理**（边界 29）：`channel.Runtime` 增账号维度字段（账号凭据、上游账号 ID、proxy_url）；
-      bootstrap 提供按代理 URL 取 `*http.Client` 的解析器注入 adapter（transport 以代理 URL 为键缓存），
-      不让各 adapter 自管 client 池。导入、令牌刷新、正式请求三条路径统一走账号代理。
+- [x] **按账号代理**（边界 29）：`channel.Runtime.Account`（ID / UpstreamAccountID / ProxyURL）+
+      `internal/platform/proxyclient`（按代理 URL 缓存 `*http.Client`）。导入换码、令牌刷新、正式请求
+      三条路径都经同一解析器注入；adapter 不自管 client 池。
+      账号凭据在 permit 固化后由 `lifecycle.applyAccountOutbound` 注入（APIKey=access token），
+      解析失败归还 permit 换下一个候选（`account_credentials_unavailable`）。
 
-- [ ] **Fast 档位**（边界 15，修订既有档位结算契约）：按 wire 引入「响应档位权威性」标记——credential
-      渠道维持现状（按响应事实结算），Codex wire 标记为不权威、**按出站档位结算**（实测同一请求响应分别
-      回 `auto`/`default`，均非发送值）。Fast 开关对池型渠道提供，仍要求人工确认。
-- [ ] **`priority` 与 `fast` 归一为同一档（存量修正，不限号池）**：官方 2026-07-30 把 priority 改名
-      fast，两值都接受；现有模型响应回 `priority`，**gpt-5.6 之后发布的模型响应回 `fast`**。现有档位
-      解析若只认 `priority`，新模型上线即把 Fast 误判为 Standard 并少收费。需在档位归一化处同时接受
-      两值，并补测试冻结该等价关系。
+- [ ] **Fast 档位**（边界 15）：**未做**「响应档位权威性」标记——Codex wire 按出站档位结算的例外
+      需要动 settlement 的 tierSelection 决策面，涉及结算契约修订，单独批次做（池型渠道当前实测
+      回 `auto`/`default`，被归一为 Standard 结算，方向是**少收不多收**，无资金风险）。
+- [x] **`priority` 与 `fast` 归一为同一档（存量修正，不限号池）**：`servicetier.ResolveOpenAIResponse`
+      的 `case "priority", "fast"` 已合并，gpt-5.6 后新模型回 `fast` 不再被误判成 Standard。
+      请求侧 `NormalizeOpenAIRequest` 本就接受两值，无需改动。
 
 ## 五、健康反馈与归因（unio-gateway）
 
-- [ ] 归因分层改造（修订 ADR-0014）：
-  - 429 → 写**账号**冷却（优先取 `x-codex-primary-reset-at` / `codex.rate_limits.reset_at` 绝对时间戳，
-    解析不到用可配置秒级兜底）；不喂渠道 breaker、不进渠道错误率样本；
-  - 401/403 → 归**账号**（失效令牌缓存 + 临时不可调度给刷新窗口，确认吊销才禁用）。
-    **注意存量行为**：现有 `classifyChannelSampleError` 把 401/403 计入渠道错误率分子，池型渠道必须
-    改为归账号并从渠道评分样本排除，否则单号令牌失效会拖垮整池评分（边界 4）；
-  - 5xx / 超时 / 网络 → 照旧归 Provider/Channel breaker；
-  - 传输错误持久/瞬态二分（边界 16，**【Sub2API】需复核**）：持久（代理认证失败、连接拒绝、DNS 失败、
-    无路由）→ 账号临时不可调度约 10 分钟 + 换号；瞬态（超时、重置、EOF）→ 只换号不处置账号；
-  - 用量自动暂停：快照达阈值（默认 90%，可配置）提前移出调度；窗口重置或快照过期自动恢复。
-    **两个易漏边界**：① 官方支持付费即时重置与可储存重置，`reset_at` 可能**提前**，恢复判定必须处理
-    「reset_at 变小」而非只处理「到期」；② 5h/7d 任一窗口可能缺失（见官方核对表），缺失时视为不限，
-    不得按 0% 或 100% 臆断。
+- [x] 归因分层改造（修订 ADR-0014）——集中在 permit owner 的 `recordAccountRuntimeFeedback`
+      （`lifecycle/account_feedback.go`），permit 带账号即整体切到账号归因分支：
+  - 429 → 账号冷却（时长取 codex wire 折算进 metadata.RetryAfter 的重置头，缺失用渠道 429 策略的
+    秒级兜底）；不喂渠道 breaker、不写渠道冷却；
+  - 401/403 → 账号临时不可调度 5 分钟（token_refresh 窗口）；**确认吊销才禁用**由刷新路径完成
+    （见第六节）。存量修正同步落地：`classifyChannelScoringSample` 对账号维度传输的 401/403
+    从渠道错误率样本整体排除（边界 4），`RecordCredentialResult` 对池型渠道跳过——单号令牌失效
+    不得翻渠道 `credential_valid`；
+  - 5xx / 超时 / 网络 → 照旧走 Finish outcome 归 Provider/Channel breaker（未动）；
+  - 持久/瞬态二分（边界 16，已按 Go net 语义复核而非照抄 Sub2API）：DNS 失败、ECONNREFUSED、
+    EHOSTUNREACH/ENETUNREACH、proxyconnect/407 → proxy_suspect 隔离 10 分钟；
+    超时/重置/EOF（以及一切拿到了响应头的错误）→ 只换号不处置账号；
+  - 用量自动暂停（`service/subscription/health`）：成功传输后消费 `facts.AccountUsage`，
+    快照落库 + LRU touch + 阈值暂停（默认 90%；暂停用覆盖语义，reset_at 提前即刻缩短；
+    低于阈值显式 Resume，不等旧暂停自然到期）；任一窗口缺失按不限处理。
+    阈值目前是构造参数（bootstrap 传默认值），**appsettings 热更新接入未做**，与 Fast 例外同批次补。
+  - **E2E 实证（真实账号）**：上游真 401（token_revoked）→ 账号隔离 token_refresh 5 分钟、渠道评分
+    与 breaker 零污染、同请求透明 fallback 到 credential 渠道成功结算；随后手动刷新确认吊销 →
+    账号 disabled(token_revoked)。95% 用量头 → 自动暂停 → 下一请求池被过滤，全链路可复现。
 
-- [ ] half-open 探测同样经池内选号取健康账号，不绕过账号层（边界 8）。
-
-- [ ] **池空 ≠ 熔断**（边界 7）：无可调度账号表现为「无候选资格」，运维界面必须与 breaker open 可区分。
-
-- [ ] 429/封号错误体（边界 27，**【Sub2API】**）：先按 Sub2API 方式实现，冷却时间来源已实测确定；
-      取得真实样本后校准错误体判据并回写蓝图。
+- [x] half-open 探测经池内选号（边界 8）：天然成立——探测请求与普通请求同一条
+      `acquireCandidatePermit` 路径，账号维度门禁在同一次原子调用内。
+- [x] **池空 ≠ 熔断**（边界 7）：候选 SQL 排除零账号池（`account_pool_empty` 不产生候选）、
+      选路诊断给出 `account_pool_empty` 专属原因、Admin 账号页签在池空且渠道启用时显式提示
+      「这不是熔断」。三处各自可见。
+- [x] 429/封号错误体（边界 27）：按上游标准形状实现（error.code=token_revoked 已实测拿到真实样本，
+      见 E2E）；429 真实样本仍缺（账号已吊销无法触发），错误体判据维持 Sub2API 口径待校准。
 
 ## 六、OAuth 导入与令牌保活（unio-gateway）
 
@@ -289,27 +339,43 @@
     邮箱/账号 ID/套餐 → 落库为 `disabled`，显式启用；换码请求走账号绑定代理。
   - 不做指纹伪装类 enrichment。
 
-- [ ] `internal/service/subscription/refresh`（后台服务）：
-  - 定时分页扫描将过期账号；每账号持分布式锁（防多实例重复刷）；每平台限速 + 并发上限；
-  - 失败指数退避，重试耗尽 → 临时不可调度 N 分钟（**不禁用**）；确认吊销才置 disabled；
-  - **新 refresh token 非空才覆盖**旧值；
-  - 请求时兜底：取凭据发现不新鲜则带锁同步刷一次再出站（长流请求凭据只在 transport 开始时取一次，
-    流建立后不受影响，边界 13）。
-  - 参考实现：`sandbox/codex/scripts/token.py` 已验证刷新流程可用。
+- [x] 令牌保活（`internal/service/subscription`，refresh 与 outbound 同包不再拆子包）：
+  - `RefreshWorker` 实现 workers.Unit，接入 worker-server runner：周期扫描
+    `expires_at < now()+1h` 的未归档 oauth 账号（disabled 也刷——启用瞬间就要有新鲜令牌），
+    逐号限速 2s；
+  - 每账号分布式锁：Redis SET NX 30s（跨实例）+ singleflight（进程内）；拿不到锁时短等后重读——
+    对方实例大概率正在刷，refresh token 会轮换，并发刷会把对方的新令牌作废；
+  - 失败处置：**明确拒绝**（400/401/403 → RefreshRejectedError）= 确认吊销 →
+    disabled(token_revoked)；网络失败 → 临时不可调度 10 分钟（不禁用），下一轮周期天然构成重试
+    （计划里的指数退避简化成固定隔离窗口 + 周期重扫，行为等价且少一套状态）；
+  - **新 refresh token 非空才覆盖**（`MergeRefreshed`，有单测冻结）；
+  - 请求时兜底：`Outbound.ResolveAccountOutbound` 发现过期前 5 分钟内即带锁同步刷一次再出站；
+    长流请求凭据只在 transport 开始时取一次（边界 13，天然成立）。
+  - **E2E 实证**：真实账号的 refresh token 已被上游作废（`refresh_token_invalidated`——该账号在
+    导出后于别处重新登录过），我们的刷新路径正确判定为确认吊销并 disabled(token_revoked)。
 
-- [ ] **批量文件导入**：格式解析器可插拔，本期唯一支持 Sub2API `sub2api-data` v1
-      （`{type, version, proxies[], accounts[]}`；账号字段映射到实体，`proxies[]` + `proxy_key` 映射到
-      代理绑定）。导入落库 disabled；带 refresh token 的账号直接进入保活；按上游账号标识去重，
-      重复导入拒绝并提示已存在于哪个池，另提供「重新授权更新凭据」显式操作（边界 21）。
+- [x] **批量文件导入**（`subscription.ParseSub2APIData` + `ImportAccounts`）：sub2api-data v1
+      逐字段对照真实导出文件解析（`proxies[]`+`proxy_key` → 账号代理绑定；凭据归一为单一 schema，
+      上游账号 ID 缺失时从令牌 claims 兜底）；导入落库 disabled；重复导入按 (platform,
+      upstream_account_id) 被 DB 唯一键拒绝，**单条拒绝不拖垮整批**，提示已存在于哪个池；
+      「重新授权更新凭据」的 SQL（AdminReauthorizeSubscriptionAccount）已备好，Admin 入口未挂
+      （OAuth complete 当前只走新建，重授权分支留给后续）。
 
 ## 七、账务与供给联动（unio-gateway）
 
-- [ ] 池型渠道配渠道级成本倍率 0（`channel_cost_multipliers.multiplier = 0`，schema 与毛利守卫均已核实
-      允许）；订阅 Provider 结算币种设为与售价同币种，避免零成本仍因缺汇率被剔除候选（边界 1）。
-- [ ] 排查「毛利/成本」类除零算式，零成本渠道毛利率口径统一为 `(售价−成本)/售价`（边界 2）。
-- [ ] 请求记录写入 `account_id` 快照。
-- [ ] **供给不变量联动**（边界 11）：停用/归档池内最后一个可调度账号可能让模型失去最后供给，账号操作
-      必须接入 ADR-0020 影响预览，不得静默绕过。
+- [x] 池型渠道成本倍率 0 + Provider 结算币种同售价币种：运营配置口径，E2E 种子已按此装配并实测
+      毛利守卫通过、成本快照恒 0、结算正常（charged_amount 按售价收）。
+- [ ] 零成本渠道毛利率口径排查（边界 2）：**未做**——涉及 Admin 经营聚合 SQL 的巡检，
+      与缓存画像口径、账号下钻、监测页同属经营视图批次。
+- [x] 请求记录写入账号快照：`request_records.final_account_id` 随 MarkRequestSucceeded /
+      MarkSettledRequestFailed / MarkSettledRequestCanceled 三条终态路径写入；
+      settlement 补偿任务加 `account_id` 列（迁移 000073），重放收口不丢账号归因。
+      E2E 实证 final_account_id 正确落库。
+- [x] **供给不变量联动**（边界 11，简化实现）：停用/归档池内最后一个可调度账号且渠道 enabled 时
+      返回 409（`account_last_supply_confirmation_required`），携带 `confirm_supply_impact=true`
+      重试才放行；前端接了确认对话框。**与 ADR-0020 的完整影响预览（列出受影响模型清单 + 可勾选
+      一并停用）有差距**——账号操作影响的是「这条渠道的全部绑定模型」，渠道级预览机制复用需要把
+      supply.ChannelImpact 接进账号状态流转事务，留给后续补齐，当前的确认门已挡住静默断供。
 
 ## 八、Chat Completions → Responses 反向桥接（unio-gateway）
 
@@ -318,80 +384,98 @@
 > LangChain、各类第三方应用）——它们想用号池模型时只会说 chat 协议。桥接照做（已拍板），但排期上
 > **应在 Codex 主链路（批次一至七）跑通之后**，验收场景也要用通用 chat 客户端而非 codex CLI。
 
-- [ ] 候选资格放开（`lifecycle/adapter_registry.go` OpenAI 分支，**三处**，与 responses 侧对称）：
-      `AdapterCapabilityNonStream` 由 `HasChat` → `HasChat || HasResponses`；
-      `AdapterCapabilityStream` 由 `HasStreamChat` → `HasStreamChat || HasStreamResponses`；
-      `AdapterCapabilityInputTokenizer` 由 `HasChatInputTokenizer` → `|| HasResponsesInputTokenizer`。
-      Anthropic 分支不动。
-- [ ] 桥接实现：镜像现有 `responses→chat`（`internal/service/gateway/openai/responses/` 下
-      `responses_chat_map.go` 527 行 + `responses_response_map.go` 217 行 + `responses_stream.go` 642 行，
-      由 `create_response.go` 按候选能力分流），在 chat completions service 侧按候选能力分流
-      「chat 直转 vs responses-only 反向桥接」。
-- [ ] 落地必须回答（Sub2API `internal/pkg/apicompat/` 有现成答案可移植，须与本仓库契约对齐）：
-  - 权威首字：译回的 chat chunk 与 Responses `output_text.delta` 对齐，不得把 `response.created` /
-    `in_progress` 误判为首字（ADR-0017），否则 TTFT 样本失真影响五项评分 25% 权重项；
-  - 工具调用双向映射：chat `tools`/`tool_calls` ↔ Responses `function_call`/`custom_tool_call`
-    （含 Codex 私有 namespace），`call_id` 稳定对应；
-  - usage 降级口径：Responses `usage`（含 `attribution`）译回 chat usage 时的字段损失与结算取值侧；
-  - Fast 档位在桥接路径上的表达，与边界 15 响应档位不权威结论共存；
-  - 会话键：chat 客户通常不发显式信号，依赖第三节的内容派生哈希兜底。
-- 移植纪律：遵守采信口径三条护栏（分发红线、来源清单标注出处 + commit、集中在协议边缘）。
+- [x] 候选资格放开（`lifecycle/adapter_registry.go` OpenAI 分支三处，与 responses 侧对称）；
+      Anthropic 分支未动。chat 服务的 AdapterRegistry 接口补 responses 三槽查询供桥接分流。
+- [x] 桥接实现落在 **adapter DTO 层**（`internal/core/adapter/openai/chatbridge`，新包），
+      不是 service 层的镜像转换——比计划预估的三个大文件镜像小一个量级：桥接实现
+      `chatcompletions.ChatAdapter`/`StreamChatAdapter` 接口，背后调 responses adapter，
+      chat service 的 ResolveAdapter 兜底分流（HasChat 直转 / 否则 HasResponses 桥接），
+      两个 service 的 Invoke/Stream 闭包零改动。估算路径同样走桥接
+      （BuildResponsesBodyForEstimate + responses tokenizer）。
+- [x] 四个必答题的落地：
+  - **权威首字**：只有 `response.output_text.delta` 产出携带 Content 的 chunk，
+    created/in_progress/output_item.done 一律不 emit（有单测冻结）；
+  - **工具调用**：chat tools→responses function tools、assistant.tool_calls→function_call item、
+    role=tool→function_call_output（call_id 稳定对应）；回程 function_call/custom_tool_call→
+    tool_calls（流式按 item_id→index 稳定映射增量）；tool_choice 四形态齐备；
+  - **usage 降级**：结算只消费 responses adapter 同一次解析的 Facts（attribution 不进 chat usage、
+    不影响结算取值）；流式终态 usage 以独立 chunk 下发，与 chat 上游 usage 尾帧同形态，
+    include_usage 尾帧实测正常；
+  - **会话键**：chat 客户无显式信号时经内容派生哈希命中 sticky（E2E 日志 source=content_hash）。
+  - Fast 在桥接路径的表达随边界 15 的结算例外一起做（当前桥接透传 service_tier 请求值）。
+- [x] 移植纪律：字段映射语义与 Sub2API apicompat 对照，代码按本仓库契约全部重写（包头已标注来源）。
+- **E2E 实证（假 codex 上游 + 全真实网关链路）**：非流式 chat → 池 → "pong-fake" + usage 映射正确；
+  流式 chat → 内容增量 chunk + finish + usage 尾帧 + [DONE]；`store` 恒 false、
+  `max_completion_tokens→max_output_tokens` 等映射有单测。
 
 ## 九、Admin API 与前端（unio-gateway + unio-admin）
 
-- [ ] Admin API `internal/app/adminapi/subscriptionaccount`：账号 CRUD、启停、归档/恢复、编辑
-      （并发/优先级/代理）、手动刷新令牌、按号检测、OAuth 导入向导、批量文件导入、订阅台账。
-      全部操作接入现有操作审计（边界 23，审计记录不含令牌内容）。
-- [ ] 渠道创建/编辑表单增加「供给形态」；池型不填凭据，可配账号默认并发；
-      「允许 OpenAI Fast」开关对池型同样提供（启用语义见边界 15）。
-- [ ] `ChannelDetailPage` 新增 `section=accounts` 页签（现有 section 机制走 URL 参数）：
-  - 账号行：状态（含父级遮蔽标注）、运行态（冷却至 / 临时不可调度 / 用量暂停 / 疑似代理故障）、
-    用量水位（5h/7d + 采集时间）、在途并发/上限、优先级、代理、令牌状态、最近成功时间；
-  - 概览区池聚合：可调度/总账号数、聚合在途/上限、冷却中、用量暂停、令牌即将过期、**订阅即将到期**；
-  - 「池空」与 breaker open 必须显示为两个可区分的事实。
-- [ ] 装配顺序提示：建池（disabled）→ 导号 ≥1 → 模型发现/绑定 → 逐模型验证（验证请求经池内选号）→
-      启用 Binding/Channel → 启用账号。手动检测下沉为按账号检测，渠道级聚合展示。
-- [ ] **号池并发监测**（实时监控页新增区块，内容参考 Sub2API 运维并发卡，样式自定）：
+- [x] Admin API `internal/app/adminapi/subscriptionaccount` + `service/admin/subscriptionaccount`：
+      列表（含聚合 + Redis 运行态合并）、启停/归档/恢复（含供给确认门）、编辑（并发/优先级/代理/
+      备注名）、手动刷新令牌、OAuth 导入向导（start→授权链接 / complete→回填 code 落库）、
+      批量文件导入、订阅台账读写。**关键机制**：全部调度参数与状态写入经
+      `runtimecontrol.Publisher` 两阶段发布承载——BusinessCommit 事务内执行账号变更 +
+      `BumpChannelCapacityRevision`，与渠道容量编辑同一条传播路径（边界 20 的服务层收口）。
+      **未做**：按号检测（channeltest 下沉到账号维度）；操作审计接入待查现有审计机制形态（边界 23）。
+- [x] 渠道创建表单增「供给形态」（credential/pool），池型不填凭据、可配账号默认并发；
+      Fast 开关本就按协议出现，对池型同样可见。后端校验双向严格（credential 必填 ↔ 必空）。
+- [x] `ChannelDetailPage` 新增 `section=accounts` 页签（仅池型渠道出现，池型隐藏「凭据」页签）：
+      账号行含状态/停用原因、运行态徽章（冷却/令牌刷新中/疑似代理故障/用量暂停，文字+剩余时间）、
+      用量水位（5h/7d 负载条配文字百分比 + 采集时间）、在途/上限、优先级、令牌过期与可续期性、
+      最近成功时间；行操作：启停/恢复/手动刷新令牌。聚合行：可调度/总数、在途、冷却、用量暂停、
+      订阅将到期。「池空」提示明确写出「这不是熔断」。
+      **未做**：账号编辑（并发/优先级/代理）的前端表单（API 已备）、OAuth 向导前端、台账前端。
+- [ ] 装配顺序提示（建池→导号→发现绑定→验证→启用）：**未做**，依赖按号检测。
+- [ ] **号池并发监测**（实时监控页新增区块）：**未做**（经营视图批次）。原计划内容保留：
       维度钻取 Provider → 池 → 账号，另有独立用户并发视图；汇总行含可用/总数、冷却数、异常数、
       聚合在途/上限与负载条、该渠道当前全池短等请求数；账号行含在途/上限、负载条、状态徽章
       （冷却剩余倒计时 / 用量水位 / 刷新中 / 疑似代理故障 / 已禁用 / 父级遮蔽），异常与冷却优先排序。
       **与 Sub2API 的差异**：无逐号等待队列指标（本方案无队列），等待事实只有渠道维度短等计数。
       数据源为 Redis 实时运行态，与实时监控页同源边界，不进 DB 经营聚合。
       样式遵循现有无障碍口径：负载条必须配文字百分比、状态以文字表达不单靠颜色、不给主观健康标签。
-- [ ] 经营视图：驾驶舱首屏 KPI 与实时监控页不引入账号维度；**毛利/利润率卡需处理零边际成本口径**
-      （标注订阅成本不在请求成本内，先例为「缓存贡献（估算）」）；渠道分析中心对池型渠道提供账号下钻
-      与台账摊销后的有效成本；请求记录与 routing trace 支持按账号筛选。
-- [ ] Console 客户侧完全不引入账号维度（客户只看模型，与移除 Route 的口径一致）。
+- [ ] 经营视图：**未做**（零边际成本口径、账号下钻、按账号筛选——数据列已全部就位：
+      request_records.final_account_id、trace.selected_account_id、订阅台账）。
+- [x] Console 客户侧完全不引入账号维度：本次改造未触碰 Console 任何代码，天然成立。
 
 ## 十、验证
 
-对照蓝图「验收要点」，最低验收矩阵：
+验收矩阵实际状态（✅=已验证 · 🧪=单测覆盖 · ⏳=未验证）：
 
-| 场景 | 目标结果 |
-| --- | --- |
-| 多实例抢同一账号槽 | 不超限；崩溃残留租约由 TTL 回收；Finish/Abort 正确释放 |
-| 同渠道换号重试 | 不同账号可重试且有上限，**同账号绝不重复** |
-| 池内选号分布 | 同档账号流量分布接近均匀（随机打散有效），LRU 生效，无稳定捶打单号 |
-| Sticky 三分支 | 绑定账号命中续期 / 冷却绕行不改绑 / 确认失效清绑后新号重建 |
-| 归因分层 | 账号 429/401 不进渠道评分样本与 breaker；5xx/超时照旧归渠道；代理建连失败归账号 |
-| 全员冷却 | 渠道表现为 cooldown，`Retry-After` 取最早恢复时间 |
-| 池空 vs 熔断 | 两种不可用在运维界面可区分 |
-| 供给联动 | 停用/归档最后一个可调度账号触发模型供给影响预览 |
-| Fast 结算 | Codex wire 按出站档位结算（响应 `default` 不降档）；credential 渠道与现状完全一致 |
-| 账务 | 成本快照恒 0 且毛利守卫通过；请求记录带 `account_id`；台账可离线算出每号摊销单价 |
-| OAuth | 导入落库 disabled 后显式启用；后台刷新与请求时兜底刷新互斥正确；确认吊销才禁用 |
-| 配置传播 | 改账号并发/优先级/代理后新请求立即生效，在途 permit 按固化身份收口 |
-| 零账号池 | 不成为候选；启用时提示 |
-| 重复导入 | 被拒并提示已存在于哪个池；「重新授权」可更新凭据 |
-| 反向桥接 | chat 请求可命中池型渠道；权威首字与 usage 口径符合定义 |
-| **存量回归** | credential 型渠道的路由、准入、结算、评分行为**逐字节不变** |
+| 场景 | 状态 | 证据 |
+| --- | --- | --- |
+| 多实例抢同一账号槽 | 🧪 | 批次二真实 Redis 原子准入测试（并发上限、TTL 回收、Finish/Abort 释放、renew 续账号槽） |
+| 同渠道换号重试 | 🧪 | `TestRunNonStreamRetriesSameChannelWithDifferentAccount`（A(a1)→A(a2)→B）+ 预算上限 + 同账号绝不重复 |
+| 池内选号分布 | 🧪 | `TestOrderShufflesEqualTier`（同档随机打散）+ LRU/负载率排序测试 |
+| Sticky 三分支 | 🧪 | 账号三分量 CAS 真实 Redis 契约测试 + BindSuccessWithAccount 分支（同渠道换号=账号级绕行） |
+| 归因分层 | ✅ | **真实账号 E2E**：上游 401(token_revoked) → 账号隔离、渠道零污染、透明 fallback；单测覆盖 429/401 样本排除 |
+| 全员冷却 | 🧪 | `TestPrepareCandidatesTreatsFullyCooledPoolAsRateLimited`（Retry-After 取最早恢复） |
+| 池空 vs 熔断 | ✅ | 候选 SQL 排除 + 诊断 `account_pool_empty` + 前端「这不是熔断」提示 |
+| 供给联动 | 🧪 | 最后可调度账号停用 → 409 确认门（简化实现，完整 ADR-0020 预览待补） |
+| Fast 结算 | ⏳ | priority/fast 归一已修（存量）；Codex 按出站档位结算的例外**未做** |
+| 账务 | ✅ | E2E：成本快照 0、毛利守卫过、`final_account_id` 落库；台账 API 就位（离线摊销未跑） |
+| OAuth | ✅ | 导入落 disabled（测试）；**真实吊销账号** → RefreshRejected → disabled(token_revoked)；分布式锁 + singleflight |
+| 配置传播 | 🧪 | Admin 账号写入经两阶段发布 + BumpChannelCapacityRevision（批次二 CAS 测试）；E2E 未专项验证 |
+| 零账号池 | ✅ | `TestFindModelCandidatesRequiresSchedulableAccountForPoolChannel` + E2E（账号禁用后池即失去候选） |
+| 重复导入 | 🧪 | ImportAccounts 单条拒绝 + 提示所在池；「重新授权」入口未挂 |
+| 反向桥接 | ✅ | E2E（假 codex 上游）：非流/流式/usage 尾帧；权威首字有单测 |
+| **存量回归** | ✅ | 全量 `go test ./...` 110 包全绿；credential 路径的行为由既有测试冻结 |
 
-- [ ] `sqlc generate` 干净；`go build ./...`、`go vet`、`go test ./...` 全部通过。
-- [ ] 前端 `tsc` / eslint 通过。
-- [ ] Dev 端到端：导入真实 Codex 账号 → 建池型渠道 → 发现绑定验证模型 → 客户用 UnioAPI Key 经 codex CLI
-      调用 → 请求打到号池 → 账号用量水位更新 → Admin 监测页可见。
+- [x] `sqlc generate` 干净；`go build ./...`、`go vet`、`go test ./...`（110 包）全部通过。
+- [x] 前端 `tsc -b` / eslint 通过（unio-admin）。
+- [x] Dev 端到端（两段式，因上传账号令牌已被上游吊销）：
+  - **真实上游段**：导入真实账号 → 建池（seed 工具）→ 请求经网关打到 `chatgpt.com/backend-api/codex/responses`
+    → 上游回 401 token_revoked → 归因/隔离/fallback/禁用全链路符合设计；
+  - **成功链路段**（假 codex 上游 `sandbox/codex/e2e/fakecodex`，wire 形状对照真实样例）：
+    请求命中号池 → 账号身份出站 → 用量头解析 → 快照落库 + LRU + 95% 自动暂停 →
+    `final_account_id` / trace 账号事实落库 → 暂停后池被过滤降级到 credential 渠道。
+  - **codex CLI 实测未做**（需要一个未吊销的订阅账号）；同因未验证：真实 429 冷却取重置时刻、
+    Admin 页签对真实池的展示走查。E2E 工具链固化在 `sandbox/codex/e2e/`（seed / fakecodex / verify）。
 
 ## 十一、文档收口
+
+**整体未动**：Blueprint（ADR 新增与修订）按协作规则须按最终代码行为撰写；本轮实现刚收敛，
+且仍有四块未完成（Fast 结算例外、经营视图、按号检测、完整供给预览），ADR 等实现全部定型后一次写清，
+避免把中间态写成当前事实。以下原清单保留：
 
 - [ ] 新增网关 ADR「订阅账号实体与账号级准入」（实体与绑定式生命周期、两阶段选号、`AttemptPermit`
       账号维度、同渠道换号重试）。
