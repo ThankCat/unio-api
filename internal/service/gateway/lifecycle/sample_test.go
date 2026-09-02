@@ -17,7 +17,7 @@ func upstreamErr(category adapter.UpstreamErrorCategory, status int, cause error
 func TestClassifyChannelScoringSampleUsesProtocolFailureOutcome(t *testing.T) {
 	eligible, isError := classifyChannelScoringSample(breakerstore.FinishOutcome{
 		ChannelOutcome: breakerstore.OutcomeEligibleFailure,
-	}, nil)
+	}, nil, false)
 	if !eligible || !isError {
 		t.Fatalf("protocol failure sample = (%v,%v), want (true,true)", eligible, isError)
 	}

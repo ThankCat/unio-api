@@ -11,8 +11,8 @@ import (
 
 	"github.com/ThankCat/unio-gateway/internal/app/gatewayapi"
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
-	"github.com/ThankCat/unio-gateway/internal/core/fx"
 	messagesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/anthropic/messages"
+	"github.com/ThankCat/unio-gateway/internal/core/fx"
 	"github.com/ThankCat/unio-gateway/internal/core/runtimecontrol"
 	"github.com/ThankCat/unio-gateway/internal/core/tokenest"
 	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
@@ -21,6 +21,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/logging"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/tracing"
+	"github.com/ThankCat/unio-gateway/internal/platform/proxyclient"
 	"github.com/ThankCat/unio-gateway/internal/platform/stickysession"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 	"github.com/ThankCat/unio-gateway/internal/service/appsettings"
@@ -29,6 +30,8 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/requestadmission"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/runtimefacts"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/tpmobserver"
+	"github.com/ThankCat/unio-gateway/internal/service/subscription"
+	subscriptionhealth "github.com/ThankCat/unio-gateway/internal/service/subscription/health"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -290,6 +293,19 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 	chatCompletionService.SetChannelSampleRecorder(breakerStore)
 	responsesService.SetChannelSampleRecorder(breakerStore)
 	messagesService.SetChannelSampleRecorder(breakerStore)
+	// 池型渠道的账号出站解析（请求时兜底刷新）与健康观测（用量快照/阈值暂停），号池改造第五/六节。
+	accountProxyClients := proxyclient.NewResolver(upstreamHTTPClient(nil))
+	accountOutbound := subscription.NewOutbound(
+		queries,
+		subscription.NewTokenClient(accountProxyClients.ClientFor),
+		breakerStore,
+		deps.Redis,
+		deps.Logger,
+	)
+	accountHealth := subscriptionhealth.NewRecorder(queries, breakerStore, deps.Logger, 0)
+	chatCompletionService.SetAccountOutbound(accountOutbound, accountHealth)
+	responsesService.SetAccountOutbound(accountOutbound, accountHealth)
+	messagesService.SetAccountOutbound(accountOutbound, accountHealth)
 	// 分钟级 TPM 观测器（§8）：只描述已观察到的输入/输出 token，不参与准入、评分或计费。
 	tpmObserver := tpmobserver.New(breakerStore, tpmobserver.Options{
 		Logger:  deps.Logger,

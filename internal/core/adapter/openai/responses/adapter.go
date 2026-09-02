@@ -23,17 +23,24 @@ const (
 //
 // 它是 Responses 直传的官方基线：请求 Body 直传上游，响应/SSE 事件原文透传，只抽取账务事实。
 // 直接作为 adapter_key="openai-responses" 注册（OpenAI 官方或 codex 标准中转）。provider 专属方言
-// （字段 drop / 错误形状差异）由对应 provider adapter 在调用 base 前后收口，不进入 base。
+// （字段 drop / 错误形状差异）由对应 provider adapter 在调用 base 前后收口，不进入 base；
+// Codex 订阅 wire 经 Wire 钩子复用同一实现（见 wire.go 与 openai/codex/responses 包）。
 type Adapter struct {
 	client *http.Client
+	wire   Wire
 }
 
-// NewAdapter 创建 Responses 直传 adapter。
+// NewAdapter 创建官方 wire 的 Responses 直传 adapter。
 func NewAdapter(client *http.Client) *Adapter {
+	return NewAdapterWithWire(client, Wire{})
+}
+
+// NewAdapterWithWire 创建指定 wire 形态的 Responses 直传 adapter（Codex 订阅后端用）。
+func NewAdapterWithWire(client *http.Client, wire Wire) *Adapter {
 	if client == nil {
 		client = http.DefaultClient
 	}
-	return &Adapter{client: client}
+	return &Adapter{client: client, wire: wire}
 }
 
 var (
@@ -65,7 +72,7 @@ func (a *Adapter) CreateResponse(ctx context.Context, ch channel.Runtime, req Re
 	}
 
 	adapter.MarkTransportStarted(ctx)
-	upstreamResp, err := a.client.Do(httpReq)
+	upstreamResp, err := a.httpClient(ch).Do(httpReq)
 	if upstreamResp != nil {
 		adapter.MarkResponseHeadersReceived(ctx, adapter.UpstreamMetadata{
 			StatusCode: upstreamResp.StatusCode,
@@ -78,7 +85,7 @@ func (a *Adapter) CreateResponse(ctx context.Context, ch channel.Runtime, req Re
 	defer upstreamResp.Body.Close()
 
 	if upstreamResp.StatusCode < http.StatusOK || upstreamResp.StatusCode >= http.StatusMultipleChoices {
-		return nil, newUpstreamStatusError(upstreamResp, "upstream")
+		return nil, a.upstreamStatusError(upstreamResp, "upstream")
 	}
 
 	raw, exceeded, err := adapter.ReadUpstreamBodyLimited(upstreamResp.Body)
@@ -124,6 +131,7 @@ func (a *Adapter) CreateResponse(ctx context.Context, ch channel.Runtime, req Re
 	}
 
 	facts := responsesFacts(parsed, chatUsage, meta, usage.SourceUpstreamResponse)
+	a.applyHeaderFacts(upstreamResp.Header, &facts)
 	return &Response{
 		Raw:        raw,
 		ResponseID: parsed.ID,
@@ -147,7 +155,7 @@ func responsesUnreliableUsageError(meta adapter.UpstreamMetadata, detail string)
 	)
 }
 
-// newUpstreamRequest 构造打到 <base>/responses 的上游 HTTP 请求。
+// newUpstreamRequest 构造打到 <base><responsesPath> 的上游 HTTP 请求。
 //
 // stream=true 时附 Accept: text/event-stream。请求体直传 req.Body（service 已置 model/stream）。
 func (a *Adapter) newUpstreamRequest(ctx context.Context, ch channel.Runtime, req Request, stream bool) (*http.Request, error) {
@@ -157,8 +165,11 @@ func (a *Adapter) newUpstreamRequest(ctx context.Context, ch channel.Runtime, re
 			failure.WithMessage("openai responses adapter request body is empty"),
 		)
 	}
+	if err := a.guardRequest(req); err != nil {
+		return nil, err
+	}
 
-	url, err := adapter.BuildUpstreamURL(ch.Origin, adapter.OperationPathResponses)
+	url, err := adapter.BuildUpstreamURL(ch.Origin, a.responsesPath())
 	if err != nil {
 		return nil, err
 	}
@@ -180,5 +191,6 @@ func (a *Adapter) newUpstreamRequest(ctx context.Context, ch channel.Runtime, re
 	if beta := strings.TrimSpace(req.BetaHeader); beta != "" {
 		httpReq.Header.Set("OpenAI-Beta", beta)
 	}
+	a.decorateRequest(httpReq, ch)
 	return httpReq, nil
 }

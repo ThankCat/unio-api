@@ -45,6 +45,11 @@ type RequestLifecycle struct {
 
 	// tpmObserver 是可选的分钟级 TPM 观测器（§8）；nil 表示不观测。
 	tpmObserver *tpmobserver.Observer
+
+	// accountOutbound 解析池型渠道 permit 固化账号的出站凭据；nil 表示不服务池型渠道。
+	accountOutbound AccountOutboundResolver
+	// accountHealth 消费成功传输后的账号观测（用量快照、阈值暂停）；nil 表示不观测。
+	accountHealth AccountHealthSink
 }
 
 func (l *RequestLifecycle) SetLogger(logger *zap.Logger) {
@@ -180,6 +185,11 @@ func (l *RequestLifecycle) SetCredentialGate(gate CredentialGate) {
 // nil receiver / nil gate 等价于「未启用凭据闸门」，no-op。
 func (l *RequestLifecycle) RecordCredentialResult(candidate routing.ChatRouteCandidate, err error) {
 	if l == nil || l.credentialGate == nil {
+		return
+	}
+	// 池型渠道的 401 归账号（令牌过期/吊销），不得翻渠道 credential_valid——
+	// 渠道自身没有凭据，单号令牌失效翻掉整条渠道会把其余健康账号一起摘除（边界 4）。
+	if candidate.Channel.Account.ID > 0 {
 		return
 	}
 	l.credentialGate.RecordResult(CredentialRevision{

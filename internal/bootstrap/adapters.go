@@ -11,8 +11,10 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/adapter/modeldiscovery"
 	"github.com/ThankCat/unio-gateway/internal/core/adapter/openai"
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
+	codexresponses "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/codex/responses"
 	openaideepseek "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/deepseek/chatcompletions"
 	openairesponses "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/responses"
+	"github.com/ThankCat/unio-gateway/internal/platform/proxyclient"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
 
@@ -45,6 +47,12 @@ func NewAdapterRegistry(client *http.Client, logger *zap.Logger) (*lifecycle.Ada
 	openAIModelLister := modeldiscovery.NewOpenAICompatible(client)
 	anthropicModelLister := modeldiscovery.NewAnthropic(client)
 
+	// Codex 订阅 wire（号池渠道）：按账号代理经 proxyclient 解析，导入/刷新/正式请求三条路径
+	// 在 bootstrap 各自注入同一个解析器，adapter 不自管 client 池（边界 29）。
+	accountProxyClients := proxyclient.NewResolver(client)
+	codexAdapter := codexresponses.NewAdapter(client, accountProxyClients.ClientFor)
+	codexModelLister := codexresponses.NewModelLister(client, accountProxyClients.ClientFor)
+
 	openAIRegistry, err := openai.NewRegistry(
 		openai.Registration{
 			Key:                "deepseek",
@@ -66,6 +74,16 @@ func NewAdapterRegistry(client *http.Client, logger *zap.Logger) (*lifecycle.Ada
 			StreamResponses:         openAIResponsesAdapter,
 			ResponsesInputTokenizer: openAIResponsesAdapter,
 			ResponsesCompact:        openAIResponsesAdapter,
+		},
+		// Codex 订阅后端（号池渠道专用）：只登记 responses 四槽，不登记 chat 三槽——
+		// chat 请求经候选资格放开（HasChat || HasResponses）走 chat→responses 反向桥接。
+		openai.Registration{
+			Key:                     "codex",
+			Models:                  codexModelLister,
+			Responses:               codexAdapter,
+			StreamResponses:         codexAdapter,
+			ResponsesInputTokenizer: codexAdapter,
+			ResponsesCompact:        codexAdapter,
 		},
 	)
 	if err != nil {

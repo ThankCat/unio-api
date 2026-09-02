@@ -407,6 +407,22 @@ scan:
 				result.recordScan(pass, candidate.Channel.ID, true, "", acquire.TriedAccountIDs)
 				// Install the terminal fallback before attempt persistence and stream setup can fail or panic.
 				defer abortAttemptPermitOnExit(ctx, permitOwner)
+
+				// 池型候选：按 permit 固化的账号注入出站身份；解析失败归还 permit 换下一个候选。
+				resolved, resolveErr := l.applyAccountOutbound(ctx, candidate, permitAccount.ID)
+				if resolveErr != nil {
+					_ = permitOwner.Abort(ctx)
+					r.recordRoutingSkip("account_credentials_unavailable")
+					r.logRouting(ctx, "routing candidate skipped",
+						zap.Int64("channel_id", candidate.Channel.ID),
+						zap.Int64("account_id", permitAccount.ID),
+						zap.String("skip_reason", "account_credentials_unavailable"),
+						zap.String("error_message", resolveErr.Error()),
+					)
+					lastErr = resolveErr
+					continue
+				}
+				candidate = resolved
 			}
 
 			// 每个 stream candidate 也必须先创建 attempt：流式失败可能发生在首 chunk 前、首 chunk 后或
@@ -601,6 +617,7 @@ scan:
 				if outcome == metrics.ChatOutcomeSuccess {
 					params.Sticky.BindSuccessWithAccount(ctx, candidate, permitAccount.ID)
 					result.SelectedAccountID = permitAccount.ID
+					l.RecordAccountSuccess(ctx, permitAccount.ID, streamFacts)
 				}
 
 				result.Outcome = outcome
@@ -1094,6 +1111,8 @@ scan:
 			// attempt 成功：sticky bind/改绑（决议 2）；池型渠道把账号一并写入绑定值。
 			params.Sticky.BindSuccessWithAccount(ctx, candidate, permitAccount.ID)
 			result.SelectedAccountID = permitAccount.ID
+			// 池型渠道：上报账号观测（用量快照、LRU、阈值暂停），best-effort 不影响交付。
+			l.RecordAccountSuccess(ctx, permitAccount.ID, streamFacts)
 
 			// 零价渠道误配监控（P2-4）：售价快照全部非正即客户侧 $0 收入，记指标供运维定位误配渠道。
 			if candidate.SalePrice.IsEffectivelyFree() {

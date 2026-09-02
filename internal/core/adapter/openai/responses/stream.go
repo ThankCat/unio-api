@@ -73,7 +73,7 @@ func (a *Adapter) StreamResponse(ctx context.Context, ch channel.Runtime, req Re
 	}
 
 	adapter.MarkTransportStarted(streamCtx)
-	upstreamResp, err := a.client.Do(httpReq)
+	upstreamResp, err := a.httpClient(ch).Do(httpReq)
 	ctxCause := context.Cause(streamCtx)
 	timeouts.HeadersReceived()
 	if upstreamResp != nil {
@@ -88,7 +88,7 @@ func (a *Adapter) StreamResponse(ctx context.Context, ch channel.Runtime, req Re
 	defer upstreamResp.Body.Close()
 
 	if upstreamResp.StatusCode < http.StatusOK || upstreamResp.StatusCode >= http.StatusMultipleChoices {
-		return adapter.StreamOutcome{}, newUpstreamStatusError(upstreamResp, "upstream stream")
+		return adapter.StreamOutcome{}, a.upstreamStatusError(upstreamResp, "upstream stream")
 	}
 
 	meta := adapter.UpstreamMetadata{
@@ -115,6 +115,8 @@ func (a *Adapter) StreamResponse(ctx context.Context, ch channel.Runtime, req Re
 			return adapter.StreamOutcome{}
 		}
 		facts := responsesFacts(*terminalResp, *finalUsage, meta, usage.SourceUpstreamStream)
+		// wire 专属事实（Codex 用量头）在初始响应头上，与非流式同源。
+		a.applyHeaderFacts(upstreamResp.Header, &facts)
 		return adapter.StreamOutcome{Facts: &facts}
 	}
 

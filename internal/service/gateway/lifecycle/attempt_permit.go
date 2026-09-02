@@ -53,6 +53,21 @@ type AttemptRuntimeFeedbackStore interface {
 	PauseChannelModelPermission(context.Context, int64, int64, int64, int64, int64) error
 }
 
+// AccountRuntimeFeedbackStore 是账号级健康反馈所需的最小运行态契约（归因分层，修订 ADR-0014）：
+// 池型渠道的 429 写账号冷却、401/403 临时隔离账号给令牌刷新窗口、持久传输错误按疑似代理故障隔离。
+type AccountRuntimeFeedbackStore interface {
+	SetAccountCooldown(ctx context.Context, accountID, durationMs int64, window breakerstore.AccountUsageWindow) (int64, error)
+	MarkAccountUnschedulable(ctx context.Context, accountID, durationMs int64, reason breakerstore.AccountUnschedulableReason) (int64, error)
+}
+
+const (
+	// accountAuthRefreshWindowMs 是 401/403 后给令牌刷新留的隔离窗口。
+	// 只隔离不禁用：确认吊销才由刷新服务置 disabled（第六节）。
+	accountAuthRefreshWindowMs = 5 * 60 * 1000
+	// accountProxySuspectWindowMs 是持久传输错误（代理认证失败、连接拒绝、DNS、无路由）的隔离窗口。
+	accountProxySuspectWindowMs = 10 * 60 * 1000
+)
+
 // AttemptPermitRuntimeFactsReader 每张新 permit 都强读 PostgreSQL 当前 control revisions，既有 permit
 // 的每次生命周期写入则单独强读 ready integrity epoch。
 type AttemptPermitRuntimeFactsReader interface {
@@ -80,6 +95,7 @@ type AttemptPermitMetricsRecorder interface {
 type AttemptPermitManager struct {
 	store                 AttemptPermitStore
 	runtimeFeedbackStore  AttemptRuntimeFeedbackStore
+	accountFeedbackStore  AccountRuntimeFeedbackStore
 	runtimeFeedbackPolicy channel429CooldownPolicy
 	facts                 AttemptPermitRuntimeFactsReader
 	logger                *zap.Logger
@@ -102,9 +118,11 @@ func NewAttemptPermitManager(store AttemptPermitStore, facts AttemptPermitRuntim
 		opts.OperationTimeout = defaultAttemptPermitOperationTimeout
 	}
 	feedbackStore, _ := store.(AttemptRuntimeFeedbackStore)
+	accountFeedbackStore, _ := store.(AccountRuntimeFeedbackStore)
 	return &AttemptPermitManager{
 		store:                store,
 		runtimeFeedbackStore: feedbackStore,
+		accountFeedbackStore: accountFeedbackStore,
 		facts:                facts,
 		logger:               opts.Logger,
 		metrics:              opts.Metrics,
@@ -218,6 +236,7 @@ func (m *AttemptPermitManager) Acquire(ctx context.Context, params AttemptPermit
 		m.logger,
 		m.operationTimeout,
 	)
+	owner.accountFeedbackStore = m.accountFeedbackStore
 	if requestFields, ok := logfields.FromContext(ctx); ok {
 		owner.logFields = requestFields
 	}
@@ -308,6 +327,7 @@ func normalizeAttemptStoreError(err error) error {
 type AttemptPermitOwner struct {
 	store                 AttemptPermitStore
 	runtimeFeedbackStore  AttemptRuntimeFeedbackStore
+	accountFeedbackStore  AccountRuntimeFeedbackStore
 	runtimeFeedbackPolicy *channel429CooldownPolicy
 	facts                 AttemptPermitRuntimeFactsReader
 	permit                breakerstore.AttemptPermit
@@ -475,7 +495,15 @@ func (p *channel429CooldownPolicy) Resolve(retryAfter time.Duration) time.Durati
 }
 
 func (o *AttemptPermitOwner) recordRuntimeFeedback(ctx context.Context, upstreamErr error) error {
-	if o.runtimeFeedbackStore == nil || upstreamErr == nil {
+	if upstreamErr == nil {
+		return nil
+	}
+	// 池型渠道的健康反馈归账号（归因分层，修订 ADR-0014）：429/401/403/持久传输错误
+	// 都不喂渠道 breaker、不进渠道冷却——单号故障不得拖垮整池。
+	if o.permit.AccountID > 0 {
+		return o.recordAccountRuntimeFeedback(ctx, upstreamErr)
+	}
+	if o.runtimeFeedbackStore == nil {
 		return nil
 	}
 	category, categoryOK := adapter.UpstreamCategoryOf(upstreamErr)

@@ -503,6 +503,41 @@ func (q *Queries) CountSchedulableAccountsByChannel(ctx context.Context, channel
 	return count, err
 }
 
+const getAccountByPlatformUpstreamID = `-- name: GetAccountByPlatformUpstreamID :one
+SELECT a.id, a.channel_id, a.display_name, a.status, c.name AS channel_name
+FROM subscription_accounts a
+JOIN channels c ON c.id = a.channel_id
+WHERE a.platform = $1
+  AND a.upstream_account_id = $2
+`
+
+type GetAccountByPlatformUpstreamIDParams struct {
+	Platform          string
+	UpstreamAccountID string
+}
+
+type GetAccountByPlatformUpstreamIDRow struct {
+	ID          int64
+	ChannelID   int64
+	DisplayName string
+	Status      string
+	ChannelName string
+}
+
+// GetAccountByPlatformUpstreamID 按全局唯一键定位账号，供重复导入提示「已存在于哪个池」。
+func (q *Queries) GetAccountByPlatformUpstreamID(ctx context.Context, arg GetAccountByPlatformUpstreamIDParams) (GetAccountByPlatformUpstreamIDRow, error) {
+	row := q.db.QueryRow(ctx, getAccountByPlatformUpstreamID, arg.Platform, arg.UpstreamAccountID)
+	var i GetAccountByPlatformUpstreamIDRow
+	err := row.Scan(
+		&i.ID,
+		&i.ChannelID,
+		&i.DisplayName,
+		&i.Status,
+		&i.ChannelName,
+	)
+	return i, err
+}
+
 const getAccountOutboundCredential = `-- name: GetAccountOutboundCredential :one
 SELECT
     id,
@@ -544,6 +579,60 @@ func (q *Queries) GetAccountOutboundCredential(ctx context.Context, id int64) (G
 		&i.Status,
 	)
 	return i, err
+}
+
+const listAccountsNeedingTokenRefresh = `-- name: ListAccountsNeedingTokenRefresh :many
+SELECT id, channel_id, credentials, proxy_url, status
+FROM subscription_accounts
+WHERE status <> 'archived'
+  AND credential_type = 'oauth'
+  AND credentials ? 'refresh_token'
+  AND (credentials ->> 'expires_at') IS NOT NULL
+  AND (credentials ->> 'expires_at')::timestamptz < now() + make_interval(secs => $1::bigint)
+ORDER BY (credentials ->> 'expires_at')::timestamptz
+LIMIT $2
+`
+
+type ListAccountsNeedingTokenRefreshParams struct {
+	WithinSeconds int64
+	PageLimit     int32
+}
+
+type ListAccountsNeedingTokenRefreshRow struct {
+	ID          int64
+	ChannelID   int64
+	Credentials []byte
+	ProxyUrl    pgtype.Text
+	Status      string
+}
+
+// ListAccountsNeedingTokenRefresh 分页扫描 access token 即将过期的账号，供后台保活刷新（第六节）。
+// 只扫未归档的 oauth 账号；disabled 也刷——运维随时可能启用，启用瞬间就要有新鲜令牌可用。
+// expires_at 缺失（异常凭据）不进扫描：刷不刷都没意义，等请求时兜底路径报错暴露。
+func (q *Queries) ListAccountsNeedingTokenRefresh(ctx context.Context, arg ListAccountsNeedingTokenRefreshParams) ([]ListAccountsNeedingTokenRefreshRow, error) {
+	rows, err := q.db.Query(ctx, listAccountsNeedingTokenRefresh, arg.WithinSeconds, arg.PageLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAccountsNeedingTokenRefreshRow
+	for rows.Next() {
+		var i ListAccountsNeedingTokenRefreshRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ChannelID,
+			&i.Credentials,
+			&i.ProxyUrl,
+			&i.Status,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listSchedulableAccountsByChannel = `-- name: ListSchedulableAccountsByChannel :many

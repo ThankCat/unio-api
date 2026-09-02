@@ -173,15 +173,15 @@ func TestLookupTreatsNonCanonicalValueAsMiss(t *testing.T) {
 	store, _, server := newTestStore(t)
 	ctx := context.Background()
 	for name, value := range map[string]string{
-		"legacy integer":  "7",
-		"v2 wrong shape":  `{"v":2,"channel_id":7,"bound_at_ms":1}`,
-		"legacy v1":       `{"v":1,"channel_id":7,"binding_version":1,"last_success_at_ms":1}`,
-		"future v3":       `{"v":3,"channel_id":7,"binding_version":1,"last_success_at_ms":1}`,
-		"missing version": `{"channel_id":7,"binding_version":1,"last_success_at_ms":1}`,
-		"zero channel":    `{"v":2,"channel_id":0,"binding_version":1,"last_success_at_ms":1}`,
-		"zero binding":    `{"v":2,"channel_id":7,"binding_version":0,"last_success_at_ms":1}`,
+		"legacy integer":   "7",
+		"v2 wrong shape":   `{"v":2,"channel_id":7,"bound_at_ms":1}`,
+		"legacy v1":        `{"v":1,"channel_id":7,"binding_version":1,"last_success_at_ms":1}`,
+		"future v3":        `{"v":3,"channel_id":7,"binding_version":1,"last_success_at_ms":1}`,
+		"missing version":  `{"channel_id":7,"binding_version":1,"last_success_at_ms":1}`,
+		"zero channel":     `{"v":2,"channel_id":0,"binding_version":1,"last_success_at_ms":1}`,
+		"zero binding":     `{"v":2,"channel_id":7,"binding_version":0,"last_success_at_ms":1}`,
 		"negative account": `{"v":2,"channel_id":7,"account_id":-1,"binding_version":1,"last_success_at_ms":1}`,
-		"not json":        `not-json`,
+		"not json":         `not-json`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			server.Set("sticky-test:broken", value)

@@ -377,6 +377,24 @@ scan:
 				// Arm the terminal fallback before attempt persistence or any other fallible work.
 				// Abort is first-terminal-wins, so this is a no-op after the normal Finish/Abort path.
 				defer abortAttemptPermitOnExit(ctx, permitOwner)
+
+				// 池型候选：按 permit 固化的账号注入出站身份（access token / chatgpt_account_id / 代理）。
+				// 解析失败（凭据不新鲜且刷新失败、DB 故障）归还 permit 换下一个候选——
+				// 该账号的问题由解析器一侧标记（token_refresh 隔离），这里不重复处置。
+				resolved, resolveErr := l.applyAccountOutbound(ctx, candidate, permitAccount.ID)
+				if resolveErr != nil {
+					_ = permitOwner.Abort(ctx)
+					r.recordRoutingSkip("account_credentials_unavailable")
+					r.logRouting(ctx, "routing candidate skipped",
+						zap.Int64("channel_id", candidate.Channel.ID),
+						zap.Int64("account_id", permitAccount.ID),
+						zap.String("skip_reason", "account_credentials_unavailable"),
+						zap.String("error_message", resolveErr.Error()),
+					)
+					lastErr = resolveErr
+					continue
+				}
+				candidate = resolved
 			}
 
 			// permit 成功后才创建 attempt；创建失败必须 Abort 精确归还全部候选资源。
@@ -666,6 +684,9 @@ scan:
 			// attempt 成功：sticky bind/改绑（决议 2）。跳过/失败候选不会走到这里，天然不覆盖绑定。
 			// 池型渠道把账号一并写入绑定值（credential 型 permitAccount.ID 恒 0，行为不变）。
 			params.Sticky.BindSuccessWithAccount(ctx, candidate, permitAccount.ID)
+
+			// 池型渠道：上报账号观测（用量快照、LRU、阈值暂停），best-effort 不影响交付。
+			l.RecordAccountSuccess(ctx, permitAccount.ID, &success.Facts)
 
 			result.Outcome = metrics.ChatOutcomeSuccess
 			result.SelectedAccountID = permitAccount.ID

@@ -75,6 +75,35 @@ type ResponseFacts struct {
 
 	// Metadata 是本次上游调用的可审计元信息（HTTP 状态码、上游 request id）。
 	Metadata UpstreamMetadata
+
+	// AccountUsage 是订阅账号 wire（Codex）随响应头带回的用量窗口事实；其他 wire 恒为 nil。
+	// lifecycle 据此更新账号用量快照并执行阈值暂停，settlement 不消费它。
+	AccountUsage *AccountUsageFacts
+}
+
+// AccountUsageFacts 是订阅账号的用量窗口观测（来自 x-codex-* 响应头）。
+//
+// primary = 5h 窗口、secondary = 7d 窗口（实测口径；Sub2API 源码把两者弄反，勿照抄其映射）。
+// 任一窗口都可能缺失：Business Premium 无 5h 窗口、Enterprise/Edu 弹性额度无固定限，
+// 消费方必须容忍 Present=false，不得按 0% 或 100% 臆断。
+type AccountUsageFacts struct {
+	PlanType  string
+	Primary   AccountUsageWindowFacts
+	Secondary AccountUsageWindowFacts
+}
+
+// AccountUsageWindowFacts 是单个用量窗口的观测值。
+type AccountUsageWindowFacts struct {
+	Present bool
+	// UsedPercent 是窗口已用百分比（0-100，上游口径）。
+	UsedPercent float64
+	// WindowMinutes 是窗口长度（分钟）。
+	WindowMinutes int64
+	// ResetAtUnix 是窗口重置的绝对时刻（Unix 秒）。付费即时重置会让它变小，
+	// 消费方必须按「最近一次观测覆盖」处理，不能只增不减。
+	ResetAtUnix int64
+	// ResetAfterSeconds 是距重置的相对秒数（观测时刻起算）。
+	ResetAfterSeconds int64
 }
 
 // StreamOutcome 是流式调用结束后 adapter 返回给 lifecycle 的最终事实。

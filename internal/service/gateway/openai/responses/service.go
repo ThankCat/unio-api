@@ -157,6 +157,13 @@ func (s *ResponsesService) SetChannelSampleRecorder(recorder lifecycle.ChannelSa
 	s.lifecycle.SetChannelSampleRecorder(recorder)
 }
 
+// SetAccountOutbound 注入池型渠道的账号出站解析与健康观测（号池改造第五/六节）。
+// resolver 负责按 permit 固化账号取新鲜凭据；sink 消费成功传输后的用量观测。nil 表示不服务池型渠道。
+func (s *ResponsesService) SetAccountOutbound(resolver lifecycle.AccountOutboundResolver, sink lifecycle.AccountHealthSink) {
+	s.lifecycle.SetAccountOutboundResolver(resolver)
+	s.lifecycle.SetAccountHealthSink(sink)
+}
+
 // SetTPMObserver 注入分钟级 TPM 观测器（§8）；nil 表示不启用观测。
 func (s *ResponsesService) SetTPMObserver(observer *tpmobserver.Observer) {
 	s.lifecycle.SetTPMObserver(observer)

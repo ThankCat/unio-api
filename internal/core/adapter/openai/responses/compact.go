@@ -53,7 +53,10 @@ func (a *Adapter) CompactResponse(ctx context.Context, ch channel.Runtime, req R
 		defer cancel()
 	}
 
-	url, err := adapter.BuildUpstreamURL(ch.Origin, adapter.OperationPathResponsesCompact)
+	if err := a.guardRequest(req); err != nil {
+		return nil, err
+	}
+	url, err := adapter.BuildUpstreamURL(ch.Origin, a.compactPath())
 	if err != nil {
 		return nil, err
 	}
@@ -68,9 +71,10 @@ func (a *Adapter) CompactResponse(ctx context.Context, ch channel.Runtime, req R
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", fmt.Sprintf("Bearer %s", ch.APIKey))
+	a.decorateRequest(httpReq, ch)
 
 	adapter.MarkTransportStarted(ctx)
-	upstreamResp, err := a.client.Do(httpReq)
+	upstreamResp, err := a.httpClient(ch).Do(httpReq)
 	if upstreamResp != nil {
 		adapter.MarkResponseHeadersReceived(ctx, adapter.UpstreamMetadata{
 			StatusCode: upstreamResp.StatusCode,
@@ -98,7 +102,7 @@ func (a *Adapter) CompactResponse(ctx context.Context, ch channel.Runtime, req R
 		)
 	}
 	if upstreamResp.StatusCode < http.StatusOK || upstreamResp.StatusCode >= http.StatusMultipleChoices {
-		return nil, newUpstreamStatusError(upstreamResp, "compact")
+		return nil, a.upstreamStatusError(upstreamResp, "compact")
 	}
 
 	raw, exceeded, err := adapter.ReadUpstreamBodyLimited(upstreamResp.Body)
@@ -137,6 +141,7 @@ func (a *Adapter) CompactResponse(ctx context.Context, ch channel.Runtime, req R
 	}
 
 	facts := responsesFacts(parsed, chatUsage, meta, usage.SourceUpstreamResponse)
+	a.applyHeaderFacts(upstreamResp.Header, &facts)
 	return &Response{
 		Raw:        raw,
 		ResponseID: parsed.ID,

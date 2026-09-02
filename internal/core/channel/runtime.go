@@ -36,4 +36,19 @@ type Runtime struct {
 
 	// ProviderSlug 是业务 provider 标识（providers.slug），供 adapter 选择 stream translator；由 routing 注入。
 	ProviderSlug string
+
+	// Account 是池型渠道本次出站冻结的订阅账号身份（credential 型恒为零值）。
+	// 由 lifecycle 在 permit 固化后填充：APIKey 换成账号 access token，本结构补齐
+	// 上游账号标识与出口代理。adapter 对号池无感知——它只读 Runtime 上的事实。
+	Account AccountIdentity
+}
+
+// AccountIdentity 是一次出站所用订阅账号的最小身份集。
+type AccountIdentity struct {
+	// ID 是 subscription_accounts 主键；0 表示本次出站不经账号（credential 型渠道）。
+	ID int64
+	// UpstreamAccountID 是上游账号标识（Codex 的 chatgpt_account_id），随请求头出站。
+	UpstreamAccountID string
+	// ProxyURL 是账号绑定出口；空串直连。导入换码、令牌刷新、正式请求三条路径共用。
+	ProxyURL string
 }

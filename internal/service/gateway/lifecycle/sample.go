@@ -55,7 +55,7 @@ func (l *RequestLifecycle) RecordAttemptSample(
 		return
 	}
 
-	eligible, isError := classifyChannelScoringSample(outcome, err)
+	eligible, isError := classifyChannelScoringSample(outcome, err, candidate.Channel.Account.ID > 0)
 	ttft := sampleTTFTMs(stream, facts)
 	if recorder, ok := l.requestLog.(attemptScoringSampleRecorder); ok {
 		if recordErr := recorder.RecordAttemptScoringSample(context.WithoutCancel(ctx), requestlog.RecordAttemptScoringSampleParams{
@@ -83,14 +83,28 @@ func (l *RequestLifecycle) RecordAttemptSample(
 	}
 }
 
-func classifyChannelScoringSample(outcome breakerstore.FinishOutcome, err error) (eligible bool, isError bool) {
+func classifyChannelScoringSample(outcome breakerstore.FinishOutcome, err error, accountScoped bool) (eligible bool, isError bool) {
 	eligible, isError = classifyChannelSampleError(err)
+	// 池型渠道的 401/403 归账号（令牌失效/风控），不进渠道错误率样本：
+	// 单号令牌失效把整池评分拖垮会让健康账号一起失去流量（边界 4，修订 ADR-0014）。
+	if accountScoped && isError {
+		if status := upstreamStatusOf(err); status == 401 || status == 403 {
+			return false, false
+		}
+	}
 	if err == nil && outcome.ChannelOutcome == breakerstore.OutcomeEligibleFailure {
 		// adapter 正常返回但没有形成协议/usage 事实时，permit finish 已把它判为渠道协议失败；
 		// 评分样本必须消费同一个事实，不能同时把该 attempt 记成错误率成功。
 		return true, true
 	}
 	return eligible, isError
+}
+
+func upstreamStatusOf(err error) int {
+	if meta, ok := adapter.UpstreamMetadataOf(err); ok {
+		return meta.StatusCode
+	}
+	return 0
 }
 
 // sampleTTFTMs 返回本次 attempt 的 TTFT 样本（毫秒），无有效样本时返回 nil（§12.3）。

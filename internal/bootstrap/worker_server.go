@@ -17,6 +17,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/providerledger"
 	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
 	"github.com/ThankCat/unio-gateway/internal/platform/config"
+	"github.com/ThankCat/unio-gateway/internal/platform/proxyclient"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/adminmessage"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/channelmodelinventory"
@@ -24,6 +25,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/service/admin/exchangerate"
 	"github.com/ThankCat/unio-gateway/internal/service/appsettings"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
+	"github.com/ThankCat/unio-gateway/internal/service/subscription"
 )
 
 // WorkerServerAppDB 定义 worker server app 构建时需要的数据库能力。
@@ -93,7 +95,22 @@ func NewWorkerServerApp(ctx context.Context, deps WorkerServerAppDeps) (*WorkerS
 		deps.Config.Worker.OrphanReservationSweepBatchSize,
 	)
 
-	units := []workers.Unit{settlementRecoveryWorker, orphanReservationSweeperWorker, strandedReservationSweeperWorker}
+	// 订阅账号令牌保活（第六节）：扫描将过期账号并刷新；分布式锁防多实例重复刷。
+	// 出站（令牌端点）与正式请求共用按账号代理解析器。
+	accountProxyClients := proxyclient.NewResolver(upstreamHTTPClient(nil))
+	subscriptionOutbound := subscription.NewOutbound(
+		queries,
+		subscription.NewTokenClient(accountProxyClients.ClientFor),
+		permitStore,
+		deps.Redis,
+		deps.Logger,
+	)
+	tokenRefreshWorker := subscription.NewRefreshWorker(queries, subscriptionOutbound, deps.Logger, subscription.RefreshWorkerOptions{})
+
+	units := []workers.Unit{
+		settlementRecoveryWorker, orphanReservationSweeperWorker, strandedReservationSweeperWorker,
+		tokenRefreshWorker,
+	}
 
 	if deps.Config.ModelCatalogSync.Enabled {
 		syncer, store := buildModelCatalogSync(deps.Config.ModelCatalogSync, queries)

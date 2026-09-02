@@ -15,6 +15,13 @@ type alwaysRetryClassifier struct{}
 
 func (alwaysRetryClassifier) IsRetryable(error) bool { return true }
 
+// stubAccountOutbound 返回固定凭据：这些测试只考察换号次序，不考察凭据解析。
+type stubAccountOutbound struct{}
+
+func (stubAccountOutbound) ResolveAccountOutbound(_ context.Context, accountID int64) (AccountOutbound, error) {
+	return AccountOutbound{AccessToken: "at", UpstreamAccountID: "up"}, nil
+}
+
 // permitFor 为逐次 acquire 构造可用 permit（permit id 无关紧要，harness 不校验）。
 func permitFor(id string) breakerstore.AttemptAdmission {
 	return breakerstore.AttemptAdmission{
@@ -33,6 +40,7 @@ func TestRunNonStreamRetriesSameChannelWithDifferentAccount(t *testing.T) {
 	log := &permitGuardPanicLog{attemptAuditLog: &attemptAuditLog{}}
 	runner, store, _, ctx := newPermitGuardRunner(log)
 	runner.retryClassifier = alwaysRetryClassifier{}
+	runner.lifecycle.SetAccountOutboundResolver(stubAccountOutbound{})
 	store.acquireResults = []breakerstore.AttemptAdmission{
 		permitFor("p1"), permitFor("p2"), permitFor("p3"),
 	}
@@ -97,6 +105,7 @@ func TestRunNonStreamPoolRetryStopsAtBudget(t *testing.T) {
 	log := &permitGuardPanicLog{attemptAuditLog: &attemptAuditLog{}}
 	runner, store, _, ctx := newPermitGuardRunner(log)
 	runner.retryClassifier = alwaysRetryClassifier{}
+	runner.lifecycle.SetAccountOutboundResolver(stubAccountOutbound{})
 	store.acquireResults = []breakerstore.AttemptAdmission{permitFor("p1"), permitFor("p2")}
 
 	limit := int64(4)

@@ -81,7 +81,10 @@ func ResolveOpenAIResponse(raw *string) Response {
 			UpstreamRaw: *raw,
 			Resolution:  ResolutionUpstreamResponse,
 		}
-	case "priority":
+	// 官方 2026-07-30 把 priority 改名 fast，两个值都接受：现有模型响应仍回 priority，
+	// gpt-5.6 之后发布的模型改回 fast。两值必须视为同一档，否则新模型上线时
+	// Fast 会被误判成 Standard 并按低档结算（存量修正，不限号池）。
+	case "priority", "fast":
 		return Response{
 			Actual:      TierFast,
 			Settled:     TierFast,

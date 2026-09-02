@@ -121,6 +121,7 @@ func TestChannelCacheStatsExcludeStickyCrossChannelTransitions(t *testing.T) {
 			BaselineOrder:       []int64{channelAID, channelBID},
 			ActualScanOrder:     []int64{},
 			AttemptedChannelIds: []int64{},
+			AttemptedAccountIds: []int64{},
 			TracePayload:        []byte(`{}`),
 		}
 		if traceStatus == "complete" {
