@@ -65,6 +65,33 @@ type Prober interface {
 	ProbeChannel(ctx context.Context, protocol, adapterKey string, rt corechannel.Runtime, upstreamModel string) (adapter.ProbeResult, error)
 }
 
+// StreamProber 是 Prober 的可选扩展：流式探测（responses-only adapter，如 codex）时把上游
+// 输出文本增量实时透出。生产实现 lifecycle.AdapterRegistry 支持；测试替身不实现时自动回退
+// 非流式 ProbeChannel（无增量，行为不变）。
+type StreamProber interface {
+	ProbeChannelStream(ctx context.Context, protocol, adapterKey string, rt corechannel.Runtime, upstreamModel string, onDelta func(text string)) (adapter.ProbeResult, error)
+}
+
+// ProbeEvent 是流式检测（TestStream）透出的一个过程事件，供 adminapi 以 SSE 推给检测弹窗。
+type ProbeEvent struct {
+	// Type 取 ProbeEventStart / ProbeEventContent。
+	Type string
+	// Model 是本次真实上游尝试的上游模型名（仅 probe_start）。
+	Model string
+	// AccountName 是池型渠道本次被测账号名，credential 型为空（仅 probe_start）。
+	AccountName string
+	// Text 是上游流式响应的文本增量（仅 content）。
+	Text string
+}
+
+// 流式检测过程事件类型。
+const (
+	// ProbeEventStart：一次真实上游尝试开始（自动选模型顺延时每个候选各发一次）。
+	ProbeEventStart = "probe_start"
+	// ProbeEventContent：上游流式响应的文本增量（仅 responses-only 探测产生）。
+	ProbeEventContent = "content"
+)
+
 // ProbeAccountant 记录真实探测事实，并在 usage 可靠时扣 Provider 内部余额。
 type ProbeAccountant interface {
 	AccountProbe(ctx context.Context, params providerledger.ProbeParams) error
@@ -213,6 +240,17 @@ func (p probeSnapshot) isPool() bool {
 
 // Test 对指定渠道执行一次主动检测。读取、探测与结果回写均冻结三类 revision；迟到结果只写历史日志。
 func (s *Service) Test(ctx context.Context, in TestInput) (TestResult, error) {
+	return s.test(ctx, in, nil)
+}
+
+// TestStream 与 Test 同一条编排（同样选模型、探测、归类、落库），另把探测过程事件经 emit
+// 实时透出：每次真实上游尝试前发 probe_start（含模型与被测账号），流式探测的响应文本增量发
+// content。emit 由 handler 写 SSE；写出失败不中断探测——检测结果必须落库，弹窗关闭不影响。
+func (s *Service) TestStream(ctx context.Context, in TestInput, emit func(ProbeEvent)) (TestResult, error) {
+	return s.test(ctx, in, emit)
+}
+
+func (s *Service) test(ctx context.Context, in TestInput, emit func(ProbeEvent)) (TestResult, error) {
 	if in.ChannelID <= 0 {
 		return TestResult{}, invalidArgument("id", "channel id must be positive")
 	}
@@ -231,7 +269,7 @@ func (s *Service) Test(ctx context.Context, in TestInput) (TestResult, error) {
 	workCtx, cancel := s.detachedOperationContext(ctx)
 	defer cancel()
 
-	result, err := s.executeProbe(workCtx, snapshot, strings.TrimSpace(in.Model), in.Source)
+	result, err := s.executeProbeStream(workCtx, snapshot, strings.TrimSpace(in.Model), in.Source, emit)
 	if err != nil {
 		return TestResult{}, err
 	}
@@ -448,11 +486,15 @@ func (s *Service) detachedOperationContext(ctx context.Context) (context.Context
 }
 
 func (s *Service) executeProbe(ctx context.Context, snapshot probeSnapshot, model, source string) (TestResult, error) {
+	return s.executeProbeStream(ctx, snapshot, model, source, nil)
+}
+
+func (s *Service) executeProbeStream(ctx context.Context, snapshot probeSnapshot, model, source string, emit func(ProbeEvent)) (TestResult, error) {
 	candidates, err := s.resolveUpstreamCandidates(ctx, snapshot.ChannelID, model)
 	if err != nil {
 		return TestResult{}, err
 	}
-	return s.executeProbeCandidates(ctx, snapshot, candidates, source), nil
+	return s.executeProbeCandidatesStream(ctx, snapshot, candidates, source, emit), nil
 }
 
 type probeCandidate struct {
@@ -461,6 +503,10 @@ type probeCandidate struct {
 }
 
 func (s *Service) executeProbeCandidates(ctx context.Context, snapshot probeSnapshot, candidates []probeCandidate, source string) TestResult {
+	return s.executeProbeCandidatesStream(ctx, snapshot, candidates, source, nil)
+}
+
+func (s *Service) executeProbeCandidatesStream(ctx context.Context, snapshot probeSnapshot, candidates []probeCandidate, source string, emit func(ProbeEvent)) TestResult {
 	if source == "" {
 		source = SourceManual
 	}
@@ -478,9 +524,12 @@ func (s *Service) executeProbeCandidates(ctx context.Context, snapshot probeSnap
 	var result TestResult
 	for i, candidate := range candidates {
 		upstreamModel := candidate.UpstreamModel
+		if emit != nil {
+			emit(ProbeEvent{Type: ProbeEventStart, Model: upstreamModel, AccountName: snapshot.AccountDisplayName})
+		}
 		start := time.Now()
 		probeCtx, probeCancel := context.WithTimeout(ctx, probeTimeout)
-		probeResult, probeErr := s.prober.ProbeChannel(probeCtx, snapshot.Protocol, snapshot.AdapterKey, runtime, upstreamModel)
+		probeResult, probeErr := s.probeOnce(probeCtx, snapshot, runtime, upstreamModel, emit)
 		latency := time.Since(start)
 		probeCancel()
 
@@ -514,6 +563,19 @@ func (s *Service) executeProbeCandidates(ctx context.Context, snapshot probeSnap
 		}
 	}
 	return result
+}
+
+// probeOnce 发起一次真实上游探测：需要透出过程（emit 非 nil）且 prober 支持流式时走
+// ProbeChannelStream 把文本增量译成 content 事件，否则走原非流式 ProbeChannel。
+func (s *Service) probeOnce(ctx context.Context, snapshot probeSnapshot, runtime corechannel.Runtime, upstreamModel string, emit func(ProbeEvent)) (adapter.ProbeResult, error) {
+	if emit != nil {
+		if streamer, ok := s.prober.(StreamProber); ok {
+			return streamer.ProbeChannelStream(ctx, snapshot.Protocol, snapshot.AdapterKey, runtime, upstreamModel, func(text string) {
+				emit(ProbeEvent{Type: ProbeEventContent, Text: text})
+			})
+		}
+	}
+	return s.prober.ProbeChannel(ctx, snapshot.Protocol, snapshot.AdapterKey, runtime, upstreamModel)
 }
 
 func (s *Service) permissionRecheckSnapshot(

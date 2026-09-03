@@ -496,6 +496,13 @@ const (
 	// 与 CodeAdminConflict 分开是为了让前端能把「先停用」和「先处理下级依赖」给出不同引导。
 	CodeAdminArchiveRequiresDisabled Code = "admin_archive_requires_disabled"
 
+	// CodeAdminChannelRequiresEnabledProvider 表示启用渠道时所属服务商不是 enabled。
+	// 与缺充值汇率闸门分开，避免前端把所有 409 都渲染成「请先启用服务商」。
+	CodeAdminChannelRequiresEnabledProvider Code = "admin_channel_requires_enabled_provider"
+
+	// CodeAdminChannelRequiresRechargeRate 表示启用渠道时所属服务商没有当前生效的充值汇率（D-02）。
+	CodeAdminChannelRequiresRechargeRate Code = "admin_channel_requires_recharge_rate"
+
 	// CodeAdminAdapterBindingUnsupported 表示 channel 的 (protocol, adapter_key) 复合键未在当前进程 adapter registry 注册。
 	CodeAdminAdapterBindingUnsupported Code = "admin_adapter_binding_unsupported"
 

@@ -152,8 +152,8 @@ func TestCreateEnabledRequiresEnabledProvider(t *testing.T) {
 		Status:     channel.StatusEnabled,
 		Priority:   0,
 	})
-	if got := failure.CodeOf(err); got != failure.CodeAdminConflict {
-		t.Fatalf("error code = %q, want %q (err=%v)", got, failure.CodeAdminConflict, err)
+	if got := failure.CodeOf(err); got != failure.CodeAdminChannelRequiresEnabledProvider {
+		t.Fatalf("error code = %q, want %q (err=%v)", got, failure.CodeAdminChannelRequiresEnabledProvider, err)
 	}
 	if store.createCalls != 0 {
 		t.Fatalf("CreateChannel calls = %d, want 0", store.createCalls)
@@ -174,8 +174,8 @@ func TestEnableChannelRequiresProviderRechargeRate(t *testing.T) {
 			AdapterKey: channel.ProtocolOpenAI, Credential: "test-credential",
 			Status: channel.StatusEnabled,
 		})
-		if got := failure.CodeOf(err); got != failure.CodeAdminConflict {
-			t.Fatalf("error code = %q, want %q (err=%v)", got, failure.CodeAdminConflict, err)
+		if got := failure.CodeOf(err); got != failure.CodeAdminChannelRequiresRechargeRate {
+			t.Fatalf("error code = %q, want %q (err=%v)", got, failure.CodeAdminChannelRequiresRechargeRate, err)
 		}
 		if store.createCalls != 0 {
 			t.Fatalf("CreateChannel calls = %d, want 0", store.createCalls)
@@ -212,8 +212,8 @@ func TestEnableChannelRequiresProviderRechargeRate(t *testing.T) {
 		_, err := svc.Update(context.Background(), channel.UpdateInput{
 			ID: 7, ProviderID: 1, Name: "primary", Status: channel.StatusEnabled,
 		})
-		if got := failure.CodeOf(err); got != failure.CodeAdminConflict {
-			t.Fatalf("error code = %q, want %q (err=%v)", got, failure.CodeAdminConflict, err)
+		if got := failure.CodeOf(err); got != failure.CodeAdminChannelRequiresRechargeRate {
+			t.Fatalf("error code = %q, want %q (err=%v)", got, failure.CodeAdminChannelRequiresRechargeRate, err)
 		}
 		if store.updateCalls != 0 {
 			t.Fatalf("UpdateChannel calls = %d, want 0", store.updateCalls)

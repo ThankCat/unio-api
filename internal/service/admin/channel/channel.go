@@ -506,7 +506,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Channel, error) {
 		return Channel{}, conflict("archived provider cannot be configured")
 	}
 	if status == StatusEnabled && provider.Status != StatusEnabled {
-		return Channel{}, conflict("enabled channel requires an enabled provider")
+		return Channel{}, requiresEnabledProvider()
 	}
 	if status == StatusEnabled {
 		if err := s.ensureProviderRechargeRateConfigured(ctx, provider.ID); err != nil {
@@ -625,7 +625,7 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Channel, error) {
 		return Channel{}, conflict("archived provider cannot be configured")
 	}
 	if status == StatusEnabled && provider.Status != StatusEnabled {
-		return Channel{}, conflict("enabled channel requires an enabled provider")
+		return Channel{}, requiresEnabledProvider()
 	}
 	if status == StatusEnabled && cur.Status != StatusEnabled {
 		if err := s.ensureProviderRechargeRateConfigured(ctx, provider.ID); err != nil {
@@ -1055,7 +1055,7 @@ func (s *Service) ensureProviderRechargeRateConfigured(ctx context.Context, prov
 		return nil
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
-		return conflict("provider has no active recharge rate; configure it in the provider settings before enabling channels")
+		return requiresRechargeRate()
 	}
 	return storeFailed(err, "find active provider recharge rate")
 }
@@ -1374,6 +1374,20 @@ func notFound(message string) error {
 
 func conflict(message string) error {
 	return failure.New(failure.CodeAdminConflict, failure.WithMessage(message))
+}
+
+func requiresEnabledProvider() error {
+	return failure.New(
+		failure.CodeAdminChannelRequiresEnabledProvider,
+		failure.WithMessage("enabled channel requires an enabled provider"),
+	)
+}
+
+func requiresRechargeRate() error {
+	return failure.New(
+		failure.CodeAdminChannelRequiresRechargeRate,
+		failure.WithMessage("provider has no active recharge rate; configure it in the provider settings before enabling channels"),
+	)
 }
 
 func archiveRequiresDisabled(message string) error {

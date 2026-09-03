@@ -31,6 +31,13 @@ var probeUserContent = json.RawMessage(`"hi"`)
 //     调用方据此把失败归类为凭据无效 / 模型不可用 / 超时 / 连不上等；此时状态码取自 UpstreamError
 //     元信息（连接失败/超时未拿到响应时为 0）。
 func (r *AdapterRegistry) ProbeChannel(ctx context.Context, protocol, adapterKey string, rt channel.Runtime, upstreamModel string) (adapter.ProbeResult, error) {
+	return r.ProbeChannelStream(ctx, protocol, adapterKey, rt, upstreamModel, nil)
+}
+
+// ProbeChannelStream 与 ProbeChannel 行为一致，另把流式探测（responses-only adapter，如 codex）
+// 的输出文本增量经 onDelta 实时透出，供管理台检测弹窗展示验证过程。onDelta 可为 nil（等价
+// ProbeChannel）；chat/messages 探测是非流式的，不产生增量。
+func (r *AdapterRegistry) ProbeChannelStream(ctx context.Context, protocol, adapterKey string, rt channel.Runtime, upstreamModel string, onDelta func(text string)) (adapter.ProbeResult, error) {
 	if r == nil {
 		return adapter.ProbeResult{}, failure.New(
 			failure.CodeAdapterInvalidRegistration,
@@ -58,7 +65,7 @@ func (r *AdapterRegistry) ProbeChannel(ctx context.Context, protocol, adapterKey
 		// responses-only adapter（如 codex 订阅后端）：无 chat 三槽，探测走流式 responses——
 		// 与真实链路同形（codex wire 以流式为准），拿到终态即为通过。
 		if stream, ok := r.OpenAI.StreamResponses(adapterKey); ok {
-			return probeStreamResponses(ctx, stream, rt, upstreamModel)
+			return probeStreamResponses(ctx, stream, rt, upstreamModel, onDelta)
 		}
 		return adapter.ProbeResult{}, errProbeUnsupported(protocol, adapterKey)
 
@@ -92,11 +99,14 @@ func (r *AdapterRegistry) ProbeChannel(ctx context.Context, protocol, adapterKey
 // stream 由调用方置位。两处实测得出的 codex 订阅后端契约：max_output_tokens 被拒
 // （400 "Unsupported parameter"），store 必须显式 false（400 "Store must be set to false"）。
 // "hi" 输入的自然回复很短，订阅账号无边际成本。
+//
+// onDelta 非 nil 时把 response.output_text.delta 的文本增量透出（检测弹窗实时展示）。
 func probeStreamResponses(
 	ctx context.Context,
 	stream responsesadapter.StreamResponsesAdapter,
 	rt channel.Runtime,
 	upstreamModel string,
+	onDelta func(text string),
 ) (adapter.ProbeResult, error) {
 	body, err := json.Marshal(map[string]any{
 		"model": upstreamModel,
@@ -115,7 +125,16 @@ func probeStreamResponses(
 			failure.WithMessage("encode responses probe body"),
 		)
 	}
-	outcome, err := stream.StreamResponse(ctx, rt, responsesadapter.Request{Body: body}, func(responsesadapter.StreamChunk) error {
+	outcome, err := stream.StreamResponse(ctx, rt, responsesadapter.Request{Body: body}, func(chunk responsesadapter.StreamChunk) error {
+		if onDelta == nil || chunk.EventType != "response.output_text.delta" {
+			return nil
+		}
+		var payload struct {
+			Delta string `json:"delta"`
+		}
+		if json.Unmarshal(chunk.Data, &payload) == nil && payload.Delta != "" {
+			onDelta(payload.Delta)
+		}
 		return nil
 	})
 	if err != nil {

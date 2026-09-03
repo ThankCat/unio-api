@@ -178,7 +178,9 @@ func adminErrorStatus(code failure.Code) int {
 		return http.StatusNotFound
 	case failure.CodeAdminConflict:
 		return http.StatusConflict
-	case failure.CodeAdminArchiveRequiresDisabled:
+	case failure.CodeAdminArchiveRequiresDisabled,
+		failure.CodeAdminChannelRequiresEnabledProvider,
+		failure.CodeAdminChannelRequiresRechargeRate:
 		return http.StatusConflict
 	case failure.CodeAdminAuthLoginRateLimited:
 		return http.StatusTooManyRequests

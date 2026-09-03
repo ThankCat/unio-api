@@ -211,6 +211,98 @@ func TestRotateCredentialFailedProbeDoesNotRestoreCredential(t *testing.T) {
 	}
 }
 
+// fakeStreamProber 同时实现 Prober 与 StreamProber：流式路径回放固定文本增量。
+type fakeStreamProber struct {
+	fakeProber
+	deltas      []string
+	streamCalls int
+}
+
+func (p *fakeStreamProber) ProbeChannelStream(_ context.Context, _, _ string, _ corechannel.Runtime, model string, onDelta func(string)) (adapter.ProbeResult, error) {
+	p.streamCalls++
+	p.model = model
+	for _, d := range p.deltas {
+		onDelta(d)
+	}
+	return adapter.ProbeResult{StatusCode: p.status}, p.err
+}
+
+// TestStream：prober 支持流式时，事件时序冻结为 probe_start →（content×N），
+// 检测结果照常落库（与非流式 Test 同一条编排）。
+func TestTestStreamEmitsStartAndContentEvents(t *testing.T) {
+	store := &fakeStore{
+		probeSnapshot: permissionSnapshot(8), bindings: enabledBinding(),
+		applied: sqlc.ApplyChannelProbeResultRow{ResultApplied: true, CurrentConfigRevision: 8},
+	}
+	prober := &fakeStreamProber{fakeProber: fakeProber{status: 200}, deltas: []string{"po", "ng"}}
+
+	var events []ProbeEvent
+	result, err := NewService(store, prober, nil).TestStream(context.Background(), TestInput{ChannelID: 7}, func(ev ProbeEvent) {
+		events = append(events, ev)
+	})
+	if err != nil {
+		t.Fatalf("test stream: %v", err)
+	}
+	if !result.Success || result.TestedModel != "gpt-test" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	if prober.streamCalls != 1 || prober.calls != 0 {
+		t.Fatalf("stream-capable prober must use streaming path: stream=%d plain=%d", prober.streamCalls, prober.calls)
+	}
+	if len(events) != 3 {
+		t.Fatalf("events = %d, want 3 (start + 2 content): %+v", len(events), events)
+	}
+	if events[0].Type != ProbeEventStart || events[0].Model != "gpt-test" {
+		t.Fatalf("first event must be probe_start with model: %+v", events[0])
+	}
+	if events[1].Type != ProbeEventContent || events[1].Text != "po" || events[2].Text != "ng" {
+		t.Fatalf("content deltas must be forwarded in order: %+v", events[1:])
+	}
+	if store.applyCalls != 1 {
+		t.Fatalf("stream test must persist result exactly once, got %d", store.applyCalls)
+	}
+}
+
+// TestStream：prober 不支持 StreamProber 时回退非流式 ProbeChannel，仅有 probe_start 事件。
+func TestTestStreamFallsBackToPlainProber(t *testing.T) {
+	store := &fakeStore{
+		probeSnapshot: permissionSnapshot(8), bindings: enabledBinding(),
+		applied: sqlc.ApplyChannelProbeResultRow{ResultApplied: true, CurrentConfigRevision: 8},
+	}
+	prober := &fakeProber{status: 200}
+
+	var events []ProbeEvent
+	result, err := NewService(store, prober, nil).TestStream(context.Background(), TestInput{ChannelID: 7}, func(ev ProbeEvent) {
+		events = append(events, ev)
+	})
+	if err != nil {
+		t.Fatalf("test stream: %v", err)
+	}
+	if !result.Success || prober.calls != 1 {
+		t.Fatalf("fallback must probe once: result=%+v calls=%d", result, prober.calls)
+	}
+	if len(events) != 1 || events[0].Type != ProbeEventStart {
+		t.Fatalf("plain prober must emit only probe_start: %+v", events)
+	}
+}
+
+// Test（非流式入口）不受 StreamProber 影响：即使 prober 支持流式也走非流式路径，行为逐字节不变。
+func TestPlainTestIgnoresStreamCapability(t *testing.T) {
+	store := &fakeStore{
+		probeSnapshot: permissionSnapshot(8), bindings: enabledBinding(),
+		applied: sqlc.ApplyChannelProbeResultRow{ResultApplied: true, CurrentConfigRevision: 8},
+	}
+	prober := &fakeStreamProber{fakeProber: fakeProber{status: 200}}
+
+	result, err := NewService(store, prober, nil).Test(context.Background(), TestInput{ChannelID: 7})
+	if err != nil {
+		t.Fatalf("test: %v", err)
+	}
+	if !result.Success || prober.streamCalls != 0 || prober.calls != 1 {
+		t.Fatalf("plain Test must not use streaming path: stream=%d plain=%d", prober.streamCalls, prober.calls)
+	}
+}
+
 func permissionSnapshot(configRevision int64) sqlc.GetChannelProbeSnapshotRow {
 	return sqlc.GetChannelProbeSnapshotRow{
 		ChannelID: 7, ProviderID: 2,

@@ -57,6 +57,8 @@ func Register(r chi.Router, d Deps) {
 	if d.TestService != nil {
 		cth := &channelTestHandler{service: d.TestService}
 		r.Post("/channels/{id}/test", cth.test)
+		// SSE 变体：同一条检测编排，实时推送验证过程（账号/渠道检测弹窗）。
+		r.Post("/channels/{id}/test/stream", cth.testStream)
 		r.Get("/channels/{id}/test-logs", cth.testLogs)
 	}
 
