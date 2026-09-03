@@ -206,27 +206,27 @@ type radarDTO struct {
 }
 
 type breakdownRowDTO struct {
-	Label          string                    `json:"label"`
-	RefID           *int64                   `json:"ref_id"`
-	Status          string                   `json:"status"`
-	Balance         *string                  `json:"balance"`
-	BalanceCurrency string                   `json:"balance_currency"`
-	BalanceUSD      *string                  `json:"balance_usd"`
-	BalanceStatus   string                   `json:"balance_status"`
-	Terminal       int64                     `json:"terminal"`
-	Succeeded      int64                     `json:"succeeded"`
-	Failed         int64                     `json:"failed"`
-	SuccessRate    float64                   `json:"success_rate"`
-	Tokens         int64                     `json:"tokens"`
-	RevenueUSD     string                    `json:"revenue_usd"`
-	CostUSD        string                    `json:"cost_usd"`
-	MarginUSD      string                    `json:"margin_usd"`
-	Latency        adminhttp.LatencyStatsDTO `json:"latency"`
-	LatencyP95     float64                   `json:"latency_p95"`
-	AvgTPS         float64                   `json:"avg_tps"`
-	RecentError    string                    `json:"recent_error"`
-	ChannelCount   int64                     `json:"channel_count"`
-	SuccessBuckets []successBucketDTO        `json:"success_buckets,omitempty"`
+	Label           string                    `json:"label"`
+	RefID           *int64                    `json:"ref_id"`
+	Status          string                    `json:"status"`
+	Balance         *string                   `json:"balance"`
+	BalanceCurrency string                    `json:"balance_currency"`
+	BalanceUSD      *string                   `json:"balance_usd"`
+	BalanceStatus   string                    `json:"balance_status"`
+	Terminal        int64                     `json:"terminal"`
+	Succeeded       int64                     `json:"succeeded"`
+	Failed          int64                     `json:"failed"`
+	SuccessRate     float64                   `json:"success_rate"`
+	Tokens          int64                     `json:"tokens"`
+	RevenueUSD      string                    `json:"revenue_usd"`
+	CostUSD         string                    `json:"cost_usd"`
+	MarginUSD       string                    `json:"margin_usd"`
+	Latency         adminhttp.LatencyStatsDTO `json:"latency"`
+	LatencyP95      float64                   `json:"latency_p95"`
+	AvgTPS          float64                   `json:"avg_tps"`
+	RecentError     string                    `json:"recent_error"`
+	ChannelCount    int64                     `json:"channel_count"`
+	SuccessBuckets  []successBucketDTO        `json:"success_buckets,omitempty"`
 }
 
 type successBucketDTO struct {
@@ -304,21 +304,21 @@ func (h *dashboardHandler) breakdown(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 		out = append(out, breakdownRowDTO{
-			Label:         row.Label,
+			Label:           row.Label,
 			RefID:           row.RefID,
 			Status:          row.Status,
 			Balance:         row.Balance,
 			BalanceCurrency: row.BalanceCurrency,
 			BalanceUSD:      row.BalanceUSD,
 			BalanceStatus:   row.BalanceStatus,
-			Terminal:      row.Terminal,
-			Succeeded:     row.Succeeded,
-			Failed:        row.Failed,
-			SuccessRate:   row.SuccessRate,
-			Tokens:        row.Tokens,
-			RevenueUSD:    row.RevenueUSD,
-			CostUSD:       row.CostUSD,
-			MarginUSD:     row.MarginUSD,
+			Terminal:        row.Terminal,
+			Succeeded:       row.Succeeded,
+			Failed:          row.Failed,
+			SuccessRate:     row.SuccessRate,
+			Tokens:          row.Tokens,
+			RevenueUSD:      row.RevenueUSD,
+			CostUSD:         row.CostUSD,
+			MarginUSD:       row.MarginUSD,
 			Latency: adminhttp.LatencyStatsDTO{
 				Avg:      row.Latency.Avg,
 				P50:      row.Latency.P50,

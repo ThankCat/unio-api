@@ -3,6 +3,7 @@ package subscription
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 
@@ -24,6 +25,7 @@ type ProbeIdentity struct {
 type ProbeIdentityQueries interface {
 	AdminPickProbeAccount(ctx context.Context, channelID int64) (int64, error)
 	AdminGetSubscriptionAccount(ctx context.Context, id int64) (sqlc.SubscriptionAccount, error)
+	GetEnabledProxyURL(ctx context.Context, id int64) (string, error)
 }
 
 // ProbeIdentityResolver 为池型渠道的管理面出站解析账号身份。
@@ -92,7 +94,13 @@ func (r *ProbeIdentityResolver) ResolveProbeIdentity(ctx context.Context, channe
 		DisplayName:       account.DisplayName,
 		UpstreamAccountID: account.UpstreamAccountID,
 	}
-	if account.ProxyUrl.Valid {
+	// 出站代理：实体（enabled）优先，legacy proxy_url 回退（与正式出站同一回退链）。
+	if account.ProxyID.Valid {
+		if url, proxyErr := r.queries.GetEnabledProxyURL(ctx, account.ProxyID.Int64); proxyErr == nil && strings.TrimSpace(url) != "" {
+			identity.ProxyURL = url
+		}
+	}
+	if identity.ProxyURL == "" && account.ProxyUrl.Valid {
 		identity.ProxyURL = account.ProxyUrl.String
 	}
 

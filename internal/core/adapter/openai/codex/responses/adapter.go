@@ -53,11 +53,21 @@ func NewAdapter(client *http.Client, clientFor func(proxyURL string) *http.Clien
 		GuardRequest:          guardCodexRequest,
 		HeaderFacts:           applyCodexHeaderFacts,
 		RetryAfterFromHeaders: codexRetryAfter,
+		RetryAfterFromBody:    codexRetryAfterFromBody,
 		FinalizeFacts:         finalizeCodexFacts,
+		// 真机实测契约（2026-09-03）：后端只收流式 + 结构化 input；出站前统一规范化，
+		// 非流式入站由 base adapter 流式聚合还原（openai chat 桥接与 SDK 直连自动受益）。
+		NormalizeRequest: normalizeCodexRequest,
+		ForceStreaming:   true,
 	}
 	if clientFor != nil {
 		wire.ClientFor = func(ch channel.Runtime) *http.Client {
-			return clientFor(ch.Account.ProxyURL)
+			// 出站代理回退链：账号代理 → 渠道代理 → 直连（clientFor("") 返回缺省 client）。
+			proxy := ch.Account.ProxyURL
+			if proxy == "" {
+				proxy = ch.ProxyURL
+			}
+			return clientFor(proxy)
 		}
 	}
 	return openairesponses.NewAdapterWithWire(client, wire)
@@ -149,6 +159,43 @@ func codexRetryAfter(header http.Header) time.Duration {
 	}
 	if v, err := strconv.ParseInt(strings.TrimSpace(header.Get("x-codex-primary-reset-at")), 10, 64); err == nil && v > 0 {
 		if until := time.Until(time.Unix(v, 0)); until > 0 {
+			return until
+		}
+	}
+	return 0
+}
+
+// codexRetryAfterFromBody 从 429 错误体解析重置时刻（x-codex 头缺失时的兜底，与 sub2api 对齐）。
+// 已知形状：{"error":{"type":"usage_limit_reached"|"rate_limit_exceeded","resets_at":<unix>,
+// "resets_in_seconds":<sec>,...}}。解析不出返回 0（上层落秒级兜底冷却）。
+func codexRetryAfterFromBody(statusCode int, snippet string) time.Duration {
+	if statusCode != http.StatusTooManyRequests || snippet == "" {
+		return 0
+	}
+	var payload struct {
+		Error struct {
+			Type            string          `json:"type"`
+			ResetsAt        json.Number     `json:"resets_at"`
+			ResetsInSeconds json.RawMessage `json:"resets_in_seconds"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(snippet), &payload); err != nil {
+		return 0
+	}
+	switch payload.Error.Type {
+	case "usage_limit_reached", "rate_limit_exceeded":
+	default:
+		return 0
+	}
+	var resetsIn int64
+	if len(payload.Error.ResetsInSeconds) > 0 {
+		_ = json.Unmarshal(payload.Error.ResetsInSeconds, &resetsIn)
+	}
+	if resetsIn > 0 {
+		return time.Duration(resetsIn) * time.Second
+	}
+	if ts, err := payload.Error.ResetsAt.Int64(); err == nil && ts > 0 {
+		if until := time.Until(time.Unix(ts, 0)); until > 0 {
 			return until
 		}
 	}

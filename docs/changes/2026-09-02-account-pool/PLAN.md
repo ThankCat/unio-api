@@ -496,6 +496,116 @@ config_revision + 台账 created_by 承担，统一审计属平台级另立项�
       零成本毛利口径见第七节排查结论（无需改码）。
 - [x] Console 客户侧完全不引入账号维度：本次改造未触碰 Console 任何代码，天然成立。
 
+## 九C、与 sub2api 的号池逻辑对齐（2026-09-03 审计批次）
+
+逐块通读 sub2api（gateway_scheduling / ratelimit_service / token_refresh_service /
+openai_account_runtime_block_fastpath / openai_oauth_service）后对照本实现，**采纳 5 项**：
+
+- [x] **刷新终局错误码清单**：令牌端点非常规状态码（5xx 等）但正文命中
+      {invalid_grant, invalid_refresh_token, refresh_token_reused, refresh_token_invalidated,
+      token_expired, app_session_terminated, invalid_client, unauthorized_client, access_denied}
+      同样判定为确认拒绝（RefreshRejected）——只按 HTTP 状态分类会把「5xx 包着 invalid_grant」
+      误判成网络问题反复退避。单测冻结清单。
+- [x] **请求路径确认吊销短路**：401/403 错误体命中 {token_revoked, token_invalidated}（实测样本）
+      时经 AccountRevocationSink（subscription.Outbound 实现）立即 disabled(token_revoked)，
+      不再等下一轮保活刷新去确认；禁用失败退回 5 分钟隔离路径。语义不明确的 401
+      （如 {"detail":"Unauthorized"}）仍走隔离+刷新确认，不直接禁用。
+- [x] **429 错误体重置时刻兜底**：x-codex 重置头缺失时解析 body
+      {"error":{"type":"usage_limit_reached"|"rate_limit_exceeded","resets_at"/"resets_in_seconds"}}
+      （Wire 新钩子 RetryAfterFromBody），解析不出才落秒级兜底冷却。
+- [x] **失败响应的用量观测回写**：429 的 x-codex 头携带最新水位（通常 100%），经
+      UpstreamMetadata.AccountUsage → AccountUsageObserver（health.Recorder 新方法，
+      不 touch LRU）落快照——冷却期内管理页也能看到真实水位与重置时刻。
+- [x] **PreferSoonestReset（use-it-or-lose-it）**：池内排序在优先级之后可选插入
+      「5h 窗口最早重置优先」（订阅额度过期作废，快过期的先烧），appsettings
+      `gateway.account_pool_prefer_soonest_reset` 热更新，默认关闭（与 sub2api 默认一致），
+      无活跃窗口观测的账号排后。排序行为有单测冻结。
+
+**不采纳 8 项**（对照后明确拒绝，理由如下）：池内等待队列/sticky 排队（蓝图明确无队列设计，
+等待事实只有渠道维度短等）；账号级 RPM/最大会话数（蓝图「本次不做」清单）；WindowCost 金额上限
+（我们有官方 x-codex 用量水位，数据源更权威）；模型级限流标记（codex 限流是账号级窗口，无模型维度）；
+Transient 429 同号重试窗口（我们的同渠道换号重试等价且不浪费预算）；主动用量探测轮询
+（烧配额+风控风险，被动采集+检测回填已覆盖）；调度器快照缓存（单池规模不需要）；
+Redis fail-open（我们 fail-closed 是蓝图硬决策）。
+
+已知 sub2api 两处证伪维持不变（用量窗口方向、用量头集合），不回退。
+
+## 九D、出站代理实体化（2026-09-03 批次，对齐 sub2api 代理一等实体并扩展到渠道级）
+
+**动机**：代理是被复用的出口资产（多账号/渠道共用住宅代理，换地址应一处改处处生效），
+sub2api 将其建为一等实体（`Proxy` + 账号 `proxy_id` 引用 + 下拉选择）。我们对齐并超出其范围：
+代理不仅号池账号能用，**渠道也能用**（sub2api 无渠道级代理）。
+
+**模型**（迁移 000076）：
+- `proxies` 表：name（唯一）/protocol（http/https/socks5）/host/port/username/password（明文，
+  与渠道凭据同口径）/`url`（写入时组装的规范 URL，凭据转义；运行时只读本列，热路径不拼串）
+  /status（enabled/disabled）/note。
+- `channels.proxy_id`、`subscription_accounts.proxy_id`：FK RESTRICT（被引用不可物理删除，
+  管理面降级 409 并附引用计数）。账号保留 legacy `proxy_url` 作回退（存量 + 文件导入兼容）。
+
+**出站回退链**（唯一决策点在 adapter 的 client 选择）：**账号代理 → 渠道代理 → 直连**。
+- 解析在 SQL JOIN 完成（只认 `status='enabled'`，停用实体 → NULL → 回退下一级）：
+  候选（FindModelCandidates→`Runtime.ProxyURL`）、出站凭据（GetAccountOutboundCredential）、
+  保活扫描（ListAccountsNeedingTokenRefresh）、探测/发现/验证/轮换四类快照。
+- adapter 层：openai chatcompletions / openai responses（wire.ClientFor 缺省分支）/ anthropic
+  messages / deepseek 两包装 / modeldiscovery 两 lister 统一注入 `proxyclient.Resolver.ClientFor`
+  （与账号代理共用同一份按 URL 缓存的 client 池）；codex wire.ClientFor 改为账号代理缺省时
+  回退渠道代理。
+- 管理面：`/proxies` CRUD + 启停 + 删除护栏；OAuth start / 账号编辑 / 渠道创建编辑收 `proxy_id`
+  （绑定校验存在且 enabled；账号绑实体时清空 legacy 裸 URL，单一真相）。
+- 前端：网关中心新增「代理」页（列表/表单/启停/删除护栏提示）；OAuth 导入、账号编辑、渠道表单
+  三处裸 URL 输入替换为 `ProxySelect` 下拉（直连 + 实体，停用实体标注「回退直连」）；账号行出口
+  显示实体名，渠道列表带 proxy_name。
+
+**真机验证**（2026-09-03）：CRUD/409 护栏/密码留空保持/凭据转义（`p@ss:word`→`p%40ss%3Aword`）
+全过；三级回退链用假代理实测——账号绑假代理→探测 unreachable；解绑账号只留渠道假代理→仍
+unreachable；渠道也解绑→直连探测成功（gpt-5.4）。证明三级出站选择真实生效。
+
+**已知限制**：sub2api 数据文件导入（`proxies[]`/`proxy_key`）仍落 legacy `proxy_url` 裸串
+（回退链保证生效）；如需导入即实体化，后续在导入器里按 URL upsert 实体并绑 `proxy_id`。
+
+## 九E、账号列表重构（2026-09-03 定稿）与 codex 正式请求契约新发现
+
+**列表九列**（原型 `tmp/account-list-final.html`，行内结论 + HoverCard 详情）：
+账号（备注名/邮箱 + 套餐徽章前置，副行出口代理）/ 状态（生死+运行态合成徽章：启用 · 正常/冷却/隔离/暂停，
+叠加取剩余最长，副行统一倒计时）/ 订阅（年月日时分 + 剩余，≤7 天黄、过期红）/ 令牌（四态两字徽章：
+正常绿/待续黄/无续黄→过期红/吊销红）/ 负载（进度条 + 在途/上限 · P 优先级）/ 水位（双条一行，
+**窗口标签按 window_minutes 动态生成**——官方 weekly 窗因号而异不写死 7d，副行重置时间）/ 24H
+（请求数 · 成功率，副行 token · 售卖额）/ 最近成功 / 操作。倒计时统一格式：天+小时 / 小时+分 / 分+秒 / 秒。
+
+**新增数据**：列表 SQL 带 `credentials->>'email'`；三个 24h 聚合查询（AdminChannelAccountsUsage24h /
+Sale24h / LastFailure24h：请求/成功/失败/token/按币种净扣费/平均延迟/首字/最近失败），List 批量挂载，
+聚合失败不阻断列表。真机验证：3 笔真实流式请求后聚合返回 4 请求/60 tokens/0.00033425 USD ✓。
+
+**codex 正式请求契约（真机实测新发现，2026-09-03）**：
+- `stream` 必须为 true：非流式（stream:false/缺省）直接 400——CLI 恒流式，探测也是流式所以从未暴露；
+- `input` 必须结构化数组（`[{role, content:[{type:input_text,...}]}]`）：字符串简写 400；
+- 叠加已知：store 必须显式 false、max_output_tokens 拒收、previous_response_id 拒收。
+
+**已修复（2026-09-03，出站规范化 + 强制流式聚合）**：
+- Wire 新增两钩子（`NormalizeRequest`/`ForceStreaming`），官方 wire 均为零值——credential 直传
+  路径逐字节不变，零转换纪律只在 codex wire 内开例外；
+- `normalizeCodexRequest`（codex wire 独有，出站前统一改写，探测/CLI 合规请求零转换直返）：
+  store 强制 false、stream 置为出站形态、剔除不支持字段清单（max_output_tokens/temperature/top_p/
+  penalty/stream_options 等，sub2api 同款）、字符串 input 原文包装成单条 user message（含空白，
+  只修形状不改语义）、role:system 文本并进 instructions + 消息降级 developer 留在 input、
+  启用 reasoning 时补 `include:["reasoning.encrypted_content"]`（store=false 下多轮回放 reasoning
+  依赖加密思维链随响应带回；CLI 每笔自带，SDK 客户在此补齐；include 非法形态不遮掩交上游拒）；
+- 非流式入站 → `createResponseViaStream`：以流式出站，完全复用 `StreamResponse` 的 SSE 解析/
+  超时/错误分类/头部水位采集，聚合终态 response 对象还原非流式 JSON。**关键实测坑**：codex 的
+  `response.completed` 事件 `output` 恒为空数组（与官方语义相反，内容只在过程事件里），聚合必须
+  用 `response.output_item.done` 的 item 原文回填 output（终态已带 output 时零改动，绝不重排）；
+- chat→responses 桥接免费受益：桥接产物（max_output_tokens/temperature/非流式）经同一规范化 +
+  聚合，非流式桥接从必 400 变为可服务。
+**真机证据（channel 2 / account 3，request_records 11-17、121-122 全 succeeded、归因正确、零计费异常）**：
+字符串+非流式（output 回填后 text=pong、usage 18）✓；system 提升（上游回显 instructions、
+store:true/temperature/max_output_tokens 未 400）✓；chat 桥接非流式（content=pong、finish=stop）✓；
+chat 桥接流式（usage 尾帧）✓；字符串+流式 ✓；池型渠道探测回归（自动选号 account 3、success）✓；
+reasoning include 注入两轮闭环（turn1 无 include → 响应 reasoning item 带回 1336B encrypted_content；
+turn2 原样回放 → 上游接受并延续推理上下文答对）✓。
+单测冻结：规范化全分支（`normalize_test.go`）、聚合/回填/终态缺失/429 透传/官方 wire 不受影响
+（`force_stream_test.go`）、wire 装配集成（`wire_normalize_test.go`）。全量 `go test ./...` 111 包绿。
+
 ## 十、验证
 
 验收矩阵实际状态（✅=已验证 · 🧪=单测覆盖 · ⏳=未验证）：

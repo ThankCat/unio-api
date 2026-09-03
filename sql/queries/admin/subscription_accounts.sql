@@ -21,8 +21,13 @@ SELECT
     a.created_at,
     a.updated_at,
     (a.credentials ->> 'expires_at') AS token_expires_at,
-    (a.credentials ? 'refresh_token') AS has_refresh_token
+    (a.credentials ? 'refresh_token') AS has_refresh_token,
+    (a.credentials ->> 'email') AS email,
+    a.proxy_id,
+    apx.name AS proxy_name,
+    apx.status AS proxy_status
 FROM subscription_accounts a
+LEFT JOIN proxies apx ON apx.id = a.proxy_id
 WHERE a.channel_id = $1
   AND (sqlc.narg('status')::text IS NULL OR a.status = sqlc.narg('status')::text)
 -- 运维视角排序：在役（enabled）最前，其次停用，归档垫底；同层按优先级与 ID 稳定排序。
@@ -40,12 +45,12 @@ WHERE id = $1;
 -- 重复导入由 (platform, upstream_account_id) 唯一键在数据库层拒绝，不依赖应用层先查后插。
 INSERT INTO subscription_accounts (
     channel_id, platform, credential_type, upstream_account_id, display_name,
-    plan_type, credentials, proxy_url, concurrency_limit, priority,
+    plan_type, credentials, proxy_url, proxy_id, concurrency_limit, priority,
     status, subscription_expires_at
 ) VALUES (
     $1, $2, $3, $4, $5,
-    $6, $7, $8, $9, $10,
-    'disabled', $11
+    $6, $7, $8, $9, $10, $11,
+    'disabled', $12
 )
 RETURNING *;
 
@@ -57,9 +62,10 @@ RETURNING *;
 UPDATE subscription_accounts
 SET display_name = $2,
     proxy_url = $3,
-    concurrency_limit = $4,
-    priority = $5,
-    subscription_expires_at = $6,
+    proxy_id = $4,
+    concurrency_limit = $5,
+    priority = $6,
+    subscription_expires_at = $7,
     config_revision = config_revision + 1,
     updated_at = now()
 WHERE id = $1
@@ -147,3 +153,54 @@ WHERE channel_id = $1
   AND status = 'enabled'
 ORDER BY priority, id
 LIMIT 1;
+
+-- name: AdminChannelAccountsUsage24h :many
+-- AdminChannelAccountsUsage24h 按账号聚合近 24 小时的请求/成功/失败/token/延迟（渠道账号页「24H」列）。
+-- token 口径与请求详情一致：全部输入形态 + 输出总量；延迟只统计成功请求（失败的时长无意义）。
+SELECT
+    r.final_account_id AS account_id,
+    count(*)::bigint AS total_requests,
+    (count(*) FILTER (WHERE r.status = 'succeeded'))::bigint AS succeeded_requests,
+    (count(*) FILTER (WHERE r.status = 'failed'))::bigint AS failed_requests,
+    COALESCE(sum(
+        ur.uncached_input_tokens + ur.cache_read_input_tokens
+        + ur.cache_creation_5m_input_tokens + ur.cache_creation_1h_input_tokens
+        + ur.cache_creation_30m_input_tokens + ur.output_tokens_total
+    ), 0)::bigint AS total_tokens,
+    COALESCE(avg(EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)
+        FILTER (WHERE r.status = 'succeeded' AND r.completed_at IS NOT NULL AND r.started_at IS NOT NULL), 0)::bigint AS avg_latency_ms,
+    COALESCE(avg(EXTRACT(EPOCH FROM (r.gateway_first_token_at - r.started_at)) * 1000)
+        FILTER (WHERE r.status = 'succeeded' AND r.gateway_first_token_at IS NOT NULL AND r.started_at IS NOT NULL), 0)::bigint AS avg_first_token_ms
+FROM request_records r
+LEFT JOIN usage_records ur ON ur.request_record_id = r.id
+WHERE r.final_account_id IN (SELECT sa.id FROM subscription_accounts sa WHERE sa.channel_id = sqlc.arg(channel_id))
+  AND r.created_at > now() - interval '24 hours'
+GROUP BY r.final_account_id;
+
+-- name: AdminChannelAccountsSale24h :many
+-- AdminChannelAccountsSale24h 按账号 + 币种聚合近 24 小时净扣费（售卖额，与工作台 revenue 同口径 debit 族 − 冲正）。
+SELECT
+    r.final_account_id AS account_id,
+    le.currency,
+    COALESCE(sum(CASE
+        WHEN le.entry_type IN ('debit', 'adjustment_debit') THEN le.amount
+        WHEN le.entry_type IN ('refund', 'adjustment_credit') THEN -le.amount
+        ELSE 0
+    END), 0)::numeric AS sale_amount
+FROM ledger_entries le
+JOIN request_records r ON r.id = le.request_record_id
+WHERE r.final_account_id IN (SELECT sa.id FROM subscription_accounts sa WHERE sa.channel_id = sqlc.arg(channel_id))
+  AND le.created_at > now() - interval '24 hours'
+GROUP BY r.final_account_id, le.currency;
+
+-- name: AdminChannelAccountsLastFailure24h :many
+-- AdminChannelAccountsLastFailure24h 每账号近 24 小时最近一次失败（时间 + 错误码），tooltip 展示。
+SELECT DISTINCT ON (r.final_account_id)
+    r.final_account_id AS account_id,
+    r.created_at AS failed_at,
+    COALESCE(r.error_code, '') AS error_code
+FROM request_records r
+WHERE r.final_account_id IN (SELECT sa.id FROM subscription_accounts sa WHERE sa.channel_id = sqlc.arg(channel_id))
+  AND r.status = 'failed'
+  AND r.created_at > now() - interval '24 hours'
+ORDER BY r.final_account_id, r.created_at DESC;

@@ -45,6 +45,32 @@ type Wire struct {
 	// FinalizeFacts 在账务事实装配完成后做 wire 专属修正（非流式/流式终态/compact 三处同源）。
 	// Codex 用它把结算档位改为出站请求档位权威（响应档位不可信，边界 15）。nil = 不修正。
 	FinalizeFacts func(req Request, facts *adapter.ResponseFacts)
+
+	// RetryAfterFromBody 从错误体快照解析限流恢复时长（Codex 429 的 usage_limit_reached.resets_at）。
+	// 仅在 wire 专属头与标准 Retry-After 都缺失时兜底调用；返回 0 表示 body 无信号。
+	RetryAfterFromBody func(statusCode int, snippet string) time.Duration
+
+	// NormalizeRequest 在出站前改写请求体成本 wire 能接受的形态（Codex：store 强制 false、
+	// stream 强制目标形态、剔除不支持字段、字符串 input 结构化、system 提升 instructions）。
+	// stream 是本次出站的目标流式形态。nil = 零转换直传（官方 wire 纪律不变）。
+	NormalizeRequest func(body []byte, stream bool) ([]byte, error)
+
+	// ForceStreaming 表示上游只接受流式请求（Codex 后端对 stream=false 直接 400）。
+	// 置位后非流式调用由 adapter 以流式出站、聚合终态 response 对象还原成非流式响应。
+	ForceStreaming bool
+}
+
+// normalizeRequest 应用 wire 出站前规范化；缺省 wire 零转换。
+func (a *Adapter) normalizeRequest(req Request, stream bool) (Request, error) {
+	if a.wire.NormalizeRequest == nil {
+		return req, nil
+	}
+	body, err := a.wire.NormalizeRequest(req.Body, stream)
+	if err != nil {
+		return req, err
+	}
+	req.Body = body
+	return req, nil
 }
 
 // responsesPath 返回本 wire 的 responses 操作路径。
@@ -63,10 +89,17 @@ func (a *Adapter) compactPath() string {
 	return adapter.OperationPathResponsesCompact
 }
 
-// httpClient 返回本次调用应使用的 HTTP client（按账号代理优先）。
+// httpClient 返回本次调用应使用的 HTTP client。
+// wire.ClientFor（codex：账号代理→渠道代理）优先；无 wire 钩子时按渠道代理选（proxyClientFor 注入），
+// 都缺省回构造时的直连 client。
 func (a *Adapter) httpClient(ch channel.Runtime) *http.Client {
 	if a.wire.ClientFor != nil {
 		if client := a.wire.ClientFor(ch); client != nil {
+			return client
+		}
+	}
+	if a.proxyClientFor != nil && ch.ProxyURL != "" {
+		if client := a.proxyClientFor(ch.ProxyURL); client != nil {
 			return client
 		}
 	}
@@ -102,21 +135,36 @@ func (a *Adapter) finalizeFacts(req Request, facts *adapter.ResponseFacts) {
 	}
 }
 
-// upstreamStatusError 构造非 2xx 错误，RetryAfter 优先取 wire 专属头（Codex 重置头）。
+// upstreamStatusError 构造非 2xx 错误，RetryAfter 取值优先级：wire 专属头（Codex 重置头）
+// → 标准 Retry-After（base 已解析）→ wire 错误体兜底（usage_limit_reached.resets_at）。
 func (a *Adapter) upstreamStatusError(resp *http.Response, operation string) error {
 	err := newUpstreamStatusError(resp, operation)
-	if a.wire.RetryAfterFromHeaders == nil {
-		return err
-	}
-	retryAfter := a.wire.RetryAfterFromHeaders(resp.Header)
-	if retryAfter <= 0 {
-		return err
-	}
 	var upstream *adapter.UpstreamError
-	if errors.As(err, &upstream) {
-		meta := upstream.Metadata
-		meta.RetryAfter = retryAfter
-		return adapter.NewUpstreamError(upstream.Category, meta, upstream.Unwrap())
+	if !errors.As(err, &upstream) {
+		return err
 	}
-	return err
+	meta := upstream.Metadata
+	if a.wire.RetryAfterFromHeaders != nil {
+		if retryAfter := a.wire.RetryAfterFromHeaders(resp.Header); retryAfter > 0 {
+			meta.RetryAfter = retryAfter
+		}
+	}
+	if meta.RetryAfter <= 0 && a.wire.RetryAfterFromBody != nil {
+		if retryAfter := a.wire.RetryAfterFromBody(resp.StatusCode, meta.ResponseSnippet); retryAfter > 0 {
+			meta.RetryAfter = retryAfter
+		}
+	}
+	// 失败响应头同样携带 wire 专属用量观测（Codex 429 的 x-codex-* 水位是最新鲜的 100% 快照）；
+	// 复用 HeaderFacts 解析器塞进元数据，供账号观测回写（白采白不采）。
+	if a.wire.HeaderFacts != nil {
+		var probe adapter.ResponseFacts
+		a.wire.HeaderFacts(resp.Header, &probe)
+		if probe.AccountUsage != nil {
+			meta.AccountUsage = probe.AccountUsage
+		}
+	}
+	if meta.RetryAfter == upstream.Metadata.RetryAfter && meta.AccountUsage == nil {
+		return err
+	}
+	return adapter.NewUpstreamError(upstream.Category, meta, upstream.Unwrap())
 }

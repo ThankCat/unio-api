@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -91,17 +92,59 @@ type AttemptPermitMetricsRecorder interface {
 	IncProviderStatusRevisionMismatch(operation string)
 }
 
+// AccountRevocationSink 把「上游明确吊销」的账号立即禁用（生产实现 subscription.Outbound）。
+// best-effort：失败时调用方退回临时隔离路径。
+type AccountRevocationSink interface {
+	MarkAccountRevoked(ctx context.Context, accountID int64) error
+}
+
+// AccountUsageObserver 回写失败响应携带的账号用量观测（生产实现 subscription/health.Recorder）。
+// 与 AccountHealthSink 的区别：不 touch LRU（429 不是一次成功服务）。
+type AccountUsageObserver interface {
+	RecordAccountUsageObservation(ctx context.Context, accountID int64, usage *adapter.AccountUsageFacts)
+}
+
 // AttemptPermitManager 负责 AcquireAttempt 及 permit owner 的建立；协议 runner 不直接持有 Redis token。
 type AttemptPermitManager struct {
 	store                 AttemptPermitStore
 	runtimeFeedbackStore  AttemptRuntimeFeedbackStore
 	accountFeedbackStore  AccountRuntimeFeedbackStore
+	accountRevocation     AccountRevocationSink
+	accountUsageObserver  AccountUsageObserver
 	runtimeFeedbackPolicy channel429CooldownPolicy
 	facts                 AttemptPermitRuntimeFactsReader
 	logger                *zap.Logger
 	metrics               AttemptPermitMetricsRecorder
 	operationTimeout      time.Duration
 	newPermitID           func() string
+	// preferSoonestReset 是池内 use-it-or-lose-it 排序开关（appsettings 热推）。
+	preferSoonestReset atomic.Bool
+}
+
+// SetAccountPoolPreferSoonestReset 热更新池内「最早重置优先」排序开关（settings applier 推送）。
+func (m *AttemptPermitManager) SetAccountPoolPreferSoonestReset(enabled bool) {
+	if m != nil {
+		m.preferSoonestReset.Store(enabled)
+	}
+}
+
+// AccountPoolPreferSoonestReset 读取当前排序偏好。
+func (m *AttemptPermitManager) AccountPoolPreferSoonestReset() bool {
+	return m != nil && m.preferSoonestReset.Load()
+}
+
+// SetAccountRevocationSink 注入确认吊销的禁用动作（bootstrap 可选注入；nil 时 401 一律走隔离）。
+func (m *AttemptPermitManager) SetAccountRevocationSink(sink AccountRevocationSink) {
+	if m != nil {
+		m.accountRevocation = sink
+	}
+}
+
+// SetAccountUsageObserver 注入失败响应的用量观测回写（bootstrap 可选注入）。
+func (m *AttemptPermitManager) SetAccountUsageObserver(observer AccountUsageObserver) {
+	if m != nil {
+		m.accountUsageObserver = observer
+	}
 }
 
 func NewAttemptPermitManager(store AttemptPermitStore, facts AttemptPermitRuntimeFactsReader, opts AttemptPermitManagerOptions) *AttemptPermitManager {
@@ -237,6 +280,8 @@ func (m *AttemptPermitManager) Acquire(ctx context.Context, params AttemptPermit
 		m.operationTimeout,
 	)
 	owner.accountFeedbackStore = m.accountFeedbackStore
+	owner.accountRevocation = m.accountRevocation
+	owner.accountUsageObserver = m.accountUsageObserver
 	if requestFields, ok := logfields.FromContext(ctx); ok {
 		owner.logFields = requestFields
 	}
@@ -328,6 +373,8 @@ type AttemptPermitOwner struct {
 	store                 AttemptPermitStore
 	runtimeFeedbackStore  AttemptRuntimeFeedbackStore
 	accountFeedbackStore  AccountRuntimeFeedbackStore
+	accountRevocation     AccountRevocationSink
+	accountUsageObserver  AccountUsageObserver
 	runtimeFeedbackPolicy *channel429CooldownPolicy
 	facts                 AttemptPermitRuntimeFactsReader
 	permit                breakerstore.AttemptPermit

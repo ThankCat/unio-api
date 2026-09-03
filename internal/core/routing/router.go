@@ -410,6 +410,14 @@ func int4LimitPtr(v pgtype.Int4) *int64 {
 	return &out
 }
 
+// textValueOrEmpty 取可空文本列的值（NULL → 空串）。
+func textValueOrEmpty(v pgtype.Text) string {
+	if !v.Valid {
+		return ""
+	}
+	return v.String
+}
+
 func optionalBool(v pgtype.Bool) *bool {
 	if !v.Valid {
 		return nil
@@ -623,6 +631,7 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindModel
 			ResponseTimeout:   responseTimeout,
 			FirstTokenTimeout: firstTokenTimeout,
 			ProviderSlug:      row.ProviderSlug,
+			ProxyURL:          textValueOrEmpty(row.ChannelProxyUrl),
 		},
 		UpstreamModel:                 row.UpstreamModel,
 		ModelPriceID:                  row.ModelPriceID,

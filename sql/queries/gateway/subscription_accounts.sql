@@ -20,16 +20,18 @@ ORDER BY a.priority, a.id;
 -- GetAccountOutboundCredential 取指定账号的出站凭据与代理，供 transport 按 permit 固化的账号身份发请求。
 -- 与 ListSchedulableAccountsByChannel 分开，避免把凭据带进每请求的候选快照。
 SELECT
-    id,
-    channel_id,
-    platform,
-    credential_type,
-    upstream_account_id,
-    credentials,
-    proxy_url,
-    status
-FROM subscription_accounts
-WHERE id = $1;
+    a.id,
+    a.channel_id,
+    a.platform,
+    a.credential_type,
+    a.upstream_account_id,
+    a.credentials,
+    a.proxy_url,
+    a.status,
+    apx.url AS proxy_entity_url
+FROM subscription_accounts a
+LEFT JOIN proxies apx ON apx.id = a.proxy_id AND apx.status = 'enabled'
+WHERE a.id = $1;
 
 -- name: UpdateAccountTokens :exec
 -- UpdateAccountTokens 写回刷新后的凭据文档。调用方负责「新 refresh token 非空才覆盖」的合并逻辑，
@@ -77,14 +79,16 @@ WHERE channel_id = $1
 -- ListAccountsNeedingTokenRefresh 分页扫描 access token 即将过期的账号，供后台保活刷新（第六节）。
 -- 只扫未归档的 oauth 账号；disabled 也刷——运维随时可能启用，启用瞬间就要有新鲜令牌可用。
 -- expires_at 缺失（异常凭据）不进扫描：刷不刷都没意义，等请求时兜底路径报错暴露。
-SELECT id, channel_id, credentials, proxy_url, status
-FROM subscription_accounts
-WHERE status <> 'archived'
-  AND credential_type = 'oauth'
-  AND credentials ? 'refresh_token'
-  AND (credentials ->> 'expires_at') IS NOT NULL
-  AND (credentials ->> 'expires_at')::timestamptz < now() + make_interval(secs => sqlc.arg(within_seconds)::bigint)
-ORDER BY (credentials ->> 'expires_at')::timestamptz
+SELECT a.id, a.channel_id, a.credentials, a.proxy_url, a.status,
+       apx.url AS proxy_entity_url
+FROM subscription_accounts a
+LEFT JOIN proxies apx ON apx.id = a.proxy_id AND apx.status = 'enabled'
+WHERE a.status <> 'archived'
+  AND a.credential_type = 'oauth'
+  AND a.credentials ? 'refresh_token'
+  AND (a.credentials ->> 'expires_at') IS NOT NULL
+  AND (a.credentials ->> 'expires_at')::timestamptz < now() + make_interval(secs => sqlc.arg(within_seconds)::bigint)
+ORDER BY (a.credentials ->> 'expires_at')::timestamptz
 LIMIT sqlc.arg(page_limit);
 
 -- name: GetAccountByPlatformUpstreamID :one
@@ -94,3 +98,7 @@ FROM subscription_accounts a
 JOIN channels c ON c.id = a.channel_id
 WHERE a.platform = $1
   AND a.upstream_account_id = $2;
+
+-- name: GetEnabledProxyURL :one
+-- GetEnabledProxyURL 取启用代理的规范 URL（disabled/不存在返回 no rows → 调用方按直连处理）。
+SELECT url FROM proxies WHERE id = $1 AND status = 'enabled';

@@ -26,6 +26,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/service/appsettings"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 	"github.com/ThankCat/unio-gateway/internal/service/subscription"
+	subscriptionhealth "github.com/ThankCat/unio-gateway/internal/service/subscription/health"
 )
 
 // WorkerServerAppDB 定义 worker server app 构建时需要的数据库能力。
@@ -143,6 +144,13 @@ func NewWorkerServerApp(ctx context.Context, deps WorkerServerAppDeps) (*WorkerS
 	probeIdentity := subscription.NewProbeIdentityResolver(queries, subscriptionOutbound)
 	channelTestService.WithAccountResolver(probeIdentity)
 	channelModelInventoryService.WithAccountResolver(probeIdentity)
+	// 验证成功回填账号观测（水位 + LRU），与请求路径同一 Recorder。
+	probeHealth := subscriptionhealth.NewRecorder(queries, permitStore, deps.Logger, 0).
+		WithThresholdProvider(func(ctx context.Context) float64 {
+			return appsettings.GatewayAccountUsagePauseThreshold(ctx, settingsStore)
+		})
+	channelTestService.WithAccountHealth(probeHealth)
+	channelModelInventoryService.WithAccountHealth(probeHealth)
 	permissionStore := permitStore
 	if err := permissionStore.VerifySingleNodeDeployment(ctx); err != nil {
 		return nil, err

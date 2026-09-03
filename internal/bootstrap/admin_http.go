@@ -23,6 +23,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/user"
 	"github.com/ThankCat/unio-gateway/internal/platform/config"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
+	adminproxy "github.com/ThankCat/unio-gateway/internal/service/admin/proxy"
 	subscriptionaccountadmin "github.com/ThankCat/unio-gateway/internal/service/admin/subscriptionaccount"
 )
 
@@ -56,6 +57,7 @@ type adminHTTPDeps struct {
 	// DEC-027 渠道成本倍率。
 	ChannelCostMultiplierService channel.ChannelCostMultiplierService
 	SubscriptionAccountService   *subscriptionaccountadmin.Service
+	ProxyService                 *adminproxy.Service
 	ProviderRechargeRateService  provider.ProviderRechargeRateService
 
 	RoutingTraceService adminapi.RoutingTraceService
@@ -137,6 +139,7 @@ func NewAdminHTTPHandler(deps adminHTTPDeps) http.Handler {
 
 		ChannelCostMultiplierService: deps.ChannelCostMultiplierService,
 		SubscriptionAccountService:   deps.SubscriptionAccountService,
+		ProxyService:                 deps.ProxyService,
 		ProviderRechargeRateService:  deps.ProviderRechargeRateService,
 
 		RoutingTraceService: deps.RoutingTraceService,

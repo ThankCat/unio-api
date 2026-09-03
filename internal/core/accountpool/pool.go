@@ -23,6 +23,9 @@ type Account struct {
 	ConcurrencyLimit *int64
 	// LastSuccessAt 是最近一次完整成功时间，零值表示从未成功过（LRU 排最前）。
 	LastSuccessAt time.Time
+	// UsageResetAtUnix 是 5h 用量窗口的重置时刻（unix 秒，来自 usage_snapshot.primary.reset_at）；
+	// 0 表示无观测。仅 PreferSoonestReset 开启时参与排序（use-it-or-lose-it）。
+	UsageResetAtUnix int64
 	// ConfigRevision 固化进 permit，供收口审计定位「这次是按哪版配置放行的」。
 	ConfigRevision int64
 }
@@ -184,6 +187,16 @@ func (p Pool) EarliestRecoveryMs() int64 {
 // Shuffle 打散同档账号。签名与 math/rand 的 Shuffle 一致，测试注入确定性实现。
 type Shuffle func(n int, swap func(i, j int))
 
+// OrderOptions 是池内排序的可选行为。零值 = 现状（优先级 → 负载率 → LRU）。
+type OrderOptions struct {
+	// PreferSoonestReset 开启 use-it-or-lose-it：同优先级内，5h 窗口最早重置的账号先用——
+	// 订阅额度过期作废，快过期的窗口先烧掉（与 sub2api 的 prefer_soonest_reset 同语义，默认关）。
+	// 排序位置在优先级之后、负载率之前；无活跃窗口观测的账号排在有观测者之后。
+	PreferSoonestReset bool
+	// NowUnix 是判断窗口是否仍活跃的当前时刻（unix 秒）；PreferSoonestReset 开启时必传。
+	NowUnix int64
+}
+
 // Order 产出本次请求的池内尝试顺序（账号 ID）：
 //
 //	Sticky 绑定账号优先 → 过滤（已在 Schedulable 完成）→ 优先级 → 负载率 → 最久未使用（LRU）
@@ -192,7 +205,7 @@ type Shuffle func(n int, swap func(i, j int))
 // 于是等价的账号之间保留的就是随机顺序。这比排序后再逐段打散少一层易错的分段逻辑。
 //
 // stickyAccountID 不在可调度集合里时置顶自然落空，调用方据此区分「临时绕行」与「绑定失效」。
-func (p Pool) Order(stickyAccountID int64, shuffle Shuffle) []int64 {
+func (p Pool) Order(stickyAccountID int64, shuffle Shuffle, opts OrderOptions) []int64 {
 	members := p.Schedulable()
 	if len(members) == 0 {
 		return nil
@@ -205,6 +218,20 @@ func (p Pool) Order(stickyAccountID int64, shuffle Shuffle) []int64 {
 		left, right := members[i], members[j]
 		if left.Priority != right.Priority {
 			return left.Priority < right.Priority
+		}
+		if opts.PreferSoonestReset {
+			leftReset := activeResetAt(left.UsageResetAtUnix, opts.NowUnix)
+			rightReset := activeResetAt(right.UsageResetAtUnix, opts.NowUnix)
+			if leftReset != rightReset {
+				// 有活跃窗口者优先；两者都有时重置更早者优先（快过期的额度先用）。
+				if leftReset == 0 {
+					return false
+				}
+				if rightReset == 0 {
+					return true
+				}
+				return leftReset < rightReset
+			}
 		}
 		leftLoad, rightLoad := left.LoadRatio(), right.LoadRatio()
 		if leftLoad != rightLoad {
@@ -229,6 +256,14 @@ func (p Pool) Order(stickyAccountID int64, shuffle Shuffle) []int64 {
 		return append([]int64{stickyAccountID}, ids...)
 	}
 	return ids
+}
+
+// activeResetAt 返回仍在未来的窗口重置时刻；无观测或已过期返回 0。
+func activeResetAt(resetAtUnix, nowUnix int64) int64 {
+	if resetAtUnix <= 0 || nowUnix <= 0 || resetAtUnix <= nowUnix {
+		return 0
+	}
+	return resetAtUnix
 }
 
 // Lookup 按账号 ID 取回成员事实，供准入阶段填充 permit 的账号维度。

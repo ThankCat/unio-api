@@ -129,14 +129,22 @@ type AccountIdentityResolver interface {
 	ResolveProbeIdentity(ctx context.Context, channelID, accountID int64) (subscription.ProbeIdentity, error)
 }
 
+// AccountHealthSink 消费池型探测成功后的账号观测（用量快照/LRU/阈值暂停），
+// 与请求路径同一实现（subscription/health.Recorder）。探测响应头本来就带 x-codex-* 水位，
+// 不采集等于把免费观测扔掉——管理员装配阶段就该能看到用量水位。
+type AccountHealthSink interface {
+	RecordAccountSuccess(ctx context.Context, accountID int64, usage *adapter.AccountUsageFacts)
+}
+
 // Service 编排渠道主动检测：选模型 → 构造 Runtime → 发探测请求 → 归类 → 落库。
 type Service struct {
-	store      Store
-	prober     Prober
-	settings   *appsettings.SettingsStore
-	metrics    CredentialRotationMetrics
-	accountant ProbeAccountant
-	accounts   AccountIdentityResolver
+	store         Store
+	prober        Prober
+	settings      *appsettings.SettingsStore
+	metrics       CredentialRotationMetrics
+	accountant    ProbeAccountant
+	accounts      AccountIdentityResolver
+	accountHealth AccountHealthSink
 }
 
 // CredentialRotationMetrics records only the bounded five-state verification result.
@@ -170,6 +178,12 @@ func (s *Service) WithAccountResolver(resolver AccountIdentityResolver) *Service
 	return s
 }
 
+// WithAccountHealth 接入账号观测回写（bootstrap 注入；nil 表示探测不回填用量）。
+func (s *Service) WithAccountHealth(sink AccountHealthSink) *Service {
+	s.accountHealth = sink
+	return s
+}
+
 type probeSnapshot struct {
 	ChannelID              int64
 	ProviderID             int64
@@ -179,6 +193,7 @@ type probeSnapshot struct {
 	CredentialValid        bool
 	ConfigRevision         int64
 	SupplyForm             string
+	ChannelProxyURL        string
 	ProviderSlug           string
 	Origin                 string
 	OriginRevision         int64
@@ -227,6 +242,10 @@ func (s *Service) Test(ctx context.Context, in TestInput) (TestResult, error) {
 	// 必须能回答「坏的是哪个号」，否则排障只能靠猜。成功不写 Message，避免污染 last_test_error。
 	if snapshot.isPool() && !result.Success && result.Message != "" && snapshot.AccountDisplayName != "" {
 		result.Message = "账号「" + snapshot.AccountDisplayName + "」：" + result.Message
+	}
+	// 探测成功即回填账号观测：用量水位快照 + LRU 时间（best-effort，与请求路径同一 Recorder）。
+	if snapshot.isPool() && result.Success && result.TestedAccountID > 0 && s.accountHealth != nil && result.facts != nil {
+		s.accountHealth.RecordAccountSuccess(ctx, result.TestedAccountID, result.facts.AccountUsage)
 	}
 	if _, err := s.applyProbeResult(workCtx, snapshot, in.Source, result); err != nil {
 		return TestResult{}, storeFailed(err, "persist channel probe result")
@@ -398,17 +417,27 @@ func probeSnapshotFromRow(row sqlc.GetChannelProbeSnapshotRow) probeSnapshot {
 	return probeSnapshot{
 		ChannelID: row.ChannelID, ProviderID: row.ProviderID, Protocol: primaryProtocol(row.Protocols), AdapterKey: row.AdapterKey,
 		Credential: row.Credential, CredentialValid: row.CredentialValid, ConfigRevision: row.ConfigRevision,
-		SupplyForm:   row.SupplyForm,
-		ProviderSlug: row.ProviderSlug, Origin: row.Origin,
+		SupplyForm:      row.SupplyForm,
+		ChannelProxyURL: channelProxyURL(row.ChannelProxyUrl),
+		ProviderSlug:    row.ProviderSlug, Origin: row.Origin,
 		OriginRevision: row.OriginRevision, ProviderStatusRevision: row.StatusRevision,
 	}
+}
+
+// channelProxyURL 取可空代理列（NULL/disabled → 空串直连）。
+func channelProxyURL(v pgtype.Text) string {
+	if !v.Valid {
+		return ""
+	}
+	return v.String
 }
 
 func probeSnapshotFromRotation(row sqlc.PrepareChannelCredentialRotationRow) probeSnapshot {
 	return probeSnapshot{
 		ChannelID: row.ChannelID, ProviderID: row.ProviderID, Protocol: primaryProtocol(row.Protocols), AdapterKey: row.AdapterKey,
 		Credential: row.Credential, CredentialValid: row.CredentialValid, ConfigRevision: row.ConfigRevision,
-		ProviderSlug: row.ProviderSlug, Origin: row.Origin,
+		ChannelProxyURL: channelProxyURL(row.ChannelProxyUrl),
+		ProviderSlug:    row.ProviderSlug, Origin: row.Origin,
 		OriginRevision: row.OriginRevision, ProviderStatusRevision: row.StatusRevision,
 	}
 }
@@ -441,6 +470,8 @@ func (s *Service) executeProbeCandidates(ctx context.Context, snapshot probeSnap
 		APIKey: strings.TrimSpace(snapshot.Credential), ProviderSlug: snapshot.ProviderSlug,
 		// 渠道巡检是非流式探测，只需要响应超时；探测超时独立于业务默认值。
 		ResponseTimeout: probeTimeout,
+		// 渠道级出站代理；账号自带代理时 adapter 的回退链会优先账号代理。
+		ProxyURL: snapshot.ChannelProxyURL,
 		// 池型渠道以账号身份出站（access token + 上游账号头 + 账号代理）；credential 型为零值。
 		Account: snapshot.Account,
 	}

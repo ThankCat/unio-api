@@ -25,6 +25,28 @@ const (
 // stream translator 抽象层（AGENTS：streamtranslate 不是独立架构层）。
 type Adapter struct {
 	client *http.Client
+	// proxyClientFor 按代理 URL 解析 client（渠道级出站代理；nil 恒用 client）。
+	proxyClientFor func(proxyURL string) *http.Client
+}
+
+// SetProxyClientResolver 注入渠道代理的 client 解析（bootstrap 可选注入）。
+func (a *Adapter) SetProxyClientResolver(clientFor func(proxyURL string) *http.Client) *Adapter {
+	a.proxyClientFor = clientFor
+	return a
+}
+
+// httpClient 出站 client 选择：账号代理 → 渠道代理 → 直连。
+func (a *Adapter) httpClient(ch channel.Runtime) *http.Client {
+	proxy := ch.Account.ProxyURL
+	if proxy == "" {
+		proxy = ch.ProxyURL
+	}
+	if proxy != "" && a.proxyClientFor != nil {
+		if client := a.proxyClientFor(proxy); client != nil {
+			return client
+		}
+	}
+	return a.client
 }
 
 // NewAdapter 创建 OpenAI-compatible adapter。
@@ -89,7 +111,7 @@ func (a *Adapter) ChatCompletions(ctx context.Context, ch channel.Runtime, req C
 	request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", ch.APIKey))
 
 	adapter.MarkTransportStarted(ctx)
-	upstreamResp, err := a.client.Do(request)
+	upstreamResp, err := a.httpClient(ch).Do(request)
 	if upstreamResp != nil {
 		adapter.MarkResponseHeadersReceived(ctx, adapter.UpstreamMetadata{
 			StatusCode: upstreamResp.StatusCode,
@@ -248,7 +270,7 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 	request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", ch.APIKey))
 
 	adapter.MarkTransportStarted(streamCtx)
-	upstreamResp, err := a.client.Do(request)
+	upstreamResp, err := a.httpClient(ch).Do(request)
 	ctxCause := context.Cause(streamCtx)
 	timeouts.HeadersReceived()
 	if upstreamResp != nil {

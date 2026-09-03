@@ -127,7 +127,7 @@ func TestOrderSortsByPriorityThenLoadThenLRU(t *testing.T) {
 	)
 
 	// 打散固定为恒等置换，只考察排序键本身。
-	got := pool.Order(0, func(int, func(int, int)) {})
+	got := pool.Order(0, func(int, func(int, int)) {}, OrderOptions{})
 	want := []int64{4, 2, 3, 1}
 	for index := range want {
 		if got[index] != want[index] {
@@ -147,7 +147,7 @@ func TestOrderShufflesEqualTier(t *testing.T) {
 	source := rand.New(rand.NewPCG(1, 2))
 	firstSeen := make(map[int64]int)
 	for i := 0; i < 400; i++ {
-		order := pool.Order(0, source.Shuffle)
+		order := pool.Order(0, source.Shuffle, OrderOptions{})
 		firstSeen[order[0]]++
 	}
 	if len(firstSeen) < 6 {
@@ -164,12 +164,12 @@ func TestOrderPinsStickyAccount(t *testing.T) {
 	)
 	identity := func(int, func(int, int)) {}
 
-	pinned := pool.Order(3, identity)
+	pinned := pool.Order(3, identity, OrderOptions{})
 	if len(pinned) != 3 || pinned[0] != 3 || pinned[1] != 1 || pinned[2] != 2 {
 		t.Fatalf("sticky order = %v, want [3 1 2]", pinned)
 	}
 
-	missing := pool.Order(99, identity)
+	missing := pool.Order(99, identity, OrderOptions{})
 	if len(missing) != 3 || missing[0] != 1 {
 		t.Fatalf("unknown sticky account must not change order, got %v", missing)
 	}
@@ -183,8 +183,37 @@ func TestOrderDropsBlockedStickyAccount(t *testing.T) {
 		[]Runtime{{CooldownRemainingMs: 5000}, {}},
 		limitPtr(2),
 	)
-	got := pool.Order(1, func(int, func(int, int)) {})
+	got := pool.Order(1, func(int, func(int, int)) {}, OrderOptions{})
 	if len(got) != 1 || got[0] != 2 {
 		t.Fatalf("blocked sticky account must be skipped, got %v", got)
+	}
+}
+
+// TestOrderPreferSoonestReset 冻结 use-it-or-lose-it 排序（与 sub2api prefer_soonest_reset 同语义）：
+// 同优先级内，5h 窗口最早重置者先用；无活跃窗口观测（0 或已过期）排在有观测者之后；
+// 开关关闭时该维度完全不参与。
+func TestOrderPreferSoonestReset(t *testing.T) {
+	now := int64(1_000_000)
+	identity := func(int, func(int, int)) {}
+	pool := NewPool([]Account{
+		{ID: 1, Priority: 10, UsageResetAtUnix: now + 3600}, // 1 小时后重置
+		{ID: 2, Priority: 10, UsageResetAtUnix: now + 60},   // 1 分钟后重置（最早，应最先用）
+		{ID: 3, Priority: 10},                               // 无观测，排最后
+		{ID: 4, Priority: 10, UsageResetAtUnix: now - 10},   // 已过期观测 = 无活跃窗口
+	}, nil, nil)
+
+	got := pool.Order(0, identity, OrderOptions{PreferSoonestReset: true, NowUnix: now})
+	if len(got) != 4 || got[0] != 2 || got[1] != 1 {
+		t.Fatalf("prefer soonest reset order = %v, want [2 1 ...]", got)
+	}
+	// 3 与 4 都是无活跃窗口，顺序由后续键（LRU 均零值）保持稳定，但必须在 1、2 之后。
+	if got[2] == 1 || got[2] == 2 || got[3] == 1 || got[3] == 2 {
+		t.Fatalf("accounts without active window must sort last, got %v", got)
+	}
+
+	// 关闭开关：reset 维度不参与，全员同档（priority 相同、负载与 LRU 零值），保持输入序。
+	off := pool.Order(0, identity, OrderOptions{})
+	if len(off) != 4 || off[0] != 1 || off[1] != 2 || off[2] != 3 || off[3] != 4 {
+		t.Fatalf("disabled option must not reorder, got %v", off)
 	}
 }

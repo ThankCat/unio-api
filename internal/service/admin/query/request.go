@@ -27,13 +27,13 @@ type RequestStore interface {
 
 // RequestListParams 是分页/过滤/排序列出请求记录的入参；指针/空串/nil 表示该维度不过滤。
 type RequestListParams struct {
-	UserID        *int64
-	APIKeyID      *int64
-	RequestID     string
-	Status        string
-	Model         string
-	ChannelID     *int64
-	AttemptID     *int64
+	UserID    *int64
+	APIKeyID  *int64
+	RequestID string
+	Status    string
+	Model     string
+	ChannelID *int64
+	AttemptID *int64
 	// AccountID 按最终命中的订阅账号过滤（账号下钻）；nil 不过滤。
 	AccountID     *int64
 	ScoringSample string

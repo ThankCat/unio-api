@@ -166,7 +166,7 @@ func (h *channelOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 			ProviderName:            row.ProviderName,
 			ProviderCurrency:        row.ProviderCurrency,
 			Credential:              row.Credential,
-		SupplyForm:              row.SupplyForm,
+			SupplyForm:              row.SupplyForm,
 			AttemptTotal:            row.AttemptTotal,
 			AttemptSucceeded:        row.AttemptSucceeded,
 			SuccessRate:             row.SuccessRate,

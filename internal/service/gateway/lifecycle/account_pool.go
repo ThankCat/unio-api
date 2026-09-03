@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/ThankCat/unio-gateway/internal/core/accountpool"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
@@ -95,6 +96,7 @@ func (e *Executor) loadAccountPool(ctx context.Context, candidate routing.ChatRo
 		if row.LastSuccessAt.Valid {
 			account.LastSuccessAt = row.LastSuccessAt.Time
 		}
+		account.UsageResetAtUnix = usagePrimaryResetAt(row.UsageSnapshot)
 		accounts = append(accounts, account)
 		ids = append(ids, row.ID)
 	}
@@ -111,6 +113,23 @@ func (e *Executor) loadAccountPool(ctx context.Context, candidate routing.ChatRo
 		return accountPoolSnapshot{Pool: pool, Reason: accountPoolReasonCooldown}
 	}
 	return accountPoolSnapshot{Pool: pool}
+}
+
+// usagePrimaryResetAt 从 usage_snapshot 文档取 5h 窗口重置时刻（unix 秒）；缺失/解析失败返回 0。
+// 只解一个字段，损坏的快照静默忽略——排序退化为现状，不能因观测数据坏掉阻断选号。
+func usagePrimaryResetAt(snapshot []byte) int64 {
+	if len(snapshot) == 0 {
+		return 0
+	}
+	var doc struct {
+		Primary struct {
+			ResetAt int64 `json:"reset_at"`
+		} `json:"primary"`
+	}
+	if err := json.Unmarshal(snapshot, &doc); err != nil {
+		return 0
+	}
+	return doc.Primary.ResetAt
 }
 
 func accountRuntimeFacts(runtimes []breakerstore.AccountRuntime) []accountpool.Runtime {

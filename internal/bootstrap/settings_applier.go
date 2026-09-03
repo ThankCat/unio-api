@@ -29,6 +29,11 @@ type channel429CooldownPolicyTarget interface {
 	SetChannel429CooldownPolicy(defaultCooldown, cap time.Duration)
 }
 
+// accountPoolPreferenceTarget 是池内排序偏好的消费方（AttemptPermitManager）。
+type accountPoolPreferenceTarget interface {
+	SetAccountPoolPreferSoonestReset(enabled bool)
+}
+
 // capacityWaitTarget 是全池并发短等预算的消费方（每个协议 service 的 AttemptRunner，§9.4）。
 type capacityWaitTarget interface {
 	SetCapacityWaitTimeout(d time.Duration)
@@ -51,6 +56,7 @@ type settingsApplier struct {
 	router       *routing.Router
 	sticky       *lifecycle.StickyRouter
 	channel429   channel429CooldownPolicyTarget
+	accountPool  accountPoolPreferenceTarget
 	capacityWait []capacityWaitTarget
 	logging      gatewayLoggingTarget
 }
@@ -120,6 +126,17 @@ func (a *settingsApplier) applyOnce(ctx context.Context) {
 		} else {
 			a.warnDecode(ctx, appsettings.GatewayChannelCooldownKey, err)
 		}
+	}
+
+	if a.accountPool != nil {
+		var preferSoonest bool
+		if raw := a.store.Raw(ctx, appsettings.GatewayAccountPoolPreferSoonestResetKey); len(raw) > 0 {
+			if err := json.Unmarshal(raw, &preferSoonest); err != nil {
+				a.warnDecode(ctx, appsettings.GatewayAccountPoolPreferSoonestResetKey, err)
+				preferSoonest = false
+			}
+		}
+		a.accountPool.SetAccountPoolPreferSoonestReset(preferSoonest)
 	}
 
 	if n, err := appsettings.DecodePositiveIntSetting(a.store.Raw(ctx, appsettings.GatewayCredential401ThresholdKey)); err == nil {

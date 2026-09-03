@@ -11,6 +11,150 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const adminChannelAccountsLastFailure24h = `-- name: AdminChannelAccountsLastFailure24h :many
+SELECT DISTINCT ON (r.final_account_id)
+    r.final_account_id AS account_id,
+    r.created_at AS failed_at,
+    COALESCE(r.error_code, '') AS error_code
+FROM request_records r
+WHERE r.final_account_id IN (SELECT sa.id FROM subscription_accounts sa WHERE sa.channel_id = $1)
+  AND r.status = 'failed'
+  AND r.created_at > now() - interval '24 hours'
+ORDER BY r.final_account_id, r.created_at DESC
+`
+
+type AdminChannelAccountsLastFailure24hRow struct {
+	AccountID pgtype.Int8
+	FailedAt  pgtype.Timestamptz
+	ErrorCode string
+}
+
+// AdminChannelAccountsLastFailure24h 每账号近 24 小时最近一次失败（时间 + 错误码），tooltip 展示。
+func (q *Queries) AdminChannelAccountsLastFailure24h(ctx context.Context, channelID int64) ([]AdminChannelAccountsLastFailure24hRow, error) {
+	rows, err := q.db.Query(ctx, adminChannelAccountsLastFailure24h, channelID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AdminChannelAccountsLastFailure24hRow
+	for rows.Next() {
+		var i AdminChannelAccountsLastFailure24hRow
+		if err := rows.Scan(&i.AccountID, &i.FailedAt, &i.ErrorCode); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const adminChannelAccountsSale24h = `-- name: AdminChannelAccountsSale24h :many
+SELECT
+    r.final_account_id AS account_id,
+    le.currency,
+    COALESCE(sum(CASE
+        WHEN le.entry_type IN ('debit', 'adjustment_debit') THEN le.amount
+        WHEN le.entry_type IN ('refund', 'adjustment_credit') THEN -le.amount
+        ELSE 0
+    END), 0)::numeric AS sale_amount
+FROM ledger_entries le
+JOIN request_records r ON r.id = le.request_record_id
+WHERE r.final_account_id IN (SELECT sa.id FROM subscription_accounts sa WHERE sa.channel_id = $1)
+  AND le.created_at > now() - interval '24 hours'
+GROUP BY r.final_account_id, le.currency
+`
+
+type AdminChannelAccountsSale24hRow struct {
+	AccountID  pgtype.Int8
+	Currency   string
+	SaleAmount pgtype.Numeric
+}
+
+// AdminChannelAccountsSale24h 按账号 + 币种聚合近 24 小时净扣费（售卖额，与工作台 revenue 同口径 debit 族 − 冲正）。
+func (q *Queries) AdminChannelAccountsSale24h(ctx context.Context, channelID int64) ([]AdminChannelAccountsSale24hRow, error) {
+	rows, err := q.db.Query(ctx, adminChannelAccountsSale24h, channelID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AdminChannelAccountsSale24hRow
+	for rows.Next() {
+		var i AdminChannelAccountsSale24hRow
+		if err := rows.Scan(&i.AccountID, &i.Currency, &i.SaleAmount); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const adminChannelAccountsUsage24h = `-- name: AdminChannelAccountsUsage24h :many
+SELECT
+    r.final_account_id AS account_id,
+    count(*)::bigint AS total_requests,
+    (count(*) FILTER (WHERE r.status = 'succeeded'))::bigint AS succeeded_requests,
+    (count(*) FILTER (WHERE r.status = 'failed'))::bigint AS failed_requests,
+    COALESCE(sum(
+        ur.uncached_input_tokens + ur.cache_read_input_tokens
+        + ur.cache_creation_5m_input_tokens + ur.cache_creation_1h_input_tokens
+        + ur.cache_creation_30m_input_tokens + ur.output_tokens_total
+    ), 0)::bigint AS total_tokens,
+    COALESCE(avg(EXTRACT(EPOCH FROM (r.completed_at - r.started_at)) * 1000)
+        FILTER (WHERE r.status = 'succeeded' AND r.completed_at IS NOT NULL AND r.started_at IS NOT NULL), 0)::bigint AS avg_latency_ms,
+    COALESCE(avg(EXTRACT(EPOCH FROM (r.gateway_first_token_at - r.started_at)) * 1000)
+        FILTER (WHERE r.status = 'succeeded' AND r.gateway_first_token_at IS NOT NULL AND r.started_at IS NOT NULL), 0)::bigint AS avg_first_token_ms
+FROM request_records r
+LEFT JOIN usage_records ur ON ur.request_record_id = r.id
+WHERE r.final_account_id IN (SELECT sa.id FROM subscription_accounts sa WHERE sa.channel_id = $1)
+  AND r.created_at > now() - interval '24 hours'
+GROUP BY r.final_account_id
+`
+
+type AdminChannelAccountsUsage24hRow struct {
+	AccountID         pgtype.Int8
+	TotalRequests     int64
+	SucceededRequests int64
+	FailedRequests    int64
+	TotalTokens       int64
+	AvgLatencyMs      int64
+	AvgFirstTokenMs   int64
+}
+
+// AdminChannelAccountsUsage24h 按账号聚合近 24 小时的请求/成功/失败/token/延迟（渠道账号页「24H」列）。
+// token 口径与请求详情一致：全部输入形态 + 输出总量；延迟只统计成功请求（失败的时长无意义）。
+func (q *Queries) AdminChannelAccountsUsage24h(ctx context.Context, channelID int64) ([]AdminChannelAccountsUsage24hRow, error) {
+	rows, err := q.db.Query(ctx, adminChannelAccountsUsage24h, channelID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AdminChannelAccountsUsage24hRow
+	for rows.Next() {
+		var i AdminChannelAccountsUsage24hRow
+		if err := rows.Scan(
+			&i.AccountID,
+			&i.TotalRequests,
+			&i.SucceededRequests,
+			&i.FailedRequests,
+			&i.TotalTokens,
+			&i.AvgLatencyMs,
+			&i.AvgFirstTokenMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const adminCountAccountsByChannel = `-- name: AdminCountAccountsByChannel :one
 SELECT
     count(*) AS total,
@@ -49,14 +193,14 @@ func (q *Queries) AdminCountAccountsByChannel(ctx context.Context, channelID int
 const adminCreateSubscriptionAccount = `-- name: AdminCreateSubscriptionAccount :one
 INSERT INTO subscription_accounts (
     channel_id, platform, credential_type, upstream_account_id, display_name,
-    plan_type, credentials, proxy_url, concurrency_limit, priority,
+    plan_type, credentials, proxy_url, proxy_id, concurrency_limit, priority,
     status, subscription_expires_at
 ) VALUES (
     $1, $2, $3, $4, $5,
-    $6, $7, $8, $9, $10,
-    'disabled', $11
+    $6, $7, $8, $9, $10, $11,
+    'disabled', $12
 )
-RETURNING id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at
+RETURNING id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id
 `
 
 type AdminCreateSubscriptionAccountParams struct {
@@ -68,6 +212,7 @@ type AdminCreateSubscriptionAccountParams struct {
 	PlanType              pgtype.Text
 	Credentials           []byte
 	ProxyUrl              pgtype.Text
+	ProxyID               pgtype.Int8
 	ConcurrencyLimit      pgtype.Int4
 	Priority              int32
 	SubscriptionExpiresAt pgtype.Timestamptz
@@ -85,6 +230,7 @@ func (q *Queries) AdminCreateSubscriptionAccount(ctx context.Context, arg AdminC
 		arg.PlanType,
 		arg.Credentials,
 		arg.ProxyUrl,
+		arg.ProxyID,
 		arg.ConcurrencyLimit,
 		arg.Priority,
 		arg.SubscriptionExpiresAt,
@@ -110,6 +256,7 @@ func (q *Queries) AdminCreateSubscriptionAccount(ctx context.Context, arg AdminC
 		&i.ConfigRevision,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ProxyID,
 	)
 	return i, err
 }
@@ -181,7 +328,7 @@ func (q *Queries) AdminDeleteSubscriptionAccountCascade(ctx context.Context, id 
 }
 
 const adminGetSubscriptionAccount = `-- name: AdminGetSubscriptionAccount :one
-SELECT id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at
+SELECT id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id
 FROM subscription_accounts
 WHERE id = $1
 `
@@ -210,6 +357,7 @@ func (q *Queries) AdminGetSubscriptionAccount(ctx context.Context, id int64) (Su
 		&i.ConfigRevision,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ProxyID,
 	)
 	return i, err
 }
@@ -282,8 +430,13 @@ SELECT
     a.created_at,
     a.updated_at,
     (a.credentials ->> 'expires_at') AS token_expires_at,
-    (a.credentials ? 'refresh_token') AS has_refresh_token
+    (a.credentials ? 'refresh_token') AS has_refresh_token,
+    (a.credentials ->> 'email') AS email,
+    a.proxy_id,
+    apx.name AS proxy_name,
+    apx.status AS proxy_status
 FROM subscription_accounts a
+LEFT JOIN proxies apx ON apx.id = a.proxy_id
 WHERE a.channel_id = $1
   AND ($2::text IS NULL OR a.status = $2::text)
 ORDER BY CASE a.status WHEN 'enabled' THEN 0 WHEN 'disabled' THEN 1 ELSE 2 END, a.priority, a.id
@@ -315,6 +468,10 @@ type AdminListSubscriptionAccountsRow struct {
 	UpdatedAt             pgtype.Timestamptz
 	TokenExpiresAt        interface{}
 	HasRefreshToken       interface{}
+	Email                 interface{}
+	ProxyID               pgtype.Int8
+	ProxyName             pgtype.Text
+	ProxyStatus           pgtype.Text
 }
 
 // AdminListSubscriptionAccounts 列出渠道下全部账号（含已停用与归档），供渠道详情的账号页签。
@@ -351,6 +508,10 @@ func (q *Queries) AdminListSubscriptionAccounts(ctx context.Context, arg AdminLi
 			&i.UpdatedAt,
 			&i.TokenExpiresAt,
 			&i.HasRefreshToken,
+			&i.Email,
+			&i.ProxyID,
+			&i.ProxyName,
+			&i.ProxyStatus,
 		); err != nil {
 			return nil, err
 		}
@@ -427,7 +588,7 @@ SET credentials = $3,
     updated_at = now()
 WHERE platform = $1
   AND upstream_account_id = $2
-RETURNING id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at
+RETURNING id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id
 `
 
 type AdminReauthorizeSubscriptionAccountParams struct {
@@ -469,6 +630,7 @@ func (q *Queries) AdminReauthorizeSubscriptionAccount(ctx context.Context, arg A
 		&i.ConfigRevision,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ProxyID,
 	)
 	return i, err
 }
@@ -480,7 +642,7 @@ SET status = $2,
     config_revision = config_revision + 1,
     updated_at = now()
 WHERE id = $1
-RETURNING id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at
+RETURNING id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id
 `
 
 type AdminSetSubscriptionAccountStatusParams struct {
@@ -514,6 +676,7 @@ func (q *Queries) AdminSetSubscriptionAccountStatus(ctx context.Context, arg Adm
 		&i.ConfigRevision,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ProxyID,
 	)
 	return i, err
 }
@@ -522,19 +685,21 @@ const adminUpdateSubscriptionAccountConfig = `-- name: AdminUpdateSubscriptionAc
 UPDATE subscription_accounts
 SET display_name = $2,
     proxy_url = $3,
-    concurrency_limit = $4,
-    priority = $5,
-    subscription_expires_at = $6,
+    proxy_id = $4,
+    concurrency_limit = $5,
+    priority = $6,
+    subscription_expires_at = $7,
     config_revision = config_revision + 1,
     updated_at = now()
 WHERE id = $1
-RETURNING id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at
+RETURNING id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id
 `
 
 type AdminUpdateSubscriptionAccountConfigParams struct {
 	ID                    int64
 	DisplayName           string
 	ProxyUrl              pgtype.Text
+	ProxyID               pgtype.Int8
 	ConcurrencyLimit      pgtype.Int4
 	Priority              int32
 	SubscriptionExpiresAt pgtype.Timestamptz
@@ -549,6 +714,7 @@ func (q *Queries) AdminUpdateSubscriptionAccountConfig(ctx context.Context, arg 
 		arg.ID,
 		arg.DisplayName,
 		arg.ProxyUrl,
+		arg.ProxyID,
 		arg.ConcurrencyLimit,
 		arg.Priority,
 		arg.SubscriptionExpiresAt,
@@ -574,6 +740,7 @@ func (q *Queries) AdminUpdateSubscriptionAccountConfig(ctx context.Context, arg 
 		&i.ConfigRevision,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ProxyID,
 	)
 	return i, err
 }
@@ -631,16 +798,18 @@ func (q *Queries) GetAccountByPlatformUpstreamID(ctx context.Context, arg GetAcc
 
 const getAccountOutboundCredential = `-- name: GetAccountOutboundCredential :one
 SELECT
-    id,
-    channel_id,
-    platform,
-    credential_type,
-    upstream_account_id,
-    credentials,
-    proxy_url,
-    status
-FROM subscription_accounts
-WHERE id = $1
+    a.id,
+    a.channel_id,
+    a.platform,
+    a.credential_type,
+    a.upstream_account_id,
+    a.credentials,
+    a.proxy_url,
+    a.status,
+    apx.url AS proxy_entity_url
+FROM subscription_accounts a
+LEFT JOIN proxies apx ON apx.id = a.proxy_id AND apx.status = 'enabled'
+WHERE a.id = $1
 `
 
 type GetAccountOutboundCredentialRow struct {
@@ -652,6 +821,7 @@ type GetAccountOutboundCredentialRow struct {
 	Credentials       []byte
 	ProxyUrl          pgtype.Text
 	Status            string
+	ProxyEntityUrl    pgtype.Text
 }
 
 // GetAccountOutboundCredential 取指定账号的出站凭据与代理，供 transport 按 permit 固化的账号身份发请求。
@@ -668,19 +838,34 @@ func (q *Queries) GetAccountOutboundCredential(ctx context.Context, id int64) (G
 		&i.Credentials,
 		&i.ProxyUrl,
 		&i.Status,
+		&i.ProxyEntityUrl,
 	)
 	return i, err
 }
 
+const getEnabledProxyURL = `-- name: GetEnabledProxyURL :one
+SELECT url FROM proxies WHERE id = $1 AND status = 'enabled'
+`
+
+// GetEnabledProxyURL 取启用代理的规范 URL（disabled/不存在返回 no rows → 调用方按直连处理）。
+func (q *Queries) GetEnabledProxyURL(ctx context.Context, id int64) (string, error) {
+	row := q.db.QueryRow(ctx, getEnabledProxyURL, id)
+	var url string
+	err := row.Scan(&url)
+	return url, err
+}
+
 const listAccountsNeedingTokenRefresh = `-- name: ListAccountsNeedingTokenRefresh :many
-SELECT id, channel_id, credentials, proxy_url, status
-FROM subscription_accounts
-WHERE status <> 'archived'
-  AND credential_type = 'oauth'
-  AND credentials ? 'refresh_token'
-  AND (credentials ->> 'expires_at') IS NOT NULL
-  AND (credentials ->> 'expires_at')::timestamptz < now() + make_interval(secs => $1::bigint)
-ORDER BY (credentials ->> 'expires_at')::timestamptz
+SELECT a.id, a.channel_id, a.credentials, a.proxy_url, a.status,
+       apx.url AS proxy_entity_url
+FROM subscription_accounts a
+LEFT JOIN proxies apx ON apx.id = a.proxy_id AND apx.status = 'enabled'
+WHERE a.status <> 'archived'
+  AND a.credential_type = 'oauth'
+  AND a.credentials ? 'refresh_token'
+  AND (a.credentials ->> 'expires_at') IS NOT NULL
+  AND (a.credentials ->> 'expires_at')::timestamptz < now() + make_interval(secs => $1::bigint)
+ORDER BY (a.credentials ->> 'expires_at')::timestamptz
 LIMIT $2
 `
 
@@ -690,11 +875,12 @@ type ListAccountsNeedingTokenRefreshParams struct {
 }
 
 type ListAccountsNeedingTokenRefreshRow struct {
-	ID          int64
-	ChannelID   int64
-	Credentials []byte
-	ProxyUrl    pgtype.Text
-	Status      string
+	ID             int64
+	ChannelID      int64
+	Credentials    []byte
+	ProxyUrl       pgtype.Text
+	Status         string
+	ProxyEntityUrl pgtype.Text
 }
 
 // ListAccountsNeedingTokenRefresh 分页扫描 access token 即将过期的账号，供后台保活刷新（第六节）。
@@ -715,6 +901,7 @@ func (q *Queries) ListAccountsNeedingTokenRefresh(ctx context.Context, arg ListA
 			&i.Credentials,
 			&i.ProxyUrl,
 			&i.Status,
+			&i.ProxyEntityUrl,
 		); err != nil {
 			return nil, err
 		}

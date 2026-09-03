@@ -27,6 +27,28 @@ const (
 // provider 专属规则（Reject、tokenizer）由 internal/core/adapter/anthropic/<provider> 组合本类型实现。
 type Adapter struct {
 	client *http.Client
+	// proxyClientFor 按代理 URL 解析 client（渠道级出站代理；nil 恒用 client）。
+	proxyClientFor func(proxyURL string) *http.Client
+}
+
+// SetProxyClientResolver 注入渠道代理的 client 解析（bootstrap 可选注入）。
+func (a *Adapter) SetProxyClientResolver(clientFor func(proxyURL string) *http.Client) *Adapter {
+	a.proxyClientFor = clientFor
+	return a
+}
+
+// httpClient 出站 client 选择：账号代理 → 渠道代理 → 直连。
+func (a *Adapter) httpClient(ch channel.Runtime) *http.Client {
+	proxy := ch.Account.ProxyURL
+	if proxy == "" {
+		proxy = ch.ProxyURL
+	}
+	if proxy != "" && a.proxyClientFor != nil {
+		if client := a.proxyClientFor(proxy); client != nil {
+			return client
+		}
+	}
+	return a.client
 }
 
 // NewAdapter 创建 Anthropic-compatible adapter。
@@ -284,7 +306,7 @@ func (a *Adapter) do(ctx context.Context, ch channel.Runtime, req MessageRequest
 	}
 
 	adapter.MarkTransportStarted(ctx)
-	httpResp, err := a.client.Do(request)
+	httpResp, err := a.httpClient(ch).Do(request)
 	if httpResp != nil {
 		adapter.MarkResponseHeadersReceived(ctx, adapter.UpstreamMetadata{
 			StatusCode: httpResp.StatusCode,

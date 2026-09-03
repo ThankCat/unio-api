@@ -45,6 +45,10 @@ type Queries interface {
 	GetChannel(ctx context.Context, id int64) (sqlc.Channel, error)
 	CountSchedulableAccountsByChannel(ctx context.Context, channelID int64) (int64, error)
 	AdminListPoolChannels(ctx context.Context) ([]sqlc.AdminListPoolChannelsRow, error)
+	GetEnabledProxyURL(ctx context.Context, id int64) (string, error)
+	AdminChannelAccountsUsage24h(ctx context.Context, channelID int64) ([]sqlc.AdminChannelAccountsUsage24hRow, error)
+	AdminChannelAccountsSale24h(ctx context.Context, channelID int64) ([]sqlc.AdminChannelAccountsSale24hRow, error)
+	AdminChannelAccountsLastFailure24h(ctx context.Context, channelID int64) ([]sqlc.AdminChannelAccountsLastFailure24hRow, error)
 }
 
 // AccountRuntimeReader 读取账号运行态（冷却/隔离/暂停/在途），供列表页展示。
@@ -112,6 +116,10 @@ type Account struct {
 	DisplayName           string     `json:"display_name"`
 	PlanType              string     `json:"plan_type,omitempty"`
 	ProxyURL              string     `json:"proxy_url,omitempty"`
+	ProxyID               *int64     `json:"proxy_id,omitempty"`
+	ProxyName             string     `json:"proxy_name,omitempty"`
+	ProxyStatus           string     `json:"proxy_status,omitempty"`
+	Email                 string     `json:"email,omitempty"`
 	ConcurrencyLimit      *int64     `json:"concurrency_limit"`
 	Priority              int32      `json:"priority"`
 	Status                string     `json:"status"`
@@ -127,6 +135,22 @@ type Account struct {
 
 	// Runtime 是 Redis 运行态（冷却/临时不可调度/用量暂停/在途），列表读取时批量拉取。
 	Runtime *AccountRuntimeView `json:"runtime,omitempty"`
+	// Usage24h 是近 24 小时按账号聚合的产出（请求/成功率/token/售卖额），列表批量拉取。
+	Usage24h *AccountUsage24hView `json:"usage_24h,omitempty"`
+}
+
+// AccountUsage24hView 是「24H」列的数据（request_records + usage_records + ledger_entries 聚合）。
+type AccountUsage24hView struct {
+	TotalRequests     int64 `json:"total_requests"`
+	SucceededRequests int64 `json:"succeeded_requests"`
+	FailedRequests    int64 `json:"failed_requests"`
+	TotalTokens       int64 `json:"total_tokens"`
+	// SaleAmounts 按币种的净扣费串（"8.4021 CNY"），多币种逗号相连；金额走十进制字符串，不经 float。
+	SaleAmounts     string `json:"sale_amounts,omitempty"`
+	AvgLatencyMs    int64  `json:"avg_latency_ms"`
+	AvgFirstTokenMs int64  `json:"avg_first_token_ms"`
+	LastFailureAt   string `json:"last_failure_at,omitempty"`
+	LastFailureCode string `json:"last_failure_code,omitempty"`
 }
 
 // AccountRuntimeView 是运行态的展示形态。
@@ -194,6 +218,7 @@ func (s *Service) List(ctx context.Context, channelID int64, status string) (Lis
 			ids = append(ids, row.ID)
 		}
 	}
+	s.attachUsage24h(ctx, channelID, result.Accounts)
 	if s.runtime != nil && len(ids) > 0 {
 		runtimes, runtimeErr := s.runtime.AccountRuntimeMany(ctx, ids)
 		if runtimeErr == nil {
@@ -227,6 +252,79 @@ func (s *Service) List(ctx context.Context, channelID int64, status string) (Lis
 		}
 	}
 	return result, nil
+}
+
+// attachUsage24h 批量拉近 24h 聚合并挂到账号视图。聚合只是运维观测，
+// 查询失败不阻断列表主体（该列显示为空，问题在日志里暴露）。
+func (s *Service) attachUsage24h(ctx context.Context, channelID int64, accounts []Account) {
+	usageRows, err := s.queries.AdminChannelAccountsUsage24h(ctx, channelID)
+	if err != nil {
+		return
+	}
+	views := make(map[int64]*AccountUsage24hView, len(usageRows))
+	for _, row := range usageRows {
+		if !row.AccountID.Valid {
+			continue
+		}
+		views[row.AccountID.Int64] = &AccountUsage24hView{
+			TotalRequests:     row.TotalRequests,
+			SucceededRequests: row.SucceededRequests,
+			FailedRequests:    row.FailedRequests,
+			TotalTokens:       row.TotalTokens,
+			AvgLatencyMs:      row.AvgLatencyMs,
+			AvgFirstTokenMs:   row.AvgFirstTokenMs,
+		}
+	}
+	if saleRows, saleErr := s.queries.AdminChannelAccountsSale24h(ctx, channelID); saleErr == nil {
+		for _, row := range saleRows {
+			if !row.AccountID.Valid {
+				continue
+			}
+			view, ok := views[row.AccountID.Int64]
+			if !ok {
+				continue
+			}
+			amount := numericToDecimalString(row.SaleAmount)
+			if amount == "" || amount == "0" {
+				continue
+			}
+			part := amount + " " + row.Currency
+			if view.SaleAmounts != "" {
+				view.SaleAmounts += ", "
+			}
+			view.SaleAmounts += part
+		}
+	}
+	if failRows, failErr := s.queries.AdminChannelAccountsLastFailure24h(ctx, channelID); failErr == nil {
+		for _, row := range failRows {
+			if !row.AccountID.Valid {
+				continue
+			}
+			view, ok := views[row.AccountID.Int64]
+			if !ok {
+				continue
+			}
+			view.LastFailureAt = row.FailedAt.Time.UTC().Format(time.RFC3339)
+			view.LastFailureCode = row.ErrorCode
+		}
+	}
+	for index := range accounts {
+		if view, ok := views[accounts[index].ID]; ok {
+			accounts[index].Usage24h = view
+		}
+	}
+}
+
+// numericToDecimalString 把 pgtype.Numeric 转十进制字符串（金额不经 float，与全库口径一致）。
+func numericToDecimalString(v pgtype.Numeric) string {
+	if !v.Valid {
+		return ""
+	}
+	raw, err := v.MarshalJSON()
+	if err != nil {
+		return ""
+	}
+	return strings.Trim(string(raw), "\"")
 }
 
 // PoolOverview 是号池并发监测的一个池（实时监控页区块，Provider → 池 → 账号钻取）。
@@ -307,13 +405,22 @@ type oauthSession struct {
 	Challenge subscription.PKCEChallenge
 	ChannelID int64
 	ProxyURL  string
+	ProxyID   int64
 	ExpiresAt time.Time
 }
 
-// StartOAuth 生成授权链接。proxyURL 是该账号将绑定的出口（换码同样走它）。
-func (s *Service) StartOAuth(ctx context.Context, channelID int64, proxyURL string) (sessionID, authorizationURL string, err error) {
+// StartOAuth 生成授权链接。代理实体（proxyID）优先；proxyURL 为裸串回退（API 兼容）。
+// 该账号将绑定这个出口：换码请求就从它发出，保证会话从诞生起固定出口。
+func (s *Service) StartOAuth(ctx context.Context, channelID int64, proxyURL string, proxyID int64) (sessionID, authorizationURL string, err error) {
 	if err := s.requirePoolChannel(ctx, channelID); err != nil {
 		return "", "", err
+	}
+	if proxyID > 0 {
+		entityURL, proxyErr := s.queries.GetEnabledProxyURL(ctx, proxyID)
+		if proxyErr != nil {
+			return "", "", invalidArgument("proxy_id", "代理不存在或已停用")
+		}
+		proxyURL = entityURL
 	}
 	s.sweepExpiredOAuthSessions()
 	challenge, err := subscription.NewPKCEChallenge()
@@ -326,7 +433,7 @@ func (s *Service) StartOAuth(ctx context.Context, channelID int64, proxyURL stri
 	}
 	sessionID = hex.EncodeToString(buf)
 	s.oauthSessions.Store(sessionID, oauthSession{
-		Challenge: challenge, ChannelID: channelID, ProxyURL: proxyURL,
+		Challenge: challenge, ChannelID: channelID, ProxyURL: proxyURL, ProxyID: proxyID,
 		ExpiresAt: time.Now().Add(15 * time.Minute),
 	})
 	return sessionID, challenge.AuthorizationURL(""), nil
@@ -370,6 +477,10 @@ func (s *Service) CompleteOAuth(ctx context.Context, sessionID, code, state stri
 	imported, err := subscription.CompleteAuthorization(ctx, s.tokens, session.Challenge, code, state, "", session.ProxyURL)
 	if err != nil {
 		return CompleteOAuthResult{}, err
+	}
+	if session.ProxyID > 0 {
+		proxyID := session.ProxyID
+		imported.ProxyID = &proxyID
 	}
 
 	// 重授权分支：同渠道同上游账号 → 覆盖凭据（调度参数/状态/台账不动，状态由管理员随后启用）。
@@ -425,9 +536,11 @@ func (s *Service) CompleteOAuth(ctx context.Context, sessionID, code, state stri
 
 // UpdateConfigInput 是调度参数编辑入参。
 type UpdateConfigInput struct {
-	AccountID        int64
-	DisplayName      string
-	ProxyURL         string
+	AccountID   int64
+	DisplayName string
+	ProxyURL    string
+	// ProxyID 是出站代理实体引用（>0 时生效并清空 legacy ProxyURL；0 表示不用实体）。
+	ProxyID          int64
 	ConcurrencyLimit *int64
 	Priority         int32
 	// SubscriptionExpiresAt 是订阅到期时间（到期预警数据源）。上游不提供机读到期时间，
@@ -459,12 +572,23 @@ func (s *Service) UpdateConfig(ctx context.Context, in UpdateConfigInput) (Accou
 	if in.SubscriptionExpiresAt != nil {
 		expiresAt = pgtype.Timestamptz{Time: *in.SubscriptionExpiresAt, Valid: true}
 	}
+	var proxyID pgtype.Int8
+	proxyURL := in.ProxyURL
+	if in.ProxyID > 0 {
+		if _, proxyErr := s.queries.GetEnabledProxyURL(ctx, in.ProxyID); proxyErr != nil {
+			return Account{}, invalidArgument("proxy_id", "代理不存在或已停用")
+		}
+		proxyID = pgtype.Int8{Int64: in.ProxyID, Valid: true}
+		// 实体引用是单一真相：绑定实体时清空 legacy 裸 URL，避免两处口径漂移。
+		proxyURL = ""
+	}
 	var updated sqlc.SubscriptionAccount
 	err = s.publishAccountChange(ctx, account.ChannelID, func(ctx context.Context, qtx *sqlc.Queries) error {
 		row, updateErr := qtx.AdminUpdateSubscriptionAccountConfig(ctx, sqlc.AdminUpdateSubscriptionAccountConfigParams{
 			ID:                    in.AccountID,
 			DisplayName:           strings.TrimSpace(in.DisplayName),
-			ProxyUrl:              optionalText(in.ProxyURL),
+			ProxyUrl:              optionalText(proxyURL),
+			ProxyID:               proxyID,
 			ConcurrencyLimit:      optionalInt4(in.ConcurrencyLimit),
 			Priority:              in.Priority,
 			SubscriptionExpiresAt: expiresAt,
@@ -842,6 +966,19 @@ func accountFromListRow(row sqlc.AdminListSubscriptionAccountsRow) Account {
 	if row.ProxyUrl.Valid {
 		account.ProxyURL = row.ProxyUrl.String
 	}
+	if row.ProxyID.Valid {
+		proxyID := row.ProxyID.Int64
+		account.ProxyID = &proxyID
+	}
+	if row.ProxyName.Valid {
+		account.ProxyName = row.ProxyName.String
+	}
+	if row.ProxyStatus.Valid {
+		account.ProxyStatus = row.ProxyStatus.String
+	}
+	if v, ok := row.Email.(string); ok {
+		account.Email = v
+	}
 	if row.ConcurrencyLimit.Valid {
 		v := int64(row.ConcurrencyLimit.Int32)
 		account.ConcurrencyLimit = &v
@@ -877,6 +1014,7 @@ func accountFromRow(row sqlc.SubscriptionAccount) Account {
 	}
 	if credsErr == nil {
 		account.HasRefreshToken = creds.RefreshToken != ""
+		account.Email = creds.Email
 		if !creds.ExpiresAt.IsZero() {
 			account.TokenExpiresAt = creds.ExpiresAt.UTC().Format(time.RFC3339)
 		}
@@ -886,6 +1024,10 @@ func accountFromRow(row sqlc.SubscriptionAccount) Account {
 	}
 	if row.ProxyUrl.Valid {
 		account.ProxyURL = row.ProxyUrl.String
+	}
+	if row.ProxyID.Valid {
+		proxyID := row.ProxyID.Int64
+		account.ProxyID = &proxyID
 	}
 	if row.ConcurrencyLimit.Valid {
 		v := int64(row.ConcurrencyLimit.Int32)

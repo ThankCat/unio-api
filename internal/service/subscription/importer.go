@@ -65,6 +65,8 @@ type ImportAccount struct {
 	PlanType          string
 	Credentials       Credentials
 	ProxyURL          string
+	// ProxyID 是出站代理实体引用（OAuth 向导选择的代理）；nil 时回退 ProxyURL 裸串。
+	ProxyID           *int64
 	Priority          int32
 	Concurrency       *int32
 	SubscriptionUntil time.Time
@@ -218,6 +220,9 @@ func ImportAccounts(ctx context.Context, queries ImporterQueries, channelID int6
 		}
 		if account.ProxyURL != "" {
 			params.ProxyUrl = pgtype.Text{String: account.ProxyURL, Valid: true}
+		}
+		if account.ProxyID != nil && *account.ProxyID > 0 {
+			params.ProxyID = pgtype.Int8{Int64: *account.ProxyID, Valid: true}
 		}
 		if account.Concurrency != nil {
 			params.ConcurrencyLimit = pgtype.Int4{Int32: *account.Concurrency, Valid: true}

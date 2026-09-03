@@ -51,6 +51,7 @@ type Store interface {
 	UpdateChannelAccountDefaultConcurrency(ctx context.Context, arg sqlc.UpdateChannelAccountDefaultConcurrencyParams) (sqlc.Channel, error)
 	GetChannel(ctx context.Context, id int64) (sqlc.Channel, error)
 	CreateChannel(ctx context.Context, arg sqlc.CreateChannelParams) (sqlc.Channel, error)
+	GetEnabledProxyURL(ctx context.Context, id int64) (string, error)
 	UpdateChannel(ctx context.Context, arg sqlc.UpdateChannelParams) (sqlc.Channel, error)
 	DeleteChannelCascade(ctx context.Context, id int64) (int64, error)
 	ArchiveChannel(ctx context.Context, id int64) (int64, error)
@@ -127,9 +128,12 @@ type Channel struct {
 	// SupplyForm / AccountDefaultConcurrency 是号池改造引入的供给形态（credential/pool）。
 	SupplyForm                string
 	AccountDefaultConcurrency *int64
-	CreatedAt                 time.Time
-	UpdatedAt                 time.Time
-	ArchivedAt                *time.Time
+	// ProxyID / ProxyName 是渠道级出站代理实体（nil 直连）；名称由列表 JOIN 带出。
+	ProxyID    *int64
+	ProxyName  string
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+	ArchivedAt *time.Time
 	// LastTested* 是最近一次主动检测结果（渠道检测，阶段一）：全 nil 表示从未检测。
 	// 仅由检测上游源站写入，不参与路由/计费，也不改渠道启停状态。
 	LastTestedAt      *time.Time
@@ -206,6 +210,8 @@ type CreateInput struct {
 	SupplyForm string
 	// AccountDefaultConcurrency 是池型渠道的账号默认并发（nil 继承全局，0 不限，正数上限）。
 	AccountDefaultConcurrency *int64
+	// ProxyID 是渠道级出站代理实体（nil 直连）；账号自带代理时账号代理优先。
+	ProxyID *int64
 }
 
 // UpdateInput 是更新 channel 的入参；protocol、adapter_key 与凭据不在此修改。
@@ -228,6 +234,8 @@ type UpdateInput struct {
 	// 仅池型渠道可设。候选快照按请求读库，改动即刻生效，无需容量重发布。
 	AccountDefaultConcurrencyProvided bool
 	AccountDefaultConcurrency         *int64
+	// ProxyID 是渠道级出站代理实体（nil 清除 = 直连）。表单整体提交语义：每次更新都带当前值。
+	ProxyID *int64
 	// Confirmation 是暂停 Channel 流量前的客户影响确认；不允许借此修改 Offering。
 	Confirmation supply.Confirmation
 }
@@ -439,6 +447,9 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Channel, error) {
 	if err := validateTimeout("first_token_timeout_ms", in.FirstTokenTimeoutMs); err != nil {
 		return Channel{}, err
 	}
+	if err := s.validateProxyRef(ctx, in.ProxyID); err != nil {
+		return Channel{}, err
+	}
 	if err := validateStickyPolicy(in.StickyEnabled, in.StickyTTLms); err != nil {
 		return Channel{}, err
 	}
@@ -466,6 +477,12 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Channel, error) {
 		}
 		if in.AccountDefaultConcurrency != nil && *in.AccountDefaultConcurrency < 0 {
 			return Channel{}, invalidArgument("account_default_concurrency", "账号默认并发不可为负")
+		}
+		// 本期订阅账号只有 Codex（OAuth 会话 + 专属 wire/账号身份头）。选了别的 adapter，
+		// 出站不会带账号身份：模型发现/检测/正式请求都会被上游 403，且 adapter 创建后不可改——
+		// 一个必然坏的渠道不该被创建出来（实测踩过：adapter=openai 的池发现 403）。
+		if strings.TrimSpace(in.AdapterKey) != "codex" {
+			return Channel{}, invalidArgument("adapter_key", "池型渠道当前仅支持 codex 适配器（订阅账号的出站身份与 wire 由它承载）")
 		}
 	default:
 		return Channel{}, invalidArgument("supply_form", "supply_form 只能是 credential 或 pool")
@@ -497,6 +514,9 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Channel, error) {
 		}
 	}
 
+	if err := s.validateProxyRef(ctx, in.ProxyID); err != nil {
+		return Channel{}, err
+	}
 	row, err := s.store.CreateChannel(ctx, sqlc.CreateChannelParams{
 		ProviderID:                in.ProviderID,
 		Name:                      name,
@@ -513,6 +533,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Channel, error) {
 		StickyTtlMs:               nullableInt8Param(in.StickyTTLms),
 		SupplyForm:                supplyForm,
 		AccountDefaultConcurrency: rateLimitParam(in.AccountDefaultConcurrency),
+		ProxyID:                   nullableInt8Param(in.ProxyID),
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -643,6 +664,7 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Channel, error) {
 		FirstTokenTimeoutMs: timeoutParam(in.FirstTokenTimeoutMs),
 		StickyEnabled:       boolParam(in.StickyEnabled),
 		StickyTtlMs:         nullableInt8Param(in.StickyTTLms),
+		ProxyID:             nullableInt8Param(in.ProxyID),
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -661,6 +683,20 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Channel, error) {
 		ch.RuntimeSyncPending = true
 	}
 	return s.enrichProviderName(ctx, ch)
+}
+
+// validateProxyRef 校验渠道代理引用：必须存在且 enabled（绑定停用代理无意义，直接拒绝）。
+func (s *Service) validateProxyRef(ctx context.Context, proxyID *int64) error {
+	if proxyID == nil || *proxyID <= 0 {
+		return nil
+	}
+	if _, err := s.store.GetEnabledProxyURL(ctx, *proxyID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return invalidArgument("proxy_id", "代理不存在或已停用")
+		}
+		return storeFailed(err, "validate proxy reference")
+	}
+	return nil
 }
 
 // disableChannelWithLinkage 在一个事务内暂停 Channel 流量。Binding、Model 与 Offering
@@ -708,6 +744,7 @@ func (s *Service) disableChannelWithLinkage(ctx context.Context, in UpdateInput,
 		FirstTokenTimeoutMs: timeoutParam(in.FirstTokenTimeoutMs),
 		StickyEnabled:       boolParam(in.StickyEnabled),
 		StickyTtlMs:         nullableInt8Param(in.StickyTTLms),
+		ProxyID:             nullableInt8Param(in.ProxyID),
 	})
 	if err != nil {
 		return Channel{}, channelUpdateError(err)
@@ -791,6 +828,7 @@ func (s *Service) updateWithPublishedCapacity(
 				FirstTokenTimeoutMs: timeoutParam(in.FirstTokenTimeoutMs),
 				StickyEnabled:       boolParam(in.StickyEnabled),
 				StickyTtlMs:         nullableInt8Param(in.StickyTTLms),
+				ProxyID:             nullableInt8Param(in.ProxyID),
 			}); updateErr != nil {
 				return channelUpdateError(updateErr)
 			}
@@ -1022,6 +1060,14 @@ func (s *Service) ensureProviderRechargeRateConfigured(ctx context.Context, prov
 	return storeFailed(err, "find active provider recharge rate")
 }
 
+// textString 取可空文本（NULL → 空串）。
+func textString(v pgtype.Text) string {
+	if !v.Valid {
+		return ""
+	}
+	return v.String
+}
+
 func toChannel(c sqlc.Channel) Channel {
 	return Channel{
 		ID:                        c.ID,
@@ -1042,6 +1088,7 @@ func toChannel(c sqlc.Channel) Channel {
 		StickyTTLms:               int8Result(c.StickyTtlMs),
 		SupplyForm:                c.SupplyForm,
 		AccountDefaultConcurrency: rateLimitResult(c.AccountDefaultConcurrency),
+		ProxyID:                   int8Result(c.ProxyID),
 		CreatedAt:                 c.CreatedAt.Time,
 		UpdatedAt:                 c.UpdatedAt.Time,
 		ArchivedAt:                timestampResult(c.ArchivedAt),
@@ -1093,6 +1140,8 @@ func toChannelRow(c sqlc.ListChannelsPageRow) Channel {
 		StickyTTLms:               int8Result(c.StickyTtlMs),
 		SupplyForm:                c.SupplyForm,
 		AccountDefaultConcurrency: rateLimitResult(c.AccountDefaultConcurrency),
+		ProxyID:                   int8Result(c.ProxyID),
+		ProxyName:                 textString(c.ProxyName),
 		CreatedAt:                 c.CreatedAt.Time,
 		UpdatedAt:                 c.UpdatedAt.Time,
 

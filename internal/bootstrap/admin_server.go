@@ -53,6 +53,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/service/admin/providerbalance"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/providerops"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/providerrechargerate"
+	adminproxy "github.com/ThankCat/unio-gateway/internal/service/admin/proxy"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/query"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/routingtrace"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/runtimediagnostics"
@@ -63,6 +64,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/readiness"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/runtimefacts"
 	"github.com/ThankCat/unio-gateway/internal/service/subscription"
+	subscriptionhealth "github.com/ThankCat/unio-gateway/internal/service/subscription/health"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -261,7 +263,15 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		probeIdentity := subscription.NewProbeIdentityResolver(queries, accountOutbound)
 		channelTestService.WithAccountResolver(probeIdentity)
 		channelModelInventoryService.WithAccountResolver(probeIdentity)
+		// 探测/验证成功即回填账号观测（用量水位 + LRU）：与请求路径同一 Recorder，阈值同样热更新。
+		probeHealth := subscriptionhealth.NewRecorder(queries, sharedBreakerStore, deps.Logger, 0).
+			WithThresholdProvider(func(ctx context.Context) float64 {
+				return appsettings.GatewayAccountUsagePauseThreshold(ctx, settingsStore)
+			})
+		channelTestService.WithAccountHealth(probeHealth)
+		channelModelInventoryService.WithAccountHealth(probeHealth)
 	}
+	proxyAdminService := adminproxy.NewService(queries)
 	routingTraceService := routingtrace.NewService(queries)
 
 	// M6 只读查询台：请求记录 / 账本，只读 service 共用同一 sqlc Queries。
@@ -356,6 +366,7 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 
 		ChannelCostMultiplierService: channelCostMultiplierService,
 		ProviderRechargeRateService:  providerRechargeRateService,
+		ProxyService:                 proxyAdminService,
 		SubscriptionAccountService:   subscriptionAccountService,
 
 		RoutingTraceService: routingTraceService,

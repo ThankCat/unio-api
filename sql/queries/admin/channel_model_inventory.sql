@@ -47,6 +47,7 @@ SELECT
     c.adapter_key,
     c.credential,
     c.supply_form,
+    cpx.url AS channel_proxy_url,
     c.status AS channel_status,
     c.config_revision AS current_channel_config_revision,
     p.slug AS provider_slug,
@@ -56,6 +57,7 @@ SELECT
 FROM channel_model_discovery_runs r
 JOIN channels c ON c.id = r.channel_id
 JOIN providers p ON p.id = c.provider_id
+LEFT JOIN proxies cpx ON cpx.id = c.proxy_id AND cpx.status = 'enabled'
 WHERE r.id = sqlc.arg(run_id);
 
 -- name: InsertChannelModelDiscoveryItem :exec
@@ -253,6 +255,7 @@ RETURNING r.*;
 
 -- name: GetChannelModelVerificationExecutionSnapshot :one
 SELECT r.*, c.provider_id, c.protocols, c.adapter_key, c.credential, c.supply_form,
+    cpx.url AS channel_proxy_url,
     c.status AS channel_status, c.config_revision AS current_channel_config_revision,
     p.slug AS provider_slug, p.origin,
     p.origin_revision AS current_provider_origin_revision,
@@ -260,6 +263,7 @@ SELECT r.*, c.provider_id, c.protocols, c.adapter_key, c.credential, c.supply_fo
 FROM channel_model_verification_runs r
 JOIN channels c ON c.id = r.channel_id
 JOIN providers p ON p.id = c.provider_id
+LEFT JOIN proxies cpx ON cpx.id = c.proxy_id AND cpx.status = 'enabled'
 WHERE r.id = sqlc.arg(run_id);
 
 -- name: ListChannelModelVerificationItems :many

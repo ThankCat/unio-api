@@ -9,8 +9,8 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/adminhttp"
-	adminexchangerate "github.com/ThankCat/unio-gateway/internal/service/admin/exchangerate"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
+	adminexchangerate "github.com/ThankCat/unio-gateway/internal/service/admin/exchangerate"
 )
 
 // ExchangeRateService 定义汇率管理台所需能力。

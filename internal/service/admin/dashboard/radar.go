@@ -118,20 +118,20 @@ type BreakdownRow struct {
 	BalanceCurrency string
 	BalanceUSD      *string
 	BalanceStatus   string
-	Terminal       int64
-	Succeeded      int64
-	Failed         int64
-	SuccessRate    float64
-	Tokens         int64  // 区间内该分组 token 合计（输入 + 输出）
-	RevenueUSD     string // 区间内平台收入合计（USD，ledger debit）
-	CostUSD        string // 区间内该分组上游成本合计（USD，十进制字符串）
-	MarginUSD      string // 贡献利润 = 收入 − 成本（USD）
-	Latency        LatencyStats
-	LatencyP95     float64 // model 维度仍用 P95 单值
-	AvgTPS         float64 // provider/channel 维度：成功 attempt 的加权平均输出速度
-	RecentError    string
-	ChannelCount   int64           // provider 维度：命中渠道数
-	SuccessBuckets []SuccessBucket // channel 维度：最近 10 分钟 attempt 成功率桶
+	Terminal        int64
+	Succeeded       int64
+	Failed          int64
+	SuccessRate     float64
+	Tokens          int64  // 区间内该分组 token 合计（输入 + 输出）
+	RevenueUSD      string // 区间内平台收入合计（USD，ledger debit）
+	CostUSD         string // 区间内该分组上游成本合计（USD，十进制字符串）
+	MarginUSD       string // 贡献利润 = 收入 − 成本（USD）
+	Latency         LatencyStats
+	LatencyP95      float64 // model 维度仍用 P95 单值
+	AvgTPS          float64 // provider/channel 维度：成功 attempt 的加权平均输出速度
+	RecentError     string
+	ChannelCount    int64           // provider 维度：命中渠道数
+	SuccessBuckets  []SuccessBucket // channel 维度：最近 10 分钟 attempt 成功率桶
 }
 
 // LowBalanceProviderCount 返回当前低余额及负余额的未归档 Provider 数量。

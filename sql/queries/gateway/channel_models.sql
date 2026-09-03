@@ -42,6 +42,8 @@ SELECT
     c.concurrency_limit AS channel_concurrency_limit,
     c.sticky_enabled AS channel_sticky_enabled,
     c.sticky_ttl_ms AS channel_sticky_ttl_ms,
+    -- 渠道出站代理（实体，enabled 才生效；disabled/未配置 → NULL = 直连或账号代理回退链）。
+    cpx.url AS channel_proxy_url,
     cm.upstream_model,
     base.id AS model_price_id,
     base.currency AS base_currency,
@@ -112,6 +114,7 @@ FROM channel_models cm
 JOIN models m ON m.id = cm.model_id
 JOIN channels c ON c.id = cm.channel_id
 JOIN providers p ON p.id = c.provider_id
+LEFT JOIN proxies cpx ON cpx.id = c.proxy_id AND cpx.status = 'enabled'
 JOIN LATERAL (
     -- base: 模型当前生效的基准价（DEC-026/DEC-031，售价与成本的唯一基数）。
     -- 客户售价 = base × 模型倍率 sale_price_ratio；渠道真实成本（倍率路径）= base × 价格倍率 × 充值倍率。

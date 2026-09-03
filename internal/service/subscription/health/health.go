@@ -108,33 +108,48 @@ func (r *Recorder) RecordAccountSuccess(ctx context.Context, accountID int64, us
 	if usage == nil {
 		return
 	}
+	r.persistUsageSnapshot(ctx, accountID, usage, now)
+	r.applyUsagePause(ctx, accountID, usage, now)
+}
 
-	if r.queries != nil {
-		doc := usageSnapshotDoc{PlanType: usage.PlanType, CapturedAt: now.UTC()}
-		if usage.Primary.Present {
-			doc.Primary = &usageWindowDoc{
-				UsedPercent: usage.Primary.UsedPercent, WindowMinutes: usage.Primary.WindowMinutes,
-				ResetAt: usage.Primary.ResetAtUnix,
-			}
-		}
-		if usage.Secondary.Present {
-			doc.Secondary = &usageWindowDoc{
-				UsedPercent: usage.Secondary.UsedPercent, WindowMinutes: usage.Secondary.WindowMinutes,
-				ResetAt: usage.Secondary.ResetAtUnix,
-			}
-		}
-		raw, err := json.Marshal(doc)
-		if err == nil {
-			err = r.queries.UpdateAccountUsageSnapshot(ctx, sqlc.UpdateAccountUsageSnapshotParams{
-				ID: accountID, UsageSnapshot: raw,
-			})
-		}
-		if err != nil {
-			r.warn(ctx, accountID, "update usage snapshot failed", err)
+// RecordAccountUsageObservation 只回写用量观测（快照落库 + 阈值暂停评估），不 touch LRU——
+// 观测来自失败响应（429 的 x-codex 头照样携带全量水位），不代表一次成功服务。
+func (r *Recorder) RecordAccountUsageObservation(ctx context.Context, accountID int64, usage *adapter.AccountUsageFacts) {
+	if r == nil || accountID <= 0 || usage == nil {
+		return
+	}
+	now := r.now()
+	r.persistUsageSnapshot(ctx, accountID, usage, now)
+	r.applyUsagePause(ctx, accountID, usage, now)
+}
+
+// persistUsageSnapshot 把用量观测写进 subscription_accounts.usage_snapshot（成功/失败观测共用）。
+func (r *Recorder) persistUsageSnapshot(ctx context.Context, accountID int64, usage *adapter.AccountUsageFacts, now time.Time) {
+	if r.queries == nil {
+		return
+	}
+	doc := usageSnapshotDoc{PlanType: usage.PlanType, CapturedAt: now.UTC()}
+	if usage.Primary.Present {
+		doc.Primary = &usageWindowDoc{
+			UsedPercent: usage.Primary.UsedPercent, WindowMinutes: usage.Primary.WindowMinutes,
+			ResetAt: usage.Primary.ResetAtUnix,
 		}
 	}
-
-	r.applyUsagePause(ctx, accountID, usage, now)
+	if usage.Secondary.Present {
+		doc.Secondary = &usageWindowDoc{
+			UsedPercent: usage.Secondary.UsedPercent, WindowMinutes: usage.Secondary.WindowMinutes,
+			ResetAt: usage.Secondary.ResetAtUnix,
+		}
+	}
+	raw, err := json.Marshal(doc)
+	if err == nil {
+		err = r.queries.UpdateAccountUsageSnapshot(ctx, sqlc.UpdateAccountUsageSnapshotParams{
+			ID: accountID, UsageSnapshot: raw,
+		})
+	}
+	if err != nil {
+		r.warn(ctx, accountID, "update usage snapshot failed", err)
+	}
 }
 
 // applyUsagePause 按阈值决定暂停或恢复。两个易漏边界（官方核对表）：

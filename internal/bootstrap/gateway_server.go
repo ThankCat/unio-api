@@ -221,6 +221,9 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 	if attemptPermitManager != nil {
 		cooldown := appsettings.GatewayChannelCooldown(ctx, settingsStore)
 		attemptPermitManager.SetChannel429CooldownPolicy(cooldown.Cooldown, cooldown.Cap)
+		attemptPermitManager.SetAccountPoolPreferSoonestReset(
+			appsettings.GatewayAccountPoolPreferSoonestReset(ctx, settingsStore),
+		)
 	}
 
 	// Anthropic beta 转发策略：adapter 每请求经 provider 现读（策略读取本身足够轻）。
@@ -310,6 +313,11 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 	chatCompletionService.SetAccountOutbound(accountOutbound, accountHealth)
 	responsesService.SetAccountOutbound(accountOutbound, accountHealth)
 	messagesService.SetAccountOutbound(accountOutbound, accountHealth)
+	// 请求路径 401/403 带明确吊销码（token_revoked 等）时立即禁用账号，
+	// 不再等下一轮保活刷新去确认（少一次注定失败的刷新，管理页立刻提示重授权）。
+	attemptPermitManager.SetAccountRevocationSink(accountOutbound)
+	// 429 响应头的用量水位回写快照（不 touch LRU）：冷却期内管理页显示真实 100% 水位与重置时刻。
+	attemptPermitManager.SetAccountUsageObserver(accountHealth)
 	// 分钟级 TPM 观测器（§8）：只描述已观察到的输入/输出 token，不参与准入、评分或计费。
 	tpmObserver := tpmobserver.New(breakerStore, tpmobserver.Options{
 		Logger:  deps.Logger,
@@ -361,6 +369,7 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 		router:       chatRouter,
 		sticky:       stickyRouter,
 		channel429:   attemptPermitManager,
+		accountPool:  attemptPermitManager,
 		capacityWait: capacityWaitTargets,
 		logging:      deps.Logging,
 	}

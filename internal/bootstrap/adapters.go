@@ -41,15 +41,18 @@ const (
 func NewAdapterRegistry(client *http.Client, logger *zap.Logger) (*lifecycle.AdapterRegistry, error) {
 	client = upstreamHTTPClient(client)
 
-	openAIDeepSeekAdapter := openaideepseek.NewAdapter(client, logger)
-	openAIOfficialAdapter := chatcompletionsadapter.NewAdapter(client)
-	openAIResponsesAdapter := openairesponses.NewAdapter(client)
-	openAIModelLister := modeldiscovery.NewOpenAICompatible(client)
-	anthropicModelLister := modeldiscovery.NewAnthropic(client)
+	// 出站代理解析器（账号代理与渠道代理共用同一份 client 缓存）：
+	// 回退链 = 账号代理 → 渠道代理 → 直连，在各 adapter 的 client 选择处统一执行。
+	accountProxyClients := proxyclient.NewResolver(client)
+
+	openAIDeepSeekAdapter := openaideepseek.NewAdapter(client, logger).SetProxyClientResolver(accountProxyClients.ClientFor)
+	openAIOfficialAdapter := chatcompletionsadapter.NewAdapter(client).SetProxyClientResolver(accountProxyClients.ClientFor)
+	openAIResponsesAdapter := openairesponses.NewAdapter(client).SetProxyClientResolver(accountProxyClients.ClientFor)
+	openAIModelLister := modeldiscovery.NewOpenAICompatible(client).SetProxyClientResolver(accountProxyClients.ClientFor)
+	anthropicModelLister := modeldiscovery.NewAnthropic(client).SetProxyClientResolver(accountProxyClients.ClientFor)
 
 	// Codex 订阅 wire（号池渠道）：按账号代理经 proxyclient 解析，导入/刷新/正式请求三条路径
 	// 在 bootstrap 各自注入同一个解析器，adapter 不自管 client 池（边界 29）。
-	accountProxyClients := proxyclient.NewResolver(client)
 	codexAdapter := codexresponses.NewAdapter(client, accountProxyClients.ClientFor)
 	codexModelLister := codexresponses.NewModelLister(client, accountProxyClients.ClientFor)
 
@@ -90,8 +93,8 @@ func NewAdapterRegistry(client *http.Client, logger *zap.Logger) (*lifecycle.Ada
 		return nil, err
 	}
 
-	anthropicDeepSeekAdapter := anthropicdeepseek.NewAdapter(client, logger)
-	anthropicOfficialAdapter := messagesadapter.NewOfficialAdapter(client, logger)
+	anthropicDeepSeekAdapter := anthropicdeepseek.NewAdapter(client, logger).SetProxyClientResolver(accountProxyClients.ClientFor)
+	anthropicOfficialAdapter := messagesadapter.NewOfficialAdapter(client, logger).SetProxyClientResolver(accountProxyClients.ClientFor)
 
 	anthropicRegistry, err := anthropic.NewRegistry(
 		anthropic.Registration{

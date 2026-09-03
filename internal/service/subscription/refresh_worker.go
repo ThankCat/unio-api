@@ -96,7 +96,7 @@ func (w *RefreshWorker) RunOnce(ctx context.Context) (bool, error) {
 			return true, nil
 		}
 		// refreshWithLock 内部完成：分布式锁、明确拒绝→禁用、网络失败→临时不可调度、成功→写回+清隔离。
-		if _, err := w.outbound.refreshWithLock(ctx, row.ID, textOrEmpty(row.ProxyUrl)); err != nil {
+		if _, err := w.outbound.refreshWithLock(ctx, row.ID, effectiveProxyURL(row.ProxyEntityUrl, row.ProxyUrl)); err != nil {
 			logging.Warn(w.logger, "subscription", "refresh", "background refresh failed",
 				zap.Int64("account_id", row.ID), zap.String("error_message", err.Error()))
 		}

@@ -37,6 +37,10 @@ type Runtime struct {
 	// ProviderSlug 是业务 provider 标识（providers.slug），供 adapter 选择 stream translator；由 routing 注入。
 	ProviderSlug string
 
+	// ProxyURL 是渠道级出站代理（proxies 实体，enabled 才注入；空串直连）。
+	// 出站 client 选择回退链：Account.ProxyURL → ProxyURL → 默认直连 client。
+	ProxyURL string
+
 	// Account 是池型渠道本次出站冻结的订阅账号身份（credential 型恒为零值）。
 	// 由 lifecycle 在 permit 固化后填充：APIKey 换成账号 access token，本结构补齐
 	// 上游账号标识与出口代理。adapter 对号池无感知——它只读 Runtime 上的事实。

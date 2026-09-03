@@ -31,6 +31,8 @@ const (
 	GatewayCapacityWaitTimeoutKey      = "gateway.capacity_wait_timeout_ms"
 	// GatewayAccountUsagePauseThresholdKey 是池型账号用量自动暂停的水位阈值（百分比整数）。
 	GatewayAccountUsagePauseThresholdKey = "gateway.account_usage_pause_threshold_percent"
+	// GatewayAccountPoolPreferSoonestResetKey 是池内 use-it-or-lose-it 排序开关。
+	GatewayAccountPoolPreferSoonestResetKey = "gateway.account_pool_prefer_soonest_reset"
 )
 
 func msToDuration(ms int64) time.Duration {
@@ -482,6 +484,31 @@ func accountUsagePauseThresholdDefinition() Definition {
 			return nil
 		},
 	}
+}
+
+func accountPoolPreferSoonestResetDefinition() Definition {
+	return Definition{
+		Key:      GatewayAccountPoolPreferSoonestResetKey,
+		Category: "gateway",
+		Label:    "号池优先使用最早重置的账号",
+		Description: "开启后，池内选号在优先级之后先选「5h 用量窗口最早重置」的账号（use-it-or-lose-it：" +
+			"订阅额度过期作废，快过期的窗口先用掉），再看负载率与最久未用。默认关闭（保持负载均衡优先）。",
+		HotReload: true,
+		Default:   json.RawMessage("false"),
+		Validate: func(raw json.RawMessage) error {
+			var v bool
+			return json.Unmarshal(raw, &v)
+		},
+	}
+}
+
+// GatewayAccountPoolPreferSoonestReset 读取池内「最早重置优先」排序开关（解码失败回 false）。
+func GatewayAccountPoolPreferSoonestReset(ctx context.Context, store *SettingsStore) bool {
+	var v bool
+	if err := json.Unmarshal(store.Raw(ctx, GatewayAccountPoolPreferSoonestResetKey), &v); err != nil {
+		return false
+	}
+	return v
 }
 
 // GatewayAccountUsagePauseThreshold 读取当前生效的账号用量暂停阈值（解码失败回默认 90）。

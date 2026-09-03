@@ -2,7 +2,9 @@ package codexresponses
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	openairesponses "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/responses"
@@ -58,5 +60,30 @@ func TestFinalizeCodexFactsUnparsableBodyKeepsResponseTier(t *testing.T) {
 	finalizeCodexFacts(openairesponses.Request{Body: json.RawMessage(`not-json`)}, &facts)
 	if facts.ServiceTier.Resolution != servicetier.ResolutionUpstreamResponse {
 		t.Fatalf("unparsable body must not override facts, got resolution %q", facts.ServiceTier.Resolution)
+	}
+}
+
+// TestCodexRetryAfterFromBody 冻结 429 错误体的重置时刻兜底解析（x-codex 头缺失时）。
+func TestCodexRetryAfterFromBody(t *testing.T) {
+	if d := codexRetryAfterFromBody(429, `{"error":{"type":"usage_limit_reached","resets_in_seconds":120}}`); d != 120*time.Second {
+		t.Fatalf("resets_in_seconds = %v, want 120s", d)
+	}
+	future := time.Now().Add(10 * time.Minute).Unix()
+	if d := codexRetryAfterFromBody(429, fmt.Sprintf(`{"error":{"type":"rate_limit_exceeded","resets_at":%d}}`, future)); d < 9*time.Minute || d > 10*time.Minute {
+		t.Fatalf("resets_at = %v, want ~10m", d)
+	}
+	for _, tc := range []struct {
+		name    string
+		status  int
+		snippet string
+	}{
+		{"非 429 不解析", 401, `{"error":{"type":"usage_limit_reached","resets_in_seconds":120}}`},
+		{"非限流类型不解析", 429, `{"error":{"type":"invalid_request_error","resets_in_seconds":120}}`},
+		{"坏 JSON 返回 0", 429, `not-json`},
+		{"过去的 resets_at 返回 0", 429, `{"error":{"type":"usage_limit_reached","resets_at":1000}}`},
+	} {
+		if d := codexRetryAfterFromBody(tc.status, tc.snippet); d != 0 {
+			t.Fatalf("%s: got %v, want 0", tc.name, d)
+		}
 	}
 }

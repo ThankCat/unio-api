@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"context"
+	"time"
 
 	"github.com/ThankCat/unio-gateway/internal/core/accountpool"
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
@@ -52,7 +53,11 @@ func (r *AttemptRunner) acquireCandidatePermit(
 	pool := *prepared.AccountPool
 	var denials accountDenialSummary
 	var tried []int64
-	for _, accountID := range pool.Order(stickyAccountID, nil) {
+	orderOpts := accountpool.OrderOptions{}
+	if r.permitManager != nil && r.permitManager.AccountPoolPreferSoonestReset() {
+		orderOpts = accountpool.OrderOptions{PreferSoonestReset: true, NowUnix: time.Now().Unix()}
+	}
+	for _, accountID := range pool.Order(stickyAccountID, nil, orderOpts) {
 		if attemptedAccounts[accountID] {
 			continue
 		}

@@ -53,8 +53,28 @@ func (o *AttemptPermitOwner) recordAccountRuntimeFeedback(ctx context.Context, u
 		_, feedbackErr = o.accountFeedbackStore.SetAccountCooldown(opCtx, o.permit.AccountID, durationMs, "")
 		cancel()
 		o.logAccountFeedback(ctx, action, durationMs, feedbackErr)
+		// 429 响应头携带的最新水位（通常 100%）回写快照：管理页在冷却期内也能看到真实用量与重置时刻。
+		if o.accountUsageObserver != nil && metadata.AccountUsage != nil {
+			obsCtx, obsCancel := o.operationContext(ctx)
+			o.accountUsageObserver.RecordAccountUsageObservation(obsCtx, o.permit.AccountID, metadata.AccountUsage)
+			obsCancel()
+		}
 
 	case category == adapter.UpstreamErrorAuth || category == adapter.UpstreamErrorPermission:
+		// 上游错误体带明确吊销码（token_revoked/token_invalidated，实测样本）时直接确认禁用：
+		// 隔离等刷新确认是为「可能只是过期」的 401 准备的迂回，明确吊销没有恢复可能，
+		// 立即禁用可少一次注定失败的刷新调用，且管理页立刻显示「需重新授权」（与 sub2api 对齐）。
+		// 禁用失败（DB 抖动等）退回隔离路径，不放大故障。
+		if o.accountRevocation != nil && upstreamBodyConfirmsRevocation(metadata.ResponseSnippet) {
+			opCtx, cancel := o.operationContext(ctx)
+			revokeErr := o.accountRevocation.MarkAccountRevoked(opCtx, o.permit.AccountID)
+			cancel()
+			if revokeErr == nil {
+				o.logAccountFeedback(ctx, "account_confirmed_revoked", 0, nil)
+				return nil
+			}
+			o.logAccountFeedback(ctx, "account_confirmed_revoked", 0, revokeErr)
+		}
 		action = "account_token_refresh_window"
 		opCtx, cancel := o.operationContext(ctx)
 		_, feedbackErr = o.accountFeedbackStore.MarkAccountUnschedulable(
@@ -98,6 +118,24 @@ func (o *AttemptPermitOwner) logAccountFeedback(ctx context.Context, action stri
 		return
 	}
 	logging.Warn(o.logger, "runtime", "account", "account runtime feedback applied", fields...)
+}
+
+// accountRevocationCodes 是上游 401/403 错误体里的「明确吊销」错误码（实测样本 token_revoked；
+// token_invalidated 与 sub2api 生产清单对齐）。命中即确认吊销，无恢复可能。
+var accountRevocationCodes = []string{"token_revoked", "token_invalidated"}
+
+// upstreamBodyConfirmsRevocation 判断上游错误体截断快照是否携带明确吊销码。
+func upstreamBodyConfirmsRevocation(snippet string) bool {
+	if snippet == "" {
+		return false
+	}
+	lowered := strings.ToLower(snippet)
+	for _, code := range accountRevocationCodes {
+		if strings.Contains(lowered, code) {
+			return true
+		}
+	}
+	return false
 }
 
 // isPersistentTransportError 区分持久与瞬态传输错误（边界 16，【Sub2API】判据 + Go net 语义复核）：

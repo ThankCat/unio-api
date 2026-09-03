@@ -283,9 +283,11 @@ SELECT
     c.supply_form, c.account_default_concurrency,
     c.last_tested_at, c.last_test_ok, c.last_test_latency_ms, c.last_test_error, c.credential_valid,
     c.config_revision, c.capacity_revision,
-    p.name AS provider_name, p.status AS provider_status
+    p.name AS provider_name, p.status AS provider_status,
+    c.proxy_id, lpx.name AS proxy_name
 FROM channels c
 JOIN providers p ON p.id = c.provider_id
+LEFT JOIN proxies lpx ON lpx.id = c.proxy_id
 WHERE (sqlc.narg('provider_id')::bigint IS NULL OR c.provider_id = sqlc.narg('provider_id')::bigint)
   AND (sqlc.narg('status')::text IS NULL OR c.status = sqlc.narg('status')::text)
   AND (
@@ -338,12 +340,14 @@ SELECT
     c.credential_valid,
     c.config_revision,
     c.supply_form,
+    cpx.url AS channel_proxy_url,
     p.slug AS provider_slug,
     p.origin,
     p.origin_revision,
     p.status_revision
 FROM channels c
 JOIN providers p ON p.id = c.provider_id
+LEFT JOIN proxies cpx ON cpx.id = c.proxy_id AND cpx.status = 'enabled'
 WHERE c.id = sqlc.arg(channel_id)
 LIMIT 1;
 
@@ -410,9 +414,12 @@ SELECT
     p.slug AS provider_slug,
     p.origin,
     p.origin_revision,
-    p.status_revision
+    p.status_revision,
+    cpx2.url AS channel_proxy_url
 FROM updated
 JOIN providers p ON p.id = updated.provider_id
+LEFT JOIN channels ch2 ON ch2.id = updated.channel_id
+LEFT JOIN proxies cpx2 ON cpx2.id = ch2.proxy_id AND cpx2.status = 'enabled'
 ;
 
 -- name: ApplyChannelProbeResult :one
@@ -521,7 +528,7 @@ INSERT INTO channels (
     supports_openai_fast,
     response_timeout_ms, first_token_timeout_ms, concurrency_limit,
     sticky_enabled, sticky_ttl_ms,
-    supply_form, account_default_concurrency
+    supply_form, account_default_concurrency, proxy_id
 )
 VALUES (
     sqlc.arg(provider_id), sqlc.arg(name), sqlc.arg(protocols), sqlc.arg(adapter_key),
@@ -529,7 +536,7 @@ VALUES (
     sqlc.arg(supports_openai_fast),
     sqlc.narg(response_timeout_ms), sqlc.narg(first_token_timeout_ms), sqlc.narg(concurrency_limit),
     sqlc.narg(sticky_enabled), sqlc.narg(sticky_ttl_ms),
-    sqlc.arg(supply_form), sqlc.narg(account_default_concurrency)
+    sqlc.arg(supply_form), sqlc.narg(account_default_concurrency), sqlc.narg(proxy_id)
 )
 RETURNING *;
 
@@ -545,6 +552,7 @@ SET name = sqlc.arg(name),
     first_token_timeout_ms = sqlc.narg(first_token_timeout_ms),
     sticky_enabled = sqlc.narg(sticky_enabled),
     sticky_ttl_ms = sqlc.narg(sticky_ttl_ms),
+    proxy_id = sqlc.narg(proxy_id),
     config_revision = config_revision + (
         CASE WHEN (
             status IS DISTINCT FROM sqlc.arg(status)
@@ -553,6 +561,7 @@ SET name = sqlc.arg(name),
             OR first_token_timeout_ms IS DISTINCT FROM sqlc.narg(first_token_timeout_ms)
             OR sticky_enabled IS DISTINCT FROM sqlc.narg(sticky_enabled)
             OR sticky_ttl_ms IS DISTINCT FROM sqlc.narg(sticky_ttl_ms)
+            OR proxy_id IS DISTINCT FROM sqlc.narg(proxy_id)
         ) THEN 1 ELSE 0 END
     ),
     updated_at = now()

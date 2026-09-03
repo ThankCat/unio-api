@@ -81,3 +81,9 @@ var (
 	_ StreamMessagesAdapter  = (*OfficialAdapter)(nil)
 	_ MessagesInputTokenizer = (*OfficialAdapter)(nil)
 )
+
+// SetProxyClientResolver 转发给 base adapter（渠道级出站代理）。
+func (a *OfficialAdapter) SetProxyClientResolver(clientFor func(proxyURL string) *http.Client) *OfficialAdapter {
+	a.base.SetProxyClientResolver(clientFor)
+	return a
+}

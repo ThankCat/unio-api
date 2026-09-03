@@ -323,3 +323,8 @@ func TestUpdateRejectsOpenAIFastOnAnthropicChannel(t *testing.T) {
 func boolPointer(value bool) *bool {
 	return &value
 }
+
+// GetEnabledProxyURL 满足 Store 接口；测试不涉及代理引用（返回 no rows = 不存在）。
+func (s *createStore) GetEnabledProxyURL(context.Context, int64) (string, error) {
+	return "", pgx.ErrNoRows
+}

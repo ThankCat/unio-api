@@ -116,6 +116,7 @@ func (s *Service) ExecuteNextDiscovery(ctx context.Context) (bool, error) {
 	runtime := corechannel.Runtime{
 		ID: snapshot.ChannelID, Origin: snapshot.Origin, APIKey: strings.TrimSpace(snapshot.Credential),
 		ProviderSlug: snapshot.ProviderSlug, ResponseTimeout: settings.Timeout,
+		ProxyURL: nullableProxyURL(snapshot.ChannelProxyUrl),
 	}
 	// 池型渠道：渠道不持凭据，模型清单必须以账号身份出站（access token + 账号头 + 账号代理）。
 	if identity, isPool, idErr := s.poolRuntimeIdentity(ctx, snapshot.SupplyForm, snapshot.ChannelID); idErr != nil {

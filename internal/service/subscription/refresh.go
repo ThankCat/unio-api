@@ -121,13 +121,15 @@ func (t *TokenClient) postTokenForm(ctx context.Context, form url.Values, proxyU
 
 	if resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		// 明确拒绝：refresh token 吊销/失效。正文不含令牌，仅截前 300 字节供排障。
-		snippet := string(body)
-		if len(snippet) > 300 {
-			snippet = snippet[:300]
-		}
-		return RefreshResult{}, &RefreshRejectedError{StatusCode: resp.StatusCode, Body: snippet}
+		return RefreshResult{}, &RefreshRejectedError{StatusCode: resp.StatusCode, Body: truncateRefreshBody(body)}
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		// 非常规状态码（5xx/3xx 等）但正文携带明确的终局错误码：同样按确认拒绝处理。
+		// 与 sub2api 的不可重试清单对齐——只按状态码分类会把「上游 5xx 包着 invalid_grant」
+		// 误判成网络问题，让保活对死令牌反复退避重试（白打上游 + 拖慢重授权提示）。
+		if refreshBodyIsTerminal(body) {
+			return RefreshResult{}, &RefreshRejectedError{StatusCode: resp.StatusCode, Body: truncateRefreshBody(body)}
+		}
 		return RefreshResult{}, failure.New(
 			failure.CodeAdapterSendRequestFailed,
 			failure.WithMessage(fmt.Sprintf("oauth token endpoint status %d", resp.StatusCode)),
@@ -142,4 +144,38 @@ func (t *TokenClient) postTokenForm(ctx context.Context, form url.Values, proxyU
 		)
 	}
 	return result, nil
+}
+
+// terminalRefreshErrorCodes 是 OAuth 刷新的终局错误码清单（与 sub2api 生产清单对齐，
+// 含我们实测拿到过的 refresh_token_invalidated）。命中即「确认吊销/不可恢复」，
+// 重试无意义，只能重新授权。
+var terminalRefreshErrorCodes = []string{
+	"invalid_grant",             // refresh_token 已失效
+	"invalid_refresh_token",     // refresh_token 无效（team 工作区被删）
+	"refresh_token_reused",      // rt 已被使用（旧副本在别处刷过，会话被顶）
+	"refresh_token_invalidated", // 会话结束，rt 作废（实测样本）
+	"token_expired",             // rt 本身过期
+	"app_session_terminated",    // team 工作区被删
+	"invalid_client",            // 客户端配置错误
+	"unauthorized_client",       // 客户端未授权
+	"access_denied",             // 访问被拒绝
+}
+
+// refreshBodyIsTerminal 判断令牌端点响应体是否携带终局错误码。
+func refreshBodyIsTerminal(body []byte) bool {
+	lowered := strings.ToLower(string(body))
+	for _, code := range terminalRefreshErrorCodes {
+		if strings.Contains(lowered, code) {
+			return true
+		}
+	}
+	return false
+}
+
+func truncateRefreshBody(body []byte) string {
+	snippet := string(body)
+	if len(snippet) > 300 {
+		snippet = snippet[:300]
+	}
+	return snippet
 }

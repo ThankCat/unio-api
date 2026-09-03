@@ -184,7 +184,7 @@ SET capacity_revision = $1,
 WHERE id = $2
   AND capacity_revision = $3
   AND $1 = $3 + 1
-RETURNING id, provider_id, name, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast, protocols, supply_form, account_default_concurrency
+RETURNING id, provider_id, name, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast, protocols, supply_form, account_default_concurrency, proxy_id
 `
 
 type BumpChannelCapacityRevisionParams struct {
@@ -228,6 +228,7 @@ func (q *Queries) BumpChannelCapacityRevision(ctx context.Context, arg BumpChann
 		&i.Protocols,
 		&i.SupplyForm,
 		&i.AccountDefaultConcurrency,
+		&i.ProxyID,
 	)
 	return i, err
 }
@@ -943,7 +944,7 @@ WHERE id = $3
   AND capacity_revision = $4
   AND $2 = $4 + 1
   AND concurrency_limit IS DISTINCT FROM $1
-RETURNING id, provider_id, name, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast, protocols, supply_form, account_default_concurrency
+RETURNING id, provider_id, name, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast, protocols, supply_form, account_default_concurrency, proxy_id
 `
 
 type CommitChannelCapacityAtRevisionParams struct {
@@ -991,6 +992,7 @@ func (q *Queries) CommitChannelCapacityAtRevision(ctx context.Context, arg Commi
 		&i.Protocols,
 		&i.SupplyForm,
 		&i.AccountDefaultConcurrency,
+		&i.ProxyID,
 	)
 	return i, err
 }
@@ -1042,7 +1044,7 @@ INSERT INTO channels (
     supports_openai_fast,
     response_timeout_ms, first_token_timeout_ms, concurrency_limit,
     sticky_enabled, sticky_ttl_ms,
-    supply_form, account_default_concurrency
+    supply_form, account_default_concurrency, proxy_id
 )
 VALUES (
     $1, $2, $3, $4,
@@ -1050,9 +1052,9 @@ VALUES (
     $8,
     $9, $10, $11,
     $12, $13,
-    $14, $15
+    $14, $15, $16
 )
-RETURNING id, provider_id, name, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast, protocols, supply_form, account_default_concurrency
+RETURNING id, provider_id, name, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast, protocols, supply_form, account_default_concurrency, proxy_id
 `
 
 type CreateChannelParams struct {
@@ -1071,6 +1073,7 @@ type CreateChannelParams struct {
 	StickyTtlMs               pgtype.Int8
 	SupplyForm                string
 	AccountDefaultConcurrency pgtype.Int4
+	ProxyID                   pgtype.Int8
 }
 
 // CreateChannel 创建 channel；credential 为明文上游凭据，protocols 中每个协议与 adapter_key 的组合都须先在 adapter registry 校验存在。
@@ -1092,6 +1095,7 @@ func (q *Queries) CreateChannel(ctx context.Context, arg CreateChannelParams) (C
 		arg.StickyTtlMs,
 		arg.SupplyForm,
 		arg.AccountDefaultConcurrency,
+		arg.ProxyID,
 	)
 	var i Channel
 	err := row.Scan(
@@ -1121,6 +1125,7 @@ func (q *Queries) CreateChannel(ctx context.Context, arg CreateChannelParams) (C
 		&i.Protocols,
 		&i.SupplyForm,
 		&i.AccountDefaultConcurrency,
+		&i.ProxyID,
 	)
 	return i, err
 }
@@ -1508,7 +1513,7 @@ func (q *Queries) DeleteChannelModel(ctx context.Context, arg DeleteChannelModel
 }
 
 const getChannel = `-- name: GetChannel :one
-SELECT id, provider_id, name, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast, protocols, supply_form, account_default_concurrency
+SELECT id, provider_id, name, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast, protocols, supply_form, account_default_concurrency, proxy_id
 FROM channels
 WHERE id = $1
 LIMIT 1
@@ -1545,6 +1550,7 @@ func (q *Queries) GetChannel(ctx context.Context, id int64) (Channel, error) {
 		&i.Protocols,
 		&i.SupplyForm,
 		&i.AccountDefaultConcurrency,
+		&i.ProxyID,
 	)
 	return i, err
 }
@@ -1587,12 +1593,14 @@ SELECT
     c.credential_valid,
     c.config_revision,
     c.supply_form,
+    cpx.url AS channel_proxy_url,
     p.slug AS provider_slug,
     p.origin,
     p.origin_revision,
     p.status_revision
 FROM channels c
 JOIN providers p ON p.id = c.provider_id
+LEFT JOIN proxies cpx ON cpx.id = c.proxy_id AND cpx.status = 'enabled'
 WHERE c.id = $1
 LIMIT 1
 `
@@ -1606,6 +1614,7 @@ type GetChannelProbeSnapshotRow struct {
 	CredentialValid bool
 	ConfigRevision  int64
 	SupplyForm      string
+	ChannelProxyUrl pgtype.Text
 	ProviderSlug    string
 	Origin          string
 	OriginRevision  int64
@@ -1626,6 +1635,7 @@ func (q *Queries) GetChannelProbeSnapshot(ctx context.Context, channelID int64) 
 		&i.CredentialValid,
 		&i.ConfigRevision,
 		&i.SupplyForm,
+		&i.ChannelProxyUrl,
 		&i.ProviderSlug,
 		&i.Origin,
 		&i.OriginRevision,
@@ -1936,7 +1946,7 @@ func (q *Queries) ListChannelTestLogsByChannel(ctx context.Context, arg ListChan
 }
 
 const listChannelsByProvider = `-- name: ListChannelsByProvider :many
-SELECT id, provider_id, name, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast, protocols, supply_form, account_default_concurrency
+SELECT id, provider_id, name, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast, protocols, supply_form, account_default_concurrency, proxy_id
 FROM channels
 WHERE provider_id = $1
 ORDER BY priority, id
@@ -1979,6 +1989,7 @@ func (q *Queries) ListChannelsByProvider(ctx context.Context, providerID int64) 
 			&i.Protocols,
 			&i.SupplyForm,
 			&i.AccountDefaultConcurrency,
+			&i.ProxyID,
 		); err != nil {
 			return nil, err
 		}
@@ -1991,7 +2002,7 @@ func (q *Queries) ListChannelsByProvider(ctx context.Context, providerID int64) 
 }
 
 const listChannelsForRuntimeControlRestore = `-- name: ListChannelsForRuntimeControlRestore :many
-SELECT id, provider_id, name, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast, protocols, supply_form, account_default_concurrency
+SELECT id, provider_id, name, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast, protocols, supply_form, account_default_concurrency, proxy_id
 FROM channels
 ORDER BY id
 `
@@ -2033,6 +2044,7 @@ func (q *Queries) ListChannelsForRuntimeControlRestore(ctx context.Context) ([]C
 			&i.Protocols,
 			&i.SupplyForm,
 			&i.AccountDefaultConcurrency,
+			&i.ProxyID,
 		); err != nil {
 			return nil, err
 		}
@@ -2055,9 +2067,11 @@ SELECT
     c.supply_form, c.account_default_concurrency,
     c.last_tested_at, c.last_test_ok, c.last_test_latency_ms, c.last_test_error, c.credential_valid,
     c.config_revision, c.capacity_revision,
-    p.name AS provider_name, p.status AS provider_status
+    p.name AS provider_name, p.status AS provider_status,
+    c.proxy_id, lpx.name AS proxy_name
 FROM channels c
 JOIN providers p ON p.id = c.provider_id
+LEFT JOIN proxies lpx ON lpx.id = c.proxy_id
 WHERE ($1::bigint IS NULL OR c.provider_id = $1::bigint)
   AND ($2::text IS NULL OR c.status = $2::text)
   AND (
@@ -2106,6 +2120,8 @@ type ListChannelsPageRow struct {
 	CapacityRevision          int64
 	ProviderName              string
 	ProviderStatus            string
+	ProxyID                   pgtype.Int8
+	ProxyName                 pgtype.Text
 }
 
 // ListChannelsPage 按 provider/状态/关键字过滤后分页列出 channel，连带 provider 名称；过滤项为 NULL 时不过滤。
@@ -2153,6 +2169,8 @@ func (q *Queries) ListChannelsPage(ctx context.Context, arg ListChannelsPagePara
 			&i.CapacityRevision,
 			&i.ProviderName,
 			&i.ProviderStatus,
+			&i.ProxyID,
+			&i.ProxyName,
 		); err != nil {
 			return nil, err
 		}
@@ -2310,9 +2328,12 @@ SELECT
     p.slug AS provider_slug,
     p.origin,
     p.origin_revision,
-    p.status_revision
+    p.status_revision,
+    cpx2.url AS channel_proxy_url
 FROM updated
 JOIN providers p ON p.id = updated.provider_id
+LEFT JOIN channels ch2 ON ch2.id = updated.channel_id
+LEFT JOIN proxies cpx2 ON cpx2.id = ch2.proxy_id AND cpx2.status = 'enabled'
 `
 
 type PrepareChannelCredentialRotationParams struct {
@@ -2333,6 +2354,7 @@ type PrepareChannelCredentialRotationRow struct {
 	Origin            string
 	OriginRevision    int64
 	StatusRevision    int64
+	ChannelProxyUrl   pgtype.Text
 }
 
 // PrepareChannelCredentialRotation 原子判定同值/真变化并保存 credential。真变化只推进一次 config_revision，
@@ -2353,6 +2375,7 @@ func (q *Queries) PrepareChannelCredentialRotation(ctx context.Context, arg Prep
 		&i.Origin,
 		&i.OriginRevision,
 		&i.StatusRevision,
+		&i.ChannelProxyUrl,
 	)
 	return i, err
 }
@@ -2384,6 +2407,7 @@ SET name = $1,
     first_token_timeout_ms = $6,
     sticky_enabled = $7,
     sticky_ttl_ms = $8,
+    proxy_id = $9,
     config_revision = config_revision + (
         CASE WHEN (
             status IS DISTINCT FROM $2
@@ -2392,11 +2416,12 @@ SET name = $1,
             OR first_token_timeout_ms IS DISTINCT FROM $6
             OR sticky_enabled IS DISTINCT FROM $7
             OR sticky_ttl_ms IS DISTINCT FROM $8
+            OR proxy_id IS DISTINCT FROM $9
         ) THEN 1 ELSE 0 END
     ),
     updated_at = now()
-WHERE id = $9
-RETURNING id, provider_id, name, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast, protocols, supply_form, account_default_concurrency
+WHERE id = $10
+RETURNING id, provider_id, name, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast, protocols, supply_form, account_default_concurrency, proxy_id
 `
 
 type UpdateChannelParams struct {
@@ -2408,6 +2433,7 @@ type UpdateChannelParams struct {
 	FirstTokenTimeoutMs pgtype.Int4
 	StickyEnabled       pgtype.Bool
 	StickyTtlMs         pgtype.Int8
+	ProxyID             pgtype.Int8
 	ID                  int64
 }
 
@@ -2423,6 +2449,7 @@ func (q *Queries) UpdateChannel(ctx context.Context, arg UpdateChannelParams) (C
 		arg.FirstTokenTimeoutMs,
 		arg.StickyEnabled,
 		arg.StickyTtlMs,
+		arg.ProxyID,
 		arg.ID,
 	)
 	var i Channel
@@ -2453,6 +2480,7 @@ func (q *Queries) UpdateChannel(ctx context.Context, arg UpdateChannelParams) (C
 		&i.Protocols,
 		&i.SupplyForm,
 		&i.AccountDefaultConcurrency,
+		&i.ProxyID,
 	)
 	return i, err
 }
@@ -2463,7 +2491,7 @@ SET account_default_concurrency = $1,
     config_revision = config_revision + 1,
     updated_at = now()
 WHERE id = $2
-RETURNING id, provider_id, name, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast, protocols, supply_form, account_default_concurrency
+RETURNING id, provider_id, name, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast, protocols, supply_form, account_default_concurrency, proxy_id
 `
 
 type UpdateChannelAccountDefaultConcurrencyParams struct {
@@ -2503,6 +2531,7 @@ func (q *Queries) UpdateChannelAccountDefaultConcurrency(ctx context.Context, ar
 		&i.Protocols,
 		&i.SupplyForm,
 		&i.AccountDefaultConcurrency,
+		&i.ProxyID,
 	)
 	return i, err
 }

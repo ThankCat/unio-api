@@ -55,16 +55,22 @@ type AccountIdentityResolver interface {
 	ResolveProbeIdentity(ctx context.Context, channelID, accountID int64) (subscription.ProbeIdentity, error)
 }
 
+// AccountHealthSink 消费验证探测成功后的账号观测（用量快照/LRU），与请求路径同一实现。
+type AccountHealthSink interface {
+	RecordAccountSuccess(ctx context.Context, accountID int64, usage *adapter.AccountUsageFacts)
+}
+
 // Service 是渠道模型清单的应用服务。
 type Service struct {
-	db         TxBeginner
-	queries    *sqlc.Queries
-	lister     ModelLister
-	prober     ModelProber
-	accountant ProbeAccountant
-	settings   *appsettings.SettingsStore
-	catalog    CatalogAdopter
-	accounts   AccountIdentityResolver
+	db            TxBeginner
+	queries       *sqlc.Queries
+	lister        ModelLister
+	prober        ModelProber
+	accountant    ProbeAccountant
+	settings      *appsettings.SettingsStore
+	catalog       CatalogAdopter
+	accounts      AccountIdentityResolver
+	accountHealth AccountHealthSink
 }
 
 // CatalogAdopter 原子完成参考目录采纳与渠道绑定。
@@ -97,6 +103,20 @@ func (s *Service) WithCatalogAdopter(adopter CatalogAdopter) *Service {
 func (s *Service) WithAccountResolver(resolver AccountIdentityResolver) *Service {
 	s.accounts = resolver
 	return s
+}
+
+// WithAccountHealth 接入账号观测回写（nil 表示验证不回填用量）。
+func (s *Service) WithAccountHealth(sink AccountHealthSink) *Service {
+	s.accountHealth = sink
+	return s
+}
+
+// nullableProxyURL 取可空代理列（NULL/disabled → 空串直连）。
+func nullableProxyURL(v pgtype.Text) string {
+	if !v.Valid {
+		return ""
+	}
+	return v.String
 }
 
 // poolRuntimeIdentity 为池型渠道解析账号并装配 Runtime 的账号身份；credential 型直接返回零值。

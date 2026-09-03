@@ -73,3 +73,12 @@ func (r *Resolver) ClientFor(proxyURL string) *http.Client {
 	r.byProxy[proxyURL] = created
 	return created
 }
+
+// RuntimeProxyURL 执行出站代理回退链：账号代理 → 渠道代理 → 空串（直连）。
+// 三条账号路径与渠道出站（正式请求/检测/发现/验证）统一走这一条决策。
+func RuntimeProxyURL(accountProxy, channelProxy string) string {
+	if accountProxy != "" {
+		return accountProxy
+	}
+	return channelProxy
+}

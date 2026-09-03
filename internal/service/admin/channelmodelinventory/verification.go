@@ -180,6 +180,7 @@ func (s *Service) ExecuteNextVerification(ctx context.Context) (bool, error) {
 	runtime := corechannel.Runtime{
 		ID: snapshot.ChannelID, Origin: snapshot.Origin, APIKey: strings.TrimSpace(snapshot.Credential),
 		ProviderSlug: snapshot.ProviderSlug, ResponseTimeout: probeTimeout,
+		ProxyURL: nullableProxyURL(snapshot.ChannelProxyUrl),
 	}
 	// 池型渠道：逐模型验证同样必须以账号身份出站；池内无可用账号时整轮验证失败并给出可读原因。
 	if identity, isPool, idErr := s.poolRuntimeIdentity(ctx, snapshot.SupplyForm, snapshot.ChannelID); idErr != nil {
@@ -212,6 +213,10 @@ func (s *Service) ExecuteNextVerification(ctx context.Context) (bool, error) {
 		errorCode, message := "", ""
 		if probeErr != nil {
 			errorCode, message = classifyVerificationError(probeErr, probeTimeout)
+		}
+		// 池型验证成功即回填账号观测（水位快照 + LRU）：验证响应头带 x-codex-* 水位，白采白不采。
+		if success && runtime.Account.ID > 0 && s.accountHealth != nil && probeResult.Facts != nil {
+			s.accountHealth.RecordAccountSuccess(ctx, runtime.Account.ID, probeResult.Facts.AccountUsage)
 		}
 		idempotencyKey := "model-verification:" + uuid.NewString()
 		accountErr := s.accountant.AccountProbe(ctx, providerledger.ProbeParams{

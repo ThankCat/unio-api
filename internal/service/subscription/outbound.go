@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -84,7 +85,8 @@ func (o *Outbound) ResolveAccountOutbound(ctx context.Context, accountID int64) 
 	if err != nil {
 		return lifecycle.AccountOutbound{}, err
 	}
-	proxyURL := textOrEmpty(row.ProxyUrl)
+	// 账号出站代理：实体（enabled）优先，legacy proxy_url 字符串回退（存量/文件导入兼容）。
+	proxyURL := effectiveProxyURL(row.ProxyEntityUrl, row.ProxyUrl)
 
 	if !creds.FreshFor(freshnessSkew, o.now()) {
 		refreshed, refreshErr := o.refreshWithLock(ctx, accountID, proxyURL)
@@ -222,11 +224,41 @@ func (o *Outbound) RefreshAccount(ctx context.Context, accountID int64, creds Cr
 	return merged, nil
 }
 
+// MarkAccountRevoked 把上游明确吊销的账号立即禁用（token_revoked），实现 lifecycle.AccountRevocationSink。
+//
+// 与刷新路径的确认吊销同一落点（MarkAccountDisabled 带 status='enabled' 守卫：已停用不重复写），
+// 触发源是请求路径 401/403 错误体里的明确吊销码——比等下一轮保活刷新去「确认」快几分钟，
+// 且省掉一次注定失败的刷新调用。
+func (o *Outbound) MarkAccountRevoked(ctx context.Context, accountID int64) error {
+	if err := o.queries.MarkAccountDisabled(ctx, sqlc.MarkAccountDisabledParams{
+		ID:             accountID,
+		DisabledReason: pgtype.Text{String: "token_revoked", Valid: true},
+	}); err != nil {
+		return failure.Wrap(
+			failure.CodeDependencyPostgresUnavailable, err,
+			failure.WithMessage("mark account disabled on confirmed revocation"),
+		)
+	}
+	logging.Warn(o.logger, "subscription", "refresh", "account disabled: upstream confirmed revocation on request path",
+		zap.Int64("account_id", accountID),
+	)
+	return nil
+}
+
 func (o *Outbound) warn(accountID int64, message string, err error) {
 	logging.Warn(o.logger, "subscription", "refresh", message,
 		zap.Int64("account_id", accountID),
 		zap.String("error_message", err.Error()),
 	)
+}
+
+// effectiveProxyURL 执行账号代理回退链：代理实体 URL（enabled 才会被 JOIN 出来）→ legacy 裸 URL。
+// 渠道级代理不在这里——它由 adapter 的 client 选择链兜底（Account.ProxyURL 为空时用 Runtime.ProxyURL）。
+func effectiveProxyURL(entity, legacy pgtype.Text) string {
+	if entity.Valid && strings.TrimSpace(entity.String) != "" {
+		return entity.String
+	}
+	return textOrEmpty(legacy)
 }
 
 func textOrEmpty(v pgtype.Text) string {

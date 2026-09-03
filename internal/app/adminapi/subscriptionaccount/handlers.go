@@ -124,6 +124,8 @@ func (h *Handler) importFile(w http.ResponseWriter, r *http.Request) {
 
 type oauthStartRequest struct {
 	ProxyURL string `json:"proxy_url"`
+	// ProxyID 是出站代理实体引用（优先于裸 URL；两者都缺省 = 直连）。
+	ProxyID int64 `json:"proxy_id"`
 }
 
 func (h *Handler) oauthStart(w http.ResponseWriter, r *http.Request) {
@@ -141,7 +143,7 @@ func (h *Handler) oauthStart(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	sessionID, authorizationURL, err := h.service.StartOAuth(r.Context(), channelID, req.ProxyURL)
+	sessionID, authorizationURL, err := h.service.StartOAuth(r.Context(), channelID, req.ProxyURL, req.ProxyID)
 	if err != nil {
 		adminhttp.WriteServiceError(w, err)
 		return
@@ -184,8 +186,10 @@ func (h *Handler) oauthComplete(w http.ResponseWriter, r *http.Request) {
 }
 
 type updateConfigRequest struct {
-	DisplayName      string `json:"display_name"`
-	ProxyURL         string `json:"proxy_url"`
+	DisplayName string `json:"display_name"`
+	ProxyURL    string `json:"proxy_url"`
+	// ProxyID 出站代理实体引用（>0 生效并取代裸 URL；0=不用实体）。
+	ProxyID          int64  `json:"proxy_id"`
 	ConcurrencyLimit *int64 `json:"concurrency_limit"`
 	Priority         int32  `json:"priority"`
 	// SubscriptionExpiresAt 是订阅到期时间（RFC3339）；空串/缺省表示清除（未知）。
@@ -220,6 +224,7 @@ func (h *Handler) updateConfig(w http.ResponseWriter, r *http.Request) {
 		AccountID:             accountID,
 		DisplayName:           req.DisplayName,
 		ProxyURL:              req.ProxyURL,
+		ProxyID:               req.ProxyID,
 		ConcurrencyLimit:      req.ConcurrencyLimit,
 		Priority:              req.Priority,
 		SubscriptionExpiresAt: expiresAt,

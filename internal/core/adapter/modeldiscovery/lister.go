@@ -77,6 +77,7 @@ const (
 // Lister 使用受限 HTTP 客户端读取上游模型列表。
 type Lister struct {
 	client           *http.Client
+	proxyClientFor   func(proxyURL string) *http.Client
 	auth             authStyle
 	cursorParam      string
 	maxResponseBytes int64
@@ -103,6 +104,24 @@ func newLister(client *http.Client, auth authStyle, cursorParam string) *Lister 
 		client: &clientCopy, auth: auth, cursorParam: cursorParam,
 		maxResponseBytes: defaultMaxResponseBytes, maxModels: defaultMaxModels,
 	}
+}
+
+// SetProxyClientResolver 注入渠道代理的 client 解析（bootstrap 可选注入）。
+// 代理 client 同样禁止跟随重定向（与构造时的 clientCopy 同语义）。
+func (l *Lister) SetProxyClientResolver(clientFor func(proxyURL string) *http.Client) *Lister {
+	if clientFor == nil {
+		return l
+	}
+	l.proxyClientFor = func(proxyURL string) *http.Client {
+		base := clientFor(proxyURL)
+		if base == nil {
+			return nil
+		}
+		clientCopy := *base
+		clientCopy.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		return &clientCopy
+	}
+	return l
 }
 
 type listResponse struct {
@@ -136,7 +155,7 @@ func (l *Lister) ListModels(ctx context.Context, runtime channel.Runtime) (adapt
 		if err != nil {
 			return adapter.ModelListResult{}, protocolError(err)
 		}
-		payload, err := l.fetchPage(ctx, pageURL, runtime.APIKey)
+		payload, err := l.fetchPage(ctx, pageURL, runtime.APIKey, l.httpClient(runtime))
 		if err != nil {
 			return adapter.ModelListResult{}, err
 		}
@@ -175,7 +194,21 @@ func (l *Lister) ListModels(ctx context.Context, runtime channel.Runtime) (adapt
 	return adapter.ModelListResult{}, protocolError(errors.New("upstream pagination exceeds page limit"))
 }
 
-func (l *Lister) fetchPage(ctx context.Context, endpoint, apiKey string) (listResponse, error) {
+// httpClient 出站 client 选择：账号代理 → 渠道代理 → 直连（与 adapter 出站同一回退链）。
+func (l *Lister) httpClient(runtime channel.Runtime) *http.Client {
+	proxy := runtime.Account.ProxyURL
+	if proxy == "" {
+		proxy = runtime.ProxyURL
+	}
+	if proxy != "" && l.proxyClientFor != nil {
+		if client := l.proxyClientFor(proxy); client != nil {
+			return client
+		}
+	}
+	return l.client
+}
+
+func (l *Lister) fetchPage(ctx context.Context, endpoint, apiKey string, client *http.Client) (listResponse, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return listResponse{}, protocolError(err)
@@ -188,7 +221,7 @@ func (l *Lister) fetchPage(ctx context.Context, endpoint, apiKey string) (listRe
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
-	resp, err := l.client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return listResponse{}, classifySendError(ctx, err)
 	}

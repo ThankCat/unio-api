@@ -63,6 +63,10 @@ type UpstreamMetadata struct {
 	// 0 表示上游未提供或无法解析；>0 时 gateway 据此对该渠道做限时 cooldown（跳过 fallback）。
 	RetryAfter time.Duration
 
+	// AccountUsage 是失败响应头上携带的订阅账号用量观测（Codex 429 的 x-codex-* 头照样给全量水位）。
+	// nil 表示该 wire 不带或未解析；仅用于账号观测回写，不参与错误分类。
+	AccountUsage *AccountUsageFacts
+
 	// ErrorCode / ErrorMessage 是上游错误的结构化标识，**必须在写入时就已脱敏**，
 	// 因此可以安全渲染进面向客户的错误响应。
 	//

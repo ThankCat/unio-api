@@ -55,6 +55,10 @@ func (a *Adapter) StreamResponse(ctx context.Context, ch channel.Runtime, req Re
 			failure.WithMessage("openai responses adapter channel base url is empty"),
 		)
 	}
+	var normalizeErr error
+	if req, normalizeErr = a.normalizeRequest(req, true); normalizeErr != nil {
+		return adapter.StreamOutcome{}, normalizeErr
+	}
 
 	// 响应头预算只约束「上游开始响应」，不约束流本体：Responses 流在长任务（图像生成等）
 	// 期间会先回 200 再静默数分钟才吐事件。首字预算与响应头同起点（§11.2），

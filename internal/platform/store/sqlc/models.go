@@ -121,6 +121,7 @@ type Channel struct {
 	Protocols                 []string
 	SupplyForm                string
 	AccountDefaultConcurrency pgtype.Int4
+	ProxyID                   pgtype.Int8
 }
 
 type ChannelCostMultiplier struct {
@@ -680,6 +681,21 @@ type ProviderServiceTierCostRisk struct {
 	CreatedAt                pgtype.Timestamptz
 }
 
+type Proxy struct {
+	ID        int64
+	Name      string
+	Protocol  string
+	Host      string
+	Port      int32
+	Username  pgtype.Text
+	Password  pgtype.Text
+	Url       string
+	Status    string
+	Note      pgtype.Text
+	CreatedAt pgtype.Timestamptz
+	UpdatedAt pgtype.Timestamptz
+}
+
 type RequestAttempt struct {
 	ID                         int64
 	RequestRecordID            int64
@@ -937,6 +953,7 @@ type SubscriptionAccount struct {
 	ConfigRevision        int64
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
+	ProxyID               pgtype.Int8
 }
 
 type SubscriptionLedgerEntry struct {

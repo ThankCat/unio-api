@@ -23,6 +23,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/model"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/overview"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/provider"
+	proxyapi "github.com/ThankCat/unio-gateway/internal/app/adminapi/proxy"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/requests"
 	subscriptionaccountapi "github.com/ThankCat/unio-gateway/internal/app/adminapi/subscriptionaccount"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/system"
@@ -31,6 +32,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/config"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpmw"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
+	proxyservice "github.com/ThankCat/unio-gateway/internal/service/admin/proxy"
 	subscriptionaccountservice "github.com/ThankCat/unio-gateway/internal/service/admin/subscriptionaccount"
 )
 
@@ -74,6 +76,7 @@ type RouterDeps struct {
 	ChannelCostMultiplierService channel.ChannelCostMultiplierService
 	// SubscriptionAccountService 是订阅账号号池管理（第九节）；nil 时不注册账号路由。
 	SubscriptionAccountService *subscriptionaccountservice.Service
+	ProxyService               *proxyservice.Service
 	// 服务商充值汇率（服务商级，全渠道共享）。
 	ProviderRechargeRateService provider.ProviderRechargeRateService
 
@@ -219,6 +222,7 @@ func NewRouter(deps RouterDeps) http.Handler {
 				Breaker:               deps.ChannelBreaker,
 			})
 			subscriptionaccountapi.Register(r, deps.SubscriptionAccountService)
+			proxyapi.Register(r, deps.ProxyService)
 			model.Register(r, model.Deps{
 				Service:        deps.ModelService,
 				OpsService:     deps.ModelOpsService,
