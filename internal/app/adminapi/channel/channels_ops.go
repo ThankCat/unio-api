@@ -37,6 +37,7 @@ type channelOpsRowDTO struct {
 	ProviderName            string                    `json:"provider_name"`
 	ProviderCurrency        string                    `json:"provider_currency"`
 	Credential              string                    `json:"credential"`
+	SupplyForm              string                    `json:"supply_form"`
 	AttemptTotal            int64                     `json:"attempt_total"`
 	AttemptSucceeded        int64                     `json:"attempt_succeeded"`
 	SuccessRate             float64                   `json:"success_rate"`
@@ -165,6 +166,7 @@ func (h *channelOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 			ProviderName:            row.ProviderName,
 			ProviderCurrency:        row.ProviderCurrency,
 			Credential:              row.Credential,
+		SupplyForm:              row.SupplyForm,
 			AttemptTotal:            row.AttemptTotal,
 			AttemptSucceeded:        row.AttemptSucceeded,
 			SuccessRate:             row.SuccessRate,

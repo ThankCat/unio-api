@@ -29,6 +29,8 @@ const (
 	GatewayRoutingStickyKey            = "gateway.routing_sticky"
 	GatewayRoutingBalanceKey           = "gateway.routing_balance"
 	GatewayCapacityWaitTimeoutKey      = "gateway.capacity_wait_timeout_ms"
+	// GatewayAccountUsagePauseThresholdKey 是池型账号用量自动暂停的水位阈值（百分比整数）。
+	GatewayAccountUsagePauseThresholdKey = "gateway.account_usage_pause_threshold_percent"
 )
 
 func msToDuration(ms int64) time.Duration {
@@ -453,6 +455,42 @@ func GatewayCredential401Threshold(ctx context.Context, store *SettingsStore) in
 		return DefaultCredential401Threshold
 	}
 	return n
+}
+
+// ---- 订阅账号用量自动暂停阈值（号池改造第五节） ----
+
+// DefaultAccountUsagePauseThresholdPercent 与 subscription/health 的代码默认一致（90%）。
+const DefaultAccountUsagePauseThresholdPercent = 90
+
+func accountUsagePauseThresholdDefinition() Definition {
+	return Definition{
+		Key:      GatewayAccountUsagePauseThresholdKey,
+		Category: "gateway",
+		Label:    "账号用量暂停阈值（%）",
+		Description: "池型渠道账号的 5h/7d 任一用量窗口达到该百分比后，提前移出调度（到窗口重置自动恢复）。" +
+			"取值 1~100；100 等于只在完全打满时暂停。热更新，下一次用量观测即生效。",
+		HotReload: true,
+		Default:   json.RawMessage(fmt.Sprintf("%d", DefaultAccountUsagePauseThresholdPercent)),
+		Validate: func(raw json.RawMessage) error {
+			n, err := DecodePositiveIntSetting(raw)
+			if err != nil {
+				return err
+			}
+			if n > 100 {
+				return fmt.Errorf("threshold must be within 1..100, got %d", n)
+			}
+			return nil
+		},
+	}
+}
+
+// GatewayAccountUsagePauseThreshold 读取当前生效的账号用量暂停阈值（解码失败回默认 90）。
+func GatewayAccountUsagePauseThreshold(ctx context.Context, store *SettingsStore) float64 {
+	n, err := DecodePositiveIntSetting(store.Raw(ctx, GatewayAccountUsagePauseThresholdKey))
+	if err != nil || n > 100 {
+		return DefaultAccountUsagePauseThresholdPercent
+	}
+	return float64(n)
 }
 
 // ---- 在途并发全局默认（DEC-029） ----

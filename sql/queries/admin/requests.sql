@@ -18,6 +18,7 @@ WITH filtered_page AS (
       AND (sqlc.narg('request_id')::text IS NULL OR r.request_id = sqlc.narg('request_id')::text)
       AND (sqlc.narg('status')::text IS NULL OR r.status = sqlc.narg('status')::text)
       AND (sqlc.narg('model')::text IS NULL OR r.requested_model_id ILIKE '%' || sqlc.narg('model')::text || '%')
+      AND (sqlc.narg('account_id')::bigint IS NULL OR r.final_account_id = sqlc.narg('account_id')::bigint)
       AND (
           (sqlc.narg('channel_id')::bigint IS NULL AND sqlc.narg('attempt_id')::bigint IS NULL AND sqlc.narg('scoring_sample')::text IS NULL)
           OR EXISTS (
@@ -66,6 +67,10 @@ SELECT
     r.status,
     r.final_provider_id,
     r.final_channel_id,
+    r.final_account_id,
+    COALESCE((
+        SELECT sa.display_name FROM subscription_accounts sa WHERE sa.id = r.final_account_id
+    ), '')::text AS final_account_name,
     r.error_code,
     r.error_message,
     r.delivery_status,
@@ -233,6 +238,7 @@ WHERE (sqlc.narg('user_id')::bigint IS NULL OR user_id = sqlc.narg('user_id')::b
   AND (sqlc.narg('request_id')::text IS NULL OR request_id = sqlc.narg('request_id')::text)
   AND (sqlc.narg('status')::text IS NULL OR status = sqlc.narg('status')::text)
   AND (sqlc.narg('model')::text IS NULL OR requested_model_id ILIKE '%' || sqlc.narg('model')::text || '%')
+  AND (sqlc.narg('account_id')::bigint IS NULL OR final_account_id = sqlc.narg('account_id')::bigint)
   AND (
       (sqlc.narg('channel_id')::bigint IS NULL AND sqlc.narg('attempt_id')::bigint IS NULL AND sqlc.narg('scoring_sample')::text IS NULL)
       OR EXISTS (

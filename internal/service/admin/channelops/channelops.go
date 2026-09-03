@@ -52,6 +52,8 @@ type Row struct {
 	// 服务商结算币种（USD/CNY），列表在服务商名后展示。
 	ProviderCurrency string
 	Credential       string
+	// SupplyForm 是供给形态（credential/pool）；池型渠道列表须可辨识（凭据列/检测语义不同）。
+	SupplyForm       string
 	AttemptTotal     int64
 	AttemptSucceeded int64
 	SuccessRate      float64
@@ -175,6 +177,7 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 			ProviderName:        r.ProviderName,
 			ProviderCurrency:    r.ProviderCurrency,
 			Credential:          r.Credential,
+			SupplyForm:          r.SupplyForm,
 			AttemptTotal:        r.AttemptTotal,
 			AttemptSucceeded:    r.AttemptSucceeded,
 			TimeoutTotal:        r.TimeoutTotal,

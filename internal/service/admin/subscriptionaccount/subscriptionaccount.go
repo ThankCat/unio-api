@@ -12,11 +12,13 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 
@@ -25,6 +27,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 	channelservice "github.com/ThankCat/unio-gateway/internal/service/admin/channel"
+	"github.com/ThankCat/unio-gateway/internal/service/admin/supply"
 	"github.com/ThankCat/unio-gateway/internal/service/subscription"
 )
 
@@ -36,9 +39,12 @@ type Queries interface {
 	AdminListSubscriptionLedger(ctx context.Context, accountID int64) ([]sqlc.SubscriptionLedgerEntry, error)
 	AdminCreateSubscriptionLedgerEntry(ctx context.Context, arg sqlc.AdminCreateSubscriptionLedgerEntryParams) (sqlc.SubscriptionLedgerEntry, error)
 	AdminCreateSubscriptionAccount(ctx context.Context, arg sqlc.AdminCreateSubscriptionAccountParams) (sqlc.SubscriptionAccount, error)
+	AdminReauthorizeSubscriptionAccount(ctx context.Context, arg sqlc.AdminReauthorizeSubscriptionAccountParams) (sqlc.SubscriptionAccount, error)
+	AdminDeleteSubscriptionAccountCascade(ctx context.Context, id int64) (int64, error)
 	GetAccountByPlatformUpstreamID(ctx context.Context, arg sqlc.GetAccountByPlatformUpstreamIDParams) (sqlc.GetAccountByPlatformUpstreamIDRow, error)
 	GetChannel(ctx context.Context, id int64) (sqlc.Channel, error)
 	CountSchedulableAccountsByChannel(ctx context.Context, channelID int64) (int64, error)
+	AdminListPoolChannels(ctx context.Context) ([]sqlc.AdminListPoolChannelsRow, error)
 }
 
 // AccountRuntimeReader 读取账号运行态（冷却/隔离/暂停/在途），供列表页展示。
@@ -65,8 +71,16 @@ type Service struct {
 	outbound  *subscription.Outbound
 	tokens    *subscription.TokenClient
 	logger    *zap.Logger
+	// supplyPreview 供完整供给影响预览（ADR-0020）；nil 时退回简化确认门。
+	supplyPreview *sqlc.Queries
 
 	oauthSessions sync.Map // session id -> oauthSession
+}
+
+// WithSupplyPreview 接入供给影响预览（bootstrap 注入 *sqlc.Queries 供 supply.ChannelImpact 反查）。
+func (s *Service) WithSupplyPreview(q *sqlc.Queries) *Service {
+	s.supplyPreview = q
+	return s
 }
 
 // NewService 创建账号管理服务。
@@ -215,6 +229,50 @@ func (s *Service) List(ctx context.Context, channelID int64, status string) (Lis
 	return result, nil
 }
 
+// PoolOverview 是号池并发监测的一个池（实时监控页区块，Provider → 池 → 账号钻取）。
+type PoolOverview struct {
+	ChannelID                 int64      `json:"channel_id"`
+	ChannelName               string     `json:"channel_name"`
+	ChannelStatus             string     `json:"channel_status"`
+	ProviderID                int64      `json:"provider_id"`
+	ProviderName              string     `json:"provider_name"`
+	AccountDefaultConcurrency *int64     `json:"account_default_concurrency"`
+	Aggregates                Aggregates `json:"aggregates"`
+	Accounts                  []Account  `json:"accounts"`
+}
+
+// PoolsOverview 返回全部未归档池型渠道及其账号运行态（数据源与账号页签同一条读路径：
+// Postgres 账号事实 + Redis 运行态批量读；不进 DB 经营聚合）。
+func (s *Service) PoolsOverview(ctx context.Context) ([]PoolOverview, error) {
+	channels, err := s.queries.AdminListPoolChannels(ctx)
+	if err != nil {
+		return nil, storeFailed(err, "list pool channels")
+	}
+	out := make([]PoolOverview, 0, len(channels))
+	for _, ch := range channels {
+		list, listErr := s.List(ctx, ch.ID, "")
+		if listErr != nil {
+			return nil, listErr
+		}
+		var defaultConcurrency *int64
+		if ch.AccountDefaultConcurrency.Valid {
+			v := int64(ch.AccountDefaultConcurrency.Int32)
+			defaultConcurrency = &v
+		}
+		out = append(out, PoolOverview{
+			ChannelID:                 ch.ID,
+			ChannelName:               ch.Name,
+			ChannelStatus:             ch.Status,
+			ProviderID:                ch.ProviderID,
+			ProviderName:              ch.ProviderName,
+			AccountDefaultConcurrency: defaultConcurrency,
+			Aggregates:                list.Aggregates,
+			Accounts:                  list.Accounts,
+		})
+	}
+	return out, nil
+}
+
 // ImportFile 解析并导入一个 sub2api-data v1 文件到指定池型渠道。
 func (s *Service) ImportFile(ctx context.Context, channelID int64, raw []byte) ([]subscription.ImportResultItem, error) {
 	if err := s.requirePoolChannel(ctx, channelID); err != nil {
@@ -222,7 +280,9 @@ func (s *Service) ImportFile(ctx context.Context, channelID int64, raw []byte) (
 	}
 	accounts, err := subscription.ParseSub2APIData(raw)
 	if err != nil {
-		return nil, err
+		// 解析失败是客户端提交了坏文件（格式/字段/JSON），归 400 而非 500——
+		// ParseSub2APIData 用 CodeConfigInvalid，不在 admin 状态映射里会漏成 internal error。
+		return nil, invalidArgument("file", "导入文件不是合法的 sub2api-data v1（检查 type/version/accounts 字段与 JSON 格式）")
 	}
 	results, err := subscription.ImportAccounts(ctx, importerQueries{s.queries}, channelID, accounts)
 	if err != nil {
@@ -255,6 +315,7 @@ func (s *Service) StartOAuth(ctx context.Context, channelID int64, proxyURL stri
 	if err := s.requirePoolChannel(ctx, channelID); err != nil {
 		return "", "", err
 	}
+	s.sweepExpiredOAuthSessions()
 	challenge, err := subscription.NewPKCEChallenge()
 	if err != nil {
 		return "", "", err
@@ -271,36 +332,95 @@ func (s *Service) StartOAuth(ctx context.Context, channelID int64, proxyURL stri
 	return sessionID, challenge.AuthorizationURL(""), nil
 }
 
-// CompleteOAuth 回填 code 完成导入（落库 disabled）。
-func (s *Service) CompleteOAuth(ctx context.Context, sessionID, code, state string) (Account, error) {
+// sweepExpiredOAuthSessions 清理超时未完成的向导会话。
+// 会话只在 complete 时删除，弃用的会话（管理员关掉弹窗）会永久留在内存——在每次 start 时顺手清扫。
+func (s *Service) sweepExpiredOAuthSessions() {
+	now := time.Now()
+	s.oauthSessions.Range(func(key, value any) bool {
+		if session, ok := value.(oauthSession); ok && now.After(session.ExpiresAt) {
+			s.oauthSessions.Delete(key)
+		}
+		return true
+	})
+}
+
+// CompleteOAuthResult 是 OAuth 向导完成的结果：新导入或对既有账号的重新授权。
+type CompleteOAuthResult struct {
+	Account      Account `json:"account"`
+	Reauthorized bool    `json:"reauthorized"`
+}
+
+// CompleteOAuth 回填 code 完成导入。
+// 同渠道已存在该上游账号时执行重新授权（覆盖凭据、保留调度参数与台账）——吊销后续命是高频操作，
+// 不应走删除重建；在其它渠道时仍拒绝（一号一池不变量）。新导入落库 disabled。
+func (s *Service) CompleteOAuth(ctx context.Context, sessionID, code, state string) (CompleteOAuthResult, error) {
 	value, ok := s.oauthSessions.LoadAndDelete(sessionID)
 	if !ok {
-		return Account{}, invalidArgument("session_id", "oauth session not found or already used")
+		return CompleteOAuthResult{}, invalidArgument("session_id", "oauth session not found or already used")
 	}
 	session := value.(oauthSession)
 	if time.Now().After(session.ExpiresAt) {
-		return Account{}, invalidArgument("session_id", "oauth session expired")
+		return CompleteOAuthResult{}, invalidArgument("session_id", "oauth session expired")
+	}
+	// 裸 code 粘贴（管理员只复制了 code 参数）：session_id 已把本次会话与 PKCE verifier 绑定，
+	// 缺省 state 视为同会话放行；带 state 时仍严格校验，防止两个并行向导互相串码。
+	if strings.TrimSpace(state) == "" {
+		state = session.Challenge.State
 	}
 	imported, err := subscription.CompleteAuthorization(ctx, s.tokens, session.Challenge, code, state, "", session.ProxyURL)
 	if err != nil {
-		return Account{}, err
+		return CompleteOAuthResult{}, err
 	}
+
+	// 重授权分支：同渠道同上游账号 → 覆盖凭据（调度参数/状态/台账不动，状态由管理员随后启用）。
+	existing, err := s.queries.GetAccountByPlatformUpstreamID(ctx, sqlc.GetAccountByPlatformUpstreamIDParams{
+		Platform: imported.Platform, UpstreamAccountID: imported.UpstreamAccountID,
+	})
+	switch {
+	case err == nil && existing.ChannelID == session.ChannelID:
+		raw, encodeErr := imported.Credentials.Encode()
+		if encodeErr != nil {
+			return CompleteOAuthResult{}, encodeErr
+		}
+		var subscriptionUntil pgtype.Timestamptz
+		if !imported.SubscriptionUntil.IsZero() {
+			subscriptionUntil = pgtype.Timestamptz{Time: imported.SubscriptionUntil, Valid: true}
+		}
+		row, reauthErr := s.queries.AdminReauthorizeSubscriptionAccount(ctx, sqlc.AdminReauthorizeSubscriptionAccountParams{
+			Platform:              imported.Platform,
+			UpstreamAccountID:     imported.UpstreamAccountID,
+			Credentials:           raw,
+			PlanType:              optionalText(imported.PlanType),
+			SubscriptionExpiresAt: subscriptionUntil,
+		})
+		if reauthErr != nil {
+			return CompleteOAuthResult{}, storeFailed(reauthErr, "reauthorize subscription account")
+		}
+		return CompleteOAuthResult{Account: accountFromRow(row), Reauthorized: true}, nil
+	case err == nil:
+		return CompleteOAuthResult{}, conflict(
+			"该上游账号已存在于其它渠道（channel_id=" + strconv.FormatInt(existing.ChannelID, 10) + "）；一号一池，先在原渠道归档后再导入",
+		)
+	case !errors.Is(err, pgx.ErrNoRows):
+		return CompleteOAuthResult{}, storeFailed(err, "check existing account")
+	}
+
 	results, err := subscription.ImportAccounts(ctx, importerQueries{s.queries}, session.ChannelID, []subscription.ImportAccount{imported})
 	if err != nil {
-		return Account{}, err
+		return CompleteOAuthResult{}, err
 	}
 	if len(results) != 1 || !results[0].Imported {
 		reason := "import rejected"
 		if len(results) == 1 && results[0].Reason != "" {
 			reason = results[0].Reason
 		}
-		return Account{}, conflict(reason)
+		return CompleteOAuthResult{}, conflict(reason)
 	}
 	row, err := s.queries.AdminGetSubscriptionAccount(ctx, results[0].AccountID)
 	if err != nil {
-		return Account{}, storeFailed(err, "load imported account")
+		return CompleteOAuthResult{}, storeFailed(err, "load imported account")
 	}
-	return accountFromRow(row), nil
+	return CompleteOAuthResult{Account: accountFromRow(row)}, nil
 }
 
 // UpdateConfigInput 是调度参数编辑入参。
@@ -310,6 +430,9 @@ type UpdateConfigInput struct {
 	ProxyURL         string
 	ConcurrencyLimit *int64
 	Priority         int32
+	// SubscriptionExpiresAt 是订阅到期时间（到期预警数据源）。上游不提供机读到期时间，
+	// 运营在这里录入/更正；nil 表示清除（未知）。
+	SubscriptionExpiresAt *time.Time
 }
 
 // UpdateConfig 修改调度参数并把变更传播到运行态围栏（账号 config_revision +1、
@@ -332,14 +455,19 @@ func (s *Service) UpdateConfig(ctx context.Context, in UpdateConfigInput) (Accou
 		return Account{}, accountLoadError(err)
 	}
 
+	var expiresAt pgtype.Timestamptz
+	if in.SubscriptionExpiresAt != nil {
+		expiresAt = pgtype.Timestamptz{Time: *in.SubscriptionExpiresAt, Valid: true}
+	}
 	var updated sqlc.SubscriptionAccount
 	err = s.publishAccountChange(ctx, account.ChannelID, func(ctx context.Context, qtx *sqlc.Queries) error {
 		row, updateErr := qtx.AdminUpdateSubscriptionAccountConfig(ctx, sqlc.AdminUpdateSubscriptionAccountConfigParams{
-			ID:               in.AccountID,
-			DisplayName:      strings.TrimSpace(in.DisplayName),
-			ProxyUrl:         optionalText(in.ProxyURL),
-			ConcurrencyLimit: optionalInt4(in.ConcurrencyLimit),
-			Priority:         in.Priority,
+			ID:                    in.AccountID,
+			DisplayName:           strings.TrimSpace(in.DisplayName),
+			ProxyUrl:              optionalText(in.ProxyURL),
+			ConcurrencyLimit:      optionalInt4(in.ConcurrencyLimit),
+			Priority:              in.Priority,
+			SubscriptionExpiresAt: expiresAt,
 		})
 		if updateErr != nil {
 			return storeFailed(updateErr, "update subscription account config")
@@ -353,6 +481,42 @@ func (s *Service) UpdateConfig(ctx context.Context, in UpdateConfigInput) (Accou
 	return accountFromRow(updated), nil
 }
 
+// Delete 物理删除账号，用于清理录错/试错的脏数据。
+//
+// 闸门与渠道删除同构：只允许删除已归档账号（归档已保证不可调度且经过停用确认）。
+// 台账随账号级联删除；一旦账号被请求历史（request_records.final_account_id）引用，
+// DB 报 23503，降级为 conflict 提示保持归档——保住账务归因链路。
+// 运行态 Redis 键（冷却/在途等）不显式清理：键都带 TTL，账号删除后自然过期，不会误伤他号。
+func (s *Service) Delete(ctx context.Context, accountID int64) error {
+	if accountID <= 0 {
+		return invalidArgument("id", "account id must be positive")
+	}
+	account, err := s.queries.AdminGetSubscriptionAccount(ctx, accountID)
+	if err != nil {
+		return accountLoadError(err)
+	}
+	if account.Status != "archived" {
+		return conflict("先归档账号再删除（归档保证它已退出调度）；有历史请求的账号应保持归档而非删除")
+	}
+	affected, err := s.queries.AdminDeleteSubscriptionAccountCascade(ctx, accountID)
+	if err != nil {
+		if isForeignKeyViolation(err) {
+			return conflict("该账号已有请求/账务历史引用，不可物理删除；保持归档即可")
+		}
+		return storeFailed(err, "delete subscription account")
+	}
+	if affected == 0 {
+		return failure.New(failure.CodeAdminNotFound, failure.WithMessage("account not found"))
+	}
+	return nil
+}
+
+// isForeignKeyViolation 判断 PostgreSQL 外键约束（23503）。
+func isForeignKeyViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23503"
+}
+
 // SetStatusInput 是状态流转入参。
 type SetStatusInput struct {
 	AccountID int64
@@ -362,6 +526,9 @@ type SetStatusInput struct {
 	DisabledReason string
 	// ConfirmSupplyImpact 确认「停用/归档最后一个可调度账号」的供给影响（边界 11）。
 	ConfirmSupplyImpact bool
+	// ExpectedImpactFingerprint 是影响预览指纹（ADR-0020 完整预览）：预览后影响集合若被并发
+	// 写入改变，指纹失配将再次要求确认。接入 supply 预览后必带；简化门路径忽略。
+	ExpectedImpactFingerprint string
 }
 
 // SetStatus 执行启停/归档/恢复。归档不可逆到 enabled：恢复统一落 disabled。
@@ -401,21 +568,20 @@ func (s *Service) SetStatus(ctx context.Context, in SetStatusInput) (Account, er
 		return Account{}, invalidArgument("action", "action must be enable/disable/archive/restore")
 	}
 
-	// 供给联动（边界 11）：停用最后一个可调度账号会让整条池失去候选资格。
-	// 渠道仍 enabled 时要求显式确认，防止「只是想下一个号」把模型供给静默打断。
+	// 供给联动（边界 11 / ADR-0020）：停用最后一个可调度账号会让整条池失去候选资格。
+	// 渠道仍 enabled 时给出完整影响预览（哪些模型会失去最后运行供给 + 指纹确认）；
+	// 预览依赖未注入时退回简化确认门，不静默放行。
 	if account.Status == "enabled" && nextStatus != "enabled" {
 		schedulable, countErr := s.queries.CountSchedulableAccountsByChannel(ctx, account.ChannelID)
 		if countErr != nil {
 			return Account{}, storeFailed(countErr, "count schedulable accounts")
 		}
-		if schedulable <= 1 && !in.ConfirmSupplyImpact {
+		if schedulable <= 1 {
 			channelRow, chErr := s.queries.GetChannel(ctx, account.ChannelID)
 			if chErr == nil && channelRow.Status == "enabled" {
-				return Account{}, failure.New(
-					failure.CodeAdminConflict,
-					failure.WithMessage("这是该池最后一个可调度账号：停用后渠道将失去全部供给，绑定模型的请求会得到 503。确认请携带 confirm_supply_impact=true 重试"),
-					failure.WithField("reason_code", "account_last_supply_confirmation_required"),
-				)
+				if err := s.authorizeLastSupplyChange(ctx, account.ChannelID, in); err != nil {
+					return Account{}, err
+				}
 			}
 		}
 	}
@@ -439,6 +605,37 @@ func (s *Service) SetStatus(ctx context.Context, in SetStatusInput) (Account, er
 	return accountFromRow(updated), nil
 }
 
+// authorizeLastSupplyChange 对「移出最后一个可调度账号」执行供给影响确认。
+//
+// 接入 supply 预览时（生产路径）：复用渠道停用的 ChannelImpact 语义——受影响集合 =
+// 以本渠道为最后一条运行候选的模型。集合为空（其它渠道还能服务这些模型）直接放行：
+// 没有客户影响就不打断操作；有影响则要求「确认 + 指纹一致」（ConfirmationRequired → 409 预览）。
+// 未接入预览（测试/降级）时退回简化确认门：只看 confirm 布尔。
+func (s *Service) authorizeLastSupplyChange(ctx context.Context, channelID int64, in SetStatusInput) error {
+	if s.supplyPreview == nil {
+		if in.ConfirmSupplyImpact {
+			return nil
+		}
+		return failure.New(
+			failure.CodeAdminConflict,
+			failure.WithMessage("这是该池最后一个可调度账号：停用后渠道将失去全部供给，绑定模型的请求会得到 503。确认请携带 confirm_supply_impact=true 重试"),
+			failure.WithField("reason_code", "account_last_supply_confirmation_required"),
+		)
+	}
+	impact, err := supply.ChannelImpact(ctx, s.supplyPreview, channelID)
+	if err != nil {
+		return storeFailed(err, "compute account supply impact")
+	}
+	// 与渠道停用预览区分指纹域：同一影响集合不允许跨操作复用确认。
+	impact.Kind = "account_last_supply"
+	return supply.Authorize(
+		impact,
+		"account_last_supply_confirmation_required",
+		"这是该池最后一个可调度账号：停用后以下模型将失去最后一条可用供给，新请求会得到 503，直到重新启用账号",
+		supply.Confirmation{Confirm: in.ConfirmSupplyImpact, ExpectedFingerprint: in.ExpectedImpactFingerprint},
+	)
+}
+
 // RefreshToken 手动触发一次令牌刷新（与后台保活同一条代码路径）。
 func (s *Service) RefreshToken(ctx context.Context, accountID int64) (Account, error) {
 	if accountID <= 0 {
@@ -447,6 +644,10 @@ func (s *Service) RefreshToken(ctx context.Context, accountID int64) (Account, e
 	account, err := s.queries.AdminGetSubscriptionAccount(ctx, accountID)
 	if err != nil {
 		return Account{}, accountLoadError(err)
+	}
+	// 归档是终局状态：不再持有调度资格，也不该继续动上游会话（刷新会轮换 refresh_token）。
+	if account.Status == "archived" {
+		return Account{}, conflict("归档账号不刷新令牌；如需续用请先恢复为停用")
 	}
 	creds, err := subscription.DecodeCredentials(account.Credentials)
 	if err != nil {
@@ -457,13 +658,31 @@ func (s *Service) RefreshToken(ctx context.Context, accountID int64) (Account, e
 		proxy = account.ProxyUrl.String
 	}
 	if _, err := s.outbound.RefreshAccount(ctx, accountID, creds, proxy); err != nil {
-		return Account{}, err
+		return Account{}, refreshError(err)
 	}
 	row, err := s.queries.AdminGetSubscriptionAccount(ctx, accountID)
 	if err != nil {
 		return Account{}, accountLoadError(err)
 	}
 	return accountFromRow(row), nil
+}
+
+// refreshError 把 outbound 刷新失败翻成 admin 可读的错误，而不是让内部 routing 错误码漏成 500。
+//   - 确认吊销（RefreshRejectedError）：账号已被本次刷新置为 disabled(token_revoked)，回 409 说明；
+//   - 其余（网络/上游不可用）：回 502，提示可稍后重试，账号已临时隔离等下一轮保活。
+func refreshError(err error) error {
+	var rejected *subscription.RefreshRejectedError
+	if errors.As(err, &rejected) {
+		return failure.New(
+			failure.CodeAdminConflict,
+			failure.WithMessage("刷新令牌已被上游确认吊销，账号已自动停用（token_revoked）；需重新授权该账号"),
+		)
+	}
+	return failure.Wrap(
+		failure.CodeAdminUpstreamUnavailable,
+		err,
+		failure.WithMessage("令牌刷新失败：上游不可达或返回异常，账号已临时移出调度，可稍后重试"),
+	)
 }
 
 // LedgerEntry 是订阅台账条目视图。

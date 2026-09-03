@@ -295,6 +295,7 @@ func (s *StickySession) Audit() StickyAudit {
 		KeyPresent:      s.key != "",
 		BeforeChannelID: s.before.ChannelID,
 		BeforeVersion:   s.before.BindingVersion,
+		BeforeAccountID: s.before.AccountID,
 		Action:          action,
 		Reason:          s.reason,
 		AfterChannelID:  s.bound.ChannelID,
@@ -307,6 +308,8 @@ type StickyAudit struct {
 	KeyPresent      bool
 	BeforeChannelID int64
 	BeforeVersion   int64
+	// BeforeAccountID 是绑定值 v2 的账号分量（credential 型恒 0）；缓存画像的池内换号排除依赖它。
+	BeforeAccountID int64
 	Action          StickyAction
 	Reason          string
 	AfterChannelID  int64

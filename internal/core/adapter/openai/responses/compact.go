@@ -142,6 +142,7 @@ func (a *Adapter) CompactResponse(ctx context.Context, ch channel.Runtime, req R
 
 	facts := responsesFacts(parsed, chatUsage, meta, usage.SourceUpstreamResponse)
 	a.applyHeaderFacts(upstreamResp.Header, &facts)
+	a.finalizeFacts(req, &facts)
 	return &Response{
 		Raw:        raw,
 		ResponseID: parsed.ID,

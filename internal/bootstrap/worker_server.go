@@ -139,6 +139,10 @@ func NewWorkerServerApp(ctx context.Context, deps WorkerServerAppDeps) (*WorkerS
 	channelModelInventoryService := channelmodelinventory.NewService(
 		deps.DB, queries, adapterRegistry, adapterRegistry, providerLedgerService, settingsStore,
 	)
+	// 池型渠道的巡检/发现/验证/403 复检同样以账号身份出站（与 admin 同一解析器实现）。
+	probeIdentity := subscription.NewProbeIdentityResolver(queries, subscriptionOutbound)
+	channelTestService.WithAccountResolver(probeIdentity)
+	channelModelInventoryService.WithAccountResolver(probeIdentity)
 	permissionStore := permitStore
 	if err := permissionStore.VerifySingleNodeDeployment(ctx); err != nil {
 		return nil, err

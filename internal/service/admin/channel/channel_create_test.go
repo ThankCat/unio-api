@@ -55,6 +55,13 @@ func (s *createStore) CreateChannel(_ context.Context, arg sqlc.CreateChannelPar
 	}, nil
 }
 
+func (s *createStore) UpdateChannelAccountDefaultConcurrency(_ context.Context, arg sqlc.UpdateChannelAccountDefaultConcurrencyParams) (sqlc.Channel, error) {
+	updated := s.channel
+	updated.AccountDefaultConcurrency = arg.AccountDefaultConcurrency
+	s.channel = updated
+	return updated, nil
+}
+
 func (s *createStore) UpdateChannel(_ context.Context, arg sqlc.UpdateChannelParams) (sqlc.Channel, error) {
 	s.updateParam = arg
 	s.updateCalls++

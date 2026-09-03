@@ -132,6 +132,7 @@ func (a *Adapter) CreateResponse(ctx context.Context, ch channel.Runtime, req Re
 
 	facts := responsesFacts(parsed, chatUsage, meta, usage.SourceUpstreamResponse)
 	a.applyHeaderFacts(upstreamResp.Header, &facts)
+	a.finalizeFacts(req, &facts)
 	return &Response{
 		Raw:        raw,
 		ResponseID: parsed.ID,

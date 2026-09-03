@@ -507,4 +507,8 @@ const (
 
 	// CodeAdminStoreFailed 表示 admin 管理存储访问失败。
 	CodeAdminStoreFailed Code = "admin_store_failed"
+
+	// CodeAdminUpstreamUnavailable 表示 admin 操作依赖的外部上游（如 OAuth 令牌端点）不可达或返回异常。
+	// 与 admin_store_failed（本地存储 500）区分：它映射为 502，提示操作可重试。
+	CodeAdminUpstreamUnavailable Code = "admin_upstream_unavailable"
 )

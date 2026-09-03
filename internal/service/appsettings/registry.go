@@ -82,6 +82,7 @@ func DefaultRegistry() *Registry {
 		streamIdleTimeoutDefinition(),
 		channelCooldownDefinition(),
 		credential401ThresholdDefinition(),
+		accountUsagePauseThresholdDefinition(),
 		defaultResponseTimeoutDefinition(),
 		defaultFirstTokenTimeoutDefinition(),
 		concurrencyDefaultsDefinition(),

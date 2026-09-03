@@ -160,6 +160,26 @@ func (q *Queries) AdminCreateSubscriptionLedgerEntry(ctx context.Context, arg Ad
 	return i, err
 }
 
+const adminDeleteSubscriptionAccountCascade = `-- name: AdminDeleteSubscriptionAccountCascade :execrows
+WITH deleted_ledger AS (
+    DELETE FROM subscription_ledger_entries
+    WHERE subscription_ledger_entries.account_id = $1
+)
+DELETE FROM subscription_accounts WHERE subscription_accounts.id = $1
+`
+
+// AdminDeleteSubscriptionAccountCascade 物理删除账号，用于清理录错/试错的脏数据。
+// 台账是账号自身的运营录入（非请求账务事实），随账号一并删除。
+// 若账号已被请求历史引用（request_records.final_account_id NO ACTION 外键），
+// 语句报 23503 整体回滚，上层降级为 conflict 提示保持归档——保住账务归因链路。
+func (q *Queries) AdminDeleteSubscriptionAccountCascade(ctx context.Context, id int64) (int64, error) {
+	result, err := q.db.Exec(ctx, adminDeleteSubscriptionAccountCascade, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const adminGetSubscriptionAccount = `-- name: AdminGetSubscriptionAccount :one
 SELECT id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at
 FROM subscription_accounts
@@ -194,6 +214,53 @@ func (q *Queries) AdminGetSubscriptionAccount(ctx context.Context, id int64) (Su
 	return i, err
 }
 
+const adminListPoolChannels = `-- name: AdminListPoolChannels :many
+SELECT c.id, c.name, c.status, c.account_default_concurrency,
+       p.id AS provider_id, p.name AS provider_name
+FROM channels c
+JOIN providers p ON p.id = c.provider_id
+WHERE c.supply_form = 'pool'
+  AND c.status <> 'archived'
+ORDER BY c.priority, c.id
+`
+
+type AdminListPoolChannelsRow struct {
+	ID                        int64
+	Name                      string
+	Status                    string
+	AccountDefaultConcurrency pgtype.Int4
+	ProviderID                int64
+	ProviderName              string
+}
+
+// AdminListPoolChannels 列出全部未归档池型渠道（号池并发监测的钻取骨架：Provider → 池 → 账号）。
+func (q *Queries) AdminListPoolChannels(ctx context.Context) ([]AdminListPoolChannelsRow, error) {
+	rows, err := q.db.Query(ctx, adminListPoolChannels)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AdminListPoolChannelsRow
+	for rows.Next() {
+		var i AdminListPoolChannelsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Status,
+			&i.AccountDefaultConcurrency,
+			&i.ProviderID,
+			&i.ProviderName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const adminListSubscriptionAccounts = `-- name: AdminListSubscriptionAccounts :many
 SELECT
     a.id,
@@ -219,7 +286,7 @@ SELECT
 FROM subscription_accounts a
 WHERE a.channel_id = $1
   AND ($2::text IS NULL OR a.status = $2::text)
-ORDER BY a.status, a.priority, a.id
+ORDER BY CASE a.status WHEN 'enabled' THEN 0 WHEN 'disabled' THEN 1 ELSE 2 END, a.priority, a.id
 `
 
 type AdminListSubscriptionAccountsParams struct {
@@ -252,6 +319,8 @@ type AdminListSubscriptionAccountsRow struct {
 
 // AdminListSubscriptionAccounts 列出渠道下全部账号（含已停用与归档），供渠道详情的账号页签。
 // 返回凭据摘要而非凭据本身：列表页不需要令牌明文，减少泄露面。
+// 运维视角排序：在役（enabled）最前，其次停用，归档垫底；同层按优先级与 ID 稳定排序。
+// 不能直接 ORDER BY status——那是字母序，archived 会排最前。
 func (q *Queries) AdminListSubscriptionAccounts(ctx context.Context, arg AdminListSubscriptionAccountsParams) ([]AdminListSubscriptionAccountsRow, error) {
 	rows, err := q.db.Query(ctx, adminListSubscriptionAccounts, arg.ChannelID, arg.Status)
 	if err != nil {
@@ -330,6 +399,24 @@ func (q *Queries) AdminListSubscriptionLedger(ctx context.Context, accountID int
 		return nil, err
 	}
 	return items, nil
+}
+
+const adminPickProbeAccount = `-- name: AdminPickProbeAccount :one
+SELECT id
+FROM subscription_accounts
+WHERE channel_id = $1
+  AND status = 'enabled'
+ORDER BY priority, id
+LIMIT 1
+`
+
+// AdminPickProbeAccount 为渠道检测选一个账号：未指定账号时取「调度视角最优先」的在役账号
+// （priority 小者优先，同档按 ID 稳定），保证检测走的号与真实调度大概率一致。
+func (q *Queries) AdminPickProbeAccount(ctx context.Context, channelID int64) (int64, error) {
+	row := q.db.QueryRow(ctx, adminPickProbeAccount, channelID)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
 }
 
 const adminReauthorizeSubscriptionAccount = `-- name: AdminReauthorizeSubscriptionAccount :one
@@ -437,6 +524,7 @@ SET display_name = $2,
     proxy_url = $3,
     concurrency_limit = $4,
     priority = $5,
+    subscription_expires_at = $6,
     config_revision = config_revision + 1,
     updated_at = now()
 WHERE id = $1
@@ -444,16 +532,18 @@ RETURNING id, channel_id, platform, credential_type, upstream_account_id, displa
 `
 
 type AdminUpdateSubscriptionAccountConfigParams struct {
-	ID               int64
-	DisplayName      string
-	ProxyUrl         pgtype.Text
-	ConcurrencyLimit pgtype.Int4
-	Priority         int32
+	ID                    int64
+	DisplayName           string
+	ProxyUrl              pgtype.Text
+	ConcurrencyLimit      pgtype.Int4
+	Priority              int32
+	SubscriptionExpiresAt pgtype.Timestamptz
 }
 
-// AdminUpdateSubscriptionAccountConfig 修改调度参数（并发、优先级、代理、备注名）。
-// 这些都改变调度行为，故提升 config_revision；调用方须在同事务提升渠道 capacity_revision，
-// 让运行态围栏立即感知（配置热更新传播）。
+// AdminUpdateSubscriptionAccountConfig 修改调度参数（并发、优先级、代理、备注名）与订阅到期时间。
+// 调度参数改变调度行为，故提升 config_revision；调用方须在同事务提升渠道 capacity_revision，
+// 让运行态围栏立即感知（配置热更新传播）。subscription_expires_at 是运营录入的到期预警事实：
+// 上游不提供机读到期时间，唯一写入路径就是这里（缺省 NULL 表示清除/未知）。
 func (q *Queries) AdminUpdateSubscriptionAccountConfig(ctx context.Context, arg AdminUpdateSubscriptionAccountConfigParams) (SubscriptionAccount, error) {
 	row := q.db.QueryRow(ctx, adminUpdateSubscriptionAccountConfig,
 		arg.ID,
@@ -461,6 +551,7 @@ func (q *Queries) AdminUpdateSubscriptionAccountConfig(ctx context.Context, arg 
 		arg.ProxyUrl,
 		arg.ConcurrencyLimit,
 		arg.Priority,
+		arg.SubscriptionExpiresAt,
 	)
 	var i SubscriptionAccount
 	err := row.Scan(

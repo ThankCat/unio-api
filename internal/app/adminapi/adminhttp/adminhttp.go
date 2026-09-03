@@ -182,6 +182,8 @@ func adminErrorStatus(code failure.Code) int {
 		return http.StatusConflict
 	case failure.CodeAdminAuthLoginRateLimited:
 		return http.StatusTooManyRequests
+	case failure.CodeAdminUpstreamUnavailable:
+		return http.StatusBadGateway
 	// M7 手工调额经由 ledger：把账本业务错误映射成可读的 4xx，而非笼统 500。
 	case failure.CodeLedgerInvalidAmount:
 		return http.StatusBadRequest

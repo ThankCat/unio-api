@@ -567,11 +567,18 @@ WITH cache AS (
       AND (sqlc.narg('from_time')::timestamptz IS NULL OR r.created_at >= sqlc.narg('from_time')::timestamptz)
       AND (sqlc.narg('to_time')::timestamptz IS NULL OR r.created_at < sqlc.narg('to_time')::timestamptz)
       AND NOT EXISTS (
+          -- 排除破坏了粘性的请求：跨渠道切换（渠道维度）与池内换号（账号维度）同口径——
+          -- 两者都会丢上游缓存，混进画像会把渠道的缓存命中能力压低（边界 10）。
+          -- COALESCE 的写法：final_account_id 为 NULL（credential 型）时与自身比较恒等，不触发排除。
           SELECT 1
           FROM routing_decision_traces rdt
           WHERE rdt.request_record_id = r.id
-            AND rdt.sticky_before_channel_id IS NOT NULL
-            AND rdt.sticky_before_channel_id <> r.final_channel_id
+            AND (
+                (rdt.sticky_before_channel_id IS NOT NULL
+                 AND rdt.sticky_before_channel_id <> r.final_channel_id)
+                OR (rdt.sticky_before_account_id IS NOT NULL
+                 AND rdt.sticky_before_account_id <> COALESCE(r.final_account_id, rdt.sticky_before_account_id))
+            )
       )
     GROUP BY r.final_channel_id
 )

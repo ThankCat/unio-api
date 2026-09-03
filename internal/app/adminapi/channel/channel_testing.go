@@ -19,9 +19,11 @@ type ChannelTestService interface {
 
 // channelTestRequest 是 POST /channels/{id}/test 的请求体（字段均可选）。
 // model 省略：自动取渠道第一个启用绑定模型；stream 阶段一忽略（只发非流式最小请求）。
+// account_id 仅池型渠道有意义：按号检测；省略时自动选号（enabled 中 priority 最小者）。
 type channelTestRequest struct {
-	Model  string `json:"model"`
-	Stream bool   `json:"stream"`
+	Model     string `json:"model"`
+	Stream    bool   `json:"stream"`
+	AccountID int64  `json:"account_id"`
 }
 
 // channelTestResultDTO 是渠道检测结果响应体。
@@ -37,6 +39,9 @@ type channelTestResultDTO struct {
 	Message       string  `json:"message"`
 	UpstreamError *string `json:"upstream_error"`
 	TestedAt      string  `json:"tested_at"`
+	// 池型渠道：本次检测使用的账号（credential 型为 null/空）。
+	TestedAccountID   *int64 `json:"tested_account_id,omitempty"`
+	TestedAccountName string `json:"tested_account_name,omitempty"`
 }
 
 type channelTestHandler struct {
@@ -66,6 +71,7 @@ func (h *channelTestHandler) test(w http.ResponseWriter, r *http.Request) {
 		ChannelID: id,
 		Model:     req.Model,
 		Source:    channeltest.SourceManual,
+		AccountID: req.AccountID,
 	})
 	if err != nil {
 		adminhttp.WriteServiceError(w, err)
@@ -159,6 +165,11 @@ func toChannelTestResultDTO(r channeltest.TestResult) channelTestResultDTO {
 	if r.UpstreamError != "" {
 		ue := r.UpstreamError
 		dto.UpstreamError = &ue
+	}
+	if r.TestedAccountID > 0 {
+		id := r.TestedAccountID
+		dto.TestedAccountID = &id
+		dto.TestedAccountName = r.TestedAccountName
 	}
 	return dto
 }

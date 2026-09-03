@@ -3,10 +3,12 @@ package lifecycle
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	messagesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/anthropic/messages"
 	chatadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
+	responsesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/responses"
 	"github.com/ThankCat/unio-gateway/internal/core/channel"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
@@ -41,20 +43,24 @@ func (r *AdapterRegistry) ProbeChannel(ctx context.Context, protocol, adapterKey
 		if r.OpenAI == nil {
 			return adapter.ProbeResult{}, errProbeUnsupported(protocol, adapterKey)
 		}
-		chat, ok := r.OpenAI.Chat(adapterKey)
-		if !ok {
-			return adapter.ProbeResult{}, errProbeUnsupported(protocol, adapterKey)
+		if chat, ok := r.OpenAI.Chat(adapterKey); ok {
+			maxTokens := probeMaxTokens
+			resp, err := chat.ChatCompletions(ctx, rt, chatadapter.ChatRequest{
+				Model:     upstreamModel,
+				Messages:  []chatadapter.ChatMessage{{Role: "user", Content: probeUserContent}},
+				MaxTokens: &maxTokens,
+			})
+			if err != nil {
+				return adapter.ProbeResult{StatusCode: probeStatusFromError(err)}, err
+			}
+			return adapter.ProbeResult{StatusCode: resp.Upstream.StatusCode, Facts: &resp.Facts}, nil
 		}
-		maxTokens := probeMaxTokens
-		resp, err := chat.ChatCompletions(ctx, rt, chatadapter.ChatRequest{
-			Model:     upstreamModel,
-			Messages:  []chatadapter.ChatMessage{{Role: "user", Content: probeUserContent}},
-			MaxTokens: &maxTokens,
-		})
-		if err != nil {
-			return adapter.ProbeResult{StatusCode: probeStatusFromError(err)}, err
+		// responses-only adapter（如 codex 订阅后端）：无 chat 三槽，探测走流式 responses——
+		// 与真实链路同形（codex wire 以流式为准），拿到终态即为通过。
+		if stream, ok := r.OpenAI.StreamResponses(adapterKey); ok {
+			return probeStreamResponses(ctx, stream, rt, upstreamModel)
 		}
-		return adapter.ProbeResult{StatusCode: resp.Upstream.StatusCode, Facts: &resp.Facts}, nil
+		return adapter.ProbeResult{}, errProbeUnsupported(protocol, adapterKey)
 
 	case routing.ProtocolAnthropic:
 		if r.Anthropic == nil {
@@ -78,6 +84,45 @@ func (r *AdapterRegistry) ProbeChannel(ctx context.Context, protocol, adapterKey
 	default:
 		return adapter.ProbeResult{}, errProbeUnsupported(protocol, adapterKey)
 	}
+}
+
+// probeStreamResponses 用流式 Responses 发最小探测请求并等待终态。
+//
+// body 里 stream 必须显式置 true——Responses 直传 adapter 不改写请求体（零转换纪律），
+// stream 由调用方置位。两处实测得出的 codex 订阅后端契约：max_output_tokens 被拒
+// （400 "Unsupported parameter"），store 必须显式 false（400 "Store must be set to false"）。
+// "hi" 输入的自然回复很短，订阅账号无边际成本。
+func probeStreamResponses(
+	ctx context.Context,
+	stream responsesadapter.StreamResponsesAdapter,
+	rt channel.Runtime,
+	upstreamModel string,
+) (adapter.ProbeResult, error) {
+	body, err := json.Marshal(map[string]any{
+		"model": upstreamModel,
+		"input": []map[string]any{{
+			"role": "user",
+			"content": []map[string]any{
+				{"type": "input_text", "text": "hi"},
+			},
+		}},
+		"store":  false,
+		"stream": true,
+	})
+	if err != nil {
+		return adapter.ProbeResult{}, failure.Wrap(
+			failure.CodeAdapterInvalidRegistration, err,
+			failure.WithMessage("encode responses probe body"),
+		)
+	}
+	outcome, err := stream.StreamResponse(ctx, rt, responsesadapter.Request{Body: body}, func(responsesadapter.StreamChunk) error {
+		return nil
+	})
+	if err != nil {
+		return adapter.ProbeResult{StatusCode: probeStatusFromError(err)}, err
+	}
+	result := adapter.ProbeResult{StatusCode: http.StatusOK, Facts: outcome.Facts}
+	return result, nil
 }
 
 // probeStatusFromError 从错误链的上游元信息取 HTTP 状态码（无则 0）。

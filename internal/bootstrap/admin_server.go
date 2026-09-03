@@ -256,7 +256,11 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 			accountOutbound,
 			accountTokens,
 			deps.Logger,
-		)
+		).WithSupplyPreview(queries)
+		// 池型渠道的检测/模型发现/验证以账号身份出站；不注入的话这些操作对池型渠道必然 401。
+		probeIdentity := subscription.NewProbeIdentityResolver(queries, accountOutbound)
+		channelTestService.WithAccountResolver(probeIdentity)
+		channelModelInventoryService.WithAccountResolver(probeIdentity)
 	}
 	routingTraceService := routingtrace.NewService(queries)
 

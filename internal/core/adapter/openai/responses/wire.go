@@ -41,6 +41,10 @@ type Wire struct {
 	// x-codex-primary-reset-after-seconds），供 4xx/5xx 错误的 RetryAfter 元数据使用。
 	// 返回 0 表示无 wire 专属信号，回落标准 Retry-After 头。
 	RetryAfterFromHeaders func(header http.Header) time.Duration
+
+	// FinalizeFacts 在账务事实装配完成后做 wire 专属修正（非流式/流式终态/compact 三处同源）。
+	// Codex 用它把结算档位改为出站请求档位权威（响应档位不可信，边界 15）。nil = 不修正。
+	FinalizeFacts func(req Request, facts *adapter.ResponseFacts)
 }
 
 // responsesPath 返回本 wire 的 responses 操作路径。
@@ -88,6 +92,13 @@ func (a *Adapter) decorateRequest(httpReq *http.Request, ch channel.Runtime) {
 func (a *Adapter) applyHeaderFacts(header http.Header, facts *adapter.ResponseFacts) {
 	if a.wire.HeaderFacts != nil {
 		a.wire.HeaderFacts(header, facts)
+	}
+}
+
+// finalizeFacts 执行 wire 专属的事实收尾修正（非流式/流式终态/compact 三处统一入口）。
+func (a *Adapter) finalizeFacts(req Request, facts *adapter.ResponseFacts) {
+	if a.wire.FinalizeFacts != nil {
+		a.wire.FinalizeFacts(req, facts)
 	}
 }
 

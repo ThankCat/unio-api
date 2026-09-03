@@ -302,7 +302,11 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 		deps.Redis,
 		deps.Logger,
 	)
-	accountHealth := subscriptionhealth.NewRecorder(queries, breakerStore, deps.Logger, 0)
+	// 用量暂停阈值走 appsettings 热更新（gateway.account_usage_pause_threshold_percent，默认 90）。
+	accountHealth := subscriptionhealth.NewRecorder(queries, breakerStore, deps.Logger, 0).
+		WithThresholdProvider(func(ctx context.Context) float64 {
+			return appsettings.GatewayAccountUsagePauseThreshold(ctx, settingsStore)
+		})
 	chatCompletionService.SetAccountOutbound(accountOutbound, accountHealth)
 	responsesService.SetAccountOutbound(accountOutbound, accountHealth)
 	messagesService.SetAccountOutbound(accountOutbound, accountHealth)

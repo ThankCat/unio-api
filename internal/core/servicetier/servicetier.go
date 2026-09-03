@@ -19,6 +19,9 @@ const (
 	ResolutionStandardFallbackMissing Resolution = "standard_fallback_missing"
 	ResolutionStandardFallbackUnknown Resolution = "standard_fallback_unknown"
 	ResolutionFastPriceMissing        Resolution = "standard_fallback_fast_price_missing"
+	// ResolutionWireOutboundAuthoritative：该 wire 的响应档位不可信（Codex 订阅后端对 priority
+	// 请求仍回 auto/default），结算档位以出站请求档位为权威（边界 15 的结算例外）。
+	ResolutionWireOutboundAuthoritative Resolution = "wire_outbound_authoritative"
 )
 
 // ErrInvalidOpenAIRequestTier means the public request value is outside the supported contract.
@@ -62,6 +65,25 @@ func ResolveOpenAIForwardRequest(requested Tier, supportsFast bool) Request {
 		return Request{Tier: TierFast, UpstreamRaw: "priority"}
 	}
 	return Request{Tier: TierStandard, UpstreamRaw: "default"}
+}
+
+// ResolveWireOutboundAuthoritative 按出站请求档位定档（响应档位不可信的 wire 专用，如 Codex 订阅后端）。
+// outboundRaw 是发给上游的请求体 service_tier 原始值（nil=未带，按 Standard）；
+// responseRaw 是上游响应回显的原始值，仅保留进 UpstreamRaw 供审计对照，不参与定档。
+func ResolveWireOutboundAuthoritative(outboundRaw *string, responseRaw string) Response {
+	tier := TierStandard
+	if outboundRaw != nil {
+		switch *outboundRaw {
+		case "priority", "fast":
+			tier = TierFast
+		}
+	}
+	return Response{
+		Actual:      tier,
+		Settled:     tier,
+		UpstreamRaw: responseRaw,
+		Resolution:  ResolutionWireOutboundAuthoritative,
+	}
 }
 
 // ResolveOpenAIResponse maps the upstream response value without inferring it from the request.

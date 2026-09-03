@@ -137,6 +137,8 @@ type updateChannelRequest struct {
 	StickyTTLms         *int64        `json:"sticky_ttl_ms"`
 	ConcurrencyLimit    optionalInt64 `json:"concurrency_limit"`
 	SupportsOpenAIFast  *bool         `json:"supports_openai_fast"`
+	// AccountDefaultConcurrency 仅池型渠道：账号默认并发（缺省=不改，null=继承全局，0=不限，正数=上限）。
+	AccountDefaultConcurrency optionalInt64 `json:"account_default_concurrency"`
 	// 停用渠道可能让某些模型失去最后一条可用渠道：首次请求缺省，收到 409 后
 	// 携带最新指纹重试。SelectedModels 是管理员明确选择要一并停用的模型，
 	// 留空表示只停渠道、让这些模型保持启用（客户会拿到 503 直到渠道恢复）。
@@ -311,6 +313,8 @@ func (h *channelsHandler) update(w http.ResponseWriter, r *http.Request) {
 		CapacityProvided:    req.ConcurrencyLimit.Set,
 		ConcurrencyLimit:    req.ConcurrencyLimit.Value,
 		SupportsOpenAIFast:  req.SupportsOpenAIFast,
+		AccountDefaultConcurrencyProvided: req.AccountDefaultConcurrency.Set,
+		AccountDefaultConcurrency:         req.AccountDefaultConcurrency.Value,
 		Confirmation: supply.Confirmation{
 			Confirm:             req.ConfirmSupplyImpact,
 			ExpectedFingerprint: req.ExpectedImpactFingerprint,

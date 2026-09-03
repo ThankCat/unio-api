@@ -798,11 +798,12 @@ type RoutingDecisionTrace struct {
 	// 全池并发满后的有界短等结果。
 	CapacityWaitResult pgtype.Text
 	// 完整结构化路由过程，禁止只存人读拼接文本。
-	TracePayload        []byte
-	CreatedAt           pgtype.Timestamptz
-	UpdatedAt           pgtype.Timestamptz
-	AttemptedAccountIds []int64
-	SelectedAccountID   pgtype.Int8
+	TracePayload          []byte
+	CreatedAt             pgtype.Timestamptz
+	UpdatedAt             pgtype.Timestamptz
+	AttemptedAccountIds   []int64
+	SelectedAccountID     pgtype.Int8
+	StickyBeforeAccountID pgtype.Int8
 }
 
 type RuntimeControlOperation struct {

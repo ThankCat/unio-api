@@ -251,10 +251,11 @@ func duplicateReason(ctx context.Context, queries ImporterQueries, account Impor
 		UpstreamAccountID: account.UpstreamAccountID,
 	})
 	if err != nil {
-		return "account already exists"
+		return "该上游账号已存在"
 	}
+	// 这段文案直接透出到管理端 toast：说人话，并指出两条出路（同渠道重授权 / 异渠道先归档）。
 	return fmt.Sprintf(
-		"account already exists in channel %q (channel_id=%d, account_id=%d); use re-authorize to update credentials",
+		"该上游账号已在渠道「%s」（channel_id=%d, account_id=%d）：同渠道请用「重新授权」更新凭据；要换池须先归档原账号",
 		existing.ChannelName, existing.ChannelID, existing.ID,
 	)
 }

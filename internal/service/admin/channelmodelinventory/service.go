@@ -18,6 +18,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/modelcatalog"
 	"github.com/ThankCat/unio-gateway/internal/service/appsettings"
+	"github.com/ThankCat/unio-gateway/internal/service/subscription"
 )
 
 const (
@@ -48,6 +49,12 @@ type ProbeAccountant interface {
 	AccountProbe(ctx context.Context, params providerledger.ProbeParams) error
 }
 
+// AccountIdentityResolver 为池型渠道的发现/验证解析账号出站身份
+// （生产实现 subscription.ProbeIdentityResolver）。
+type AccountIdentityResolver interface {
+	ResolveProbeIdentity(ctx context.Context, channelID, accountID int64) (subscription.ProbeIdentity, error)
+}
+
 // Service 是渠道模型清单的应用服务。
 type Service struct {
 	db         TxBeginner
@@ -57,6 +64,7 @@ type Service struct {
 	accountant ProbeAccountant
 	settings   *appsettings.SettingsStore
 	catalog    CatalogAdopter
+	accounts   AccountIdentityResolver
 }
 
 // CatalogAdopter 原子完成参考目录采纳与渠道绑定。
@@ -82,6 +90,31 @@ func NewService(
 func (s *Service) WithCatalogAdopter(adopter CatalogAdopter) *Service {
 	s.catalog = adopter
 	return s
+}
+
+// WithAccountResolver 接入池型渠道的账号身份解析（admin 与 worker 都要注入，
+// 否则池型渠道的发现/验证会以空凭据出站而必然 401）。
+func (s *Service) WithAccountResolver(resolver AccountIdentityResolver) *Service {
+	s.accounts = resolver
+	return s
+}
+
+// poolRuntimeIdentity 为池型渠道解析账号并装配 Runtime 的账号身份；credential 型直接返回零值。
+func (s *Service) poolRuntimeIdentity(ctx context.Context, supplyForm string, channelID int64) (subscription.ProbeIdentity, bool, error) {
+	if !corechannel.SupplyForm(supplyForm).IsPool() {
+		return subscription.ProbeIdentity{}, false, nil
+	}
+	if s.accounts == nil {
+		return subscription.ProbeIdentity{}, false, failure.New(
+			failure.CodeAdminStoreFailed,
+			failure.WithMessage("account resolver is unavailable for pool channel"),
+		)
+	}
+	identity, err := s.accounts.ResolveProbeIdentity(ctx, channelID, 0)
+	if err != nil {
+		return subscription.ProbeIdentity{}, false, err
+	}
+	return identity, true, nil
 }
 
 // Run 是发现或验证任务的公共运行事实。

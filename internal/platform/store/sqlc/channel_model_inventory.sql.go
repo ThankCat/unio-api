@@ -526,6 +526,7 @@ SELECT
     c.protocols,
     c.adapter_key,
     c.credential,
+    c.supply_form,
     c.status AS channel_status,
     c.config_revision AS current_channel_config_revision,
     p.slug AS provider_slug,
@@ -559,6 +560,7 @@ type GetChannelModelDiscoveryExecutionSnapshotRow struct {
 	Protocols                     []string
 	AdapterKey                    string
 	Credential                    string
+	SupplyForm                    string
 	ChannelStatus                 string
 	CurrentChannelConfigRevision  int64
 	ProviderSlug                  string
@@ -591,6 +593,7 @@ func (q *Queries) GetChannelModelDiscoveryExecutionSnapshot(ctx context.Context,
 		&i.Protocols,
 		&i.AdapterKey,
 		&i.Credential,
+		&i.SupplyForm,
 		&i.ChannelStatus,
 		&i.CurrentChannelConfigRevision,
 		&i.ProviderSlug,
@@ -675,7 +678,7 @@ func (q *Queries) GetChannelModelInventoryContext(ctx context.Context, channelID
 }
 
 const getChannelModelVerificationExecutionSnapshot = `-- name: GetChannelModelVerificationExecutionSnapshot :one
-SELECT r.id, r.channel_id, r.source, r.status, r.channel_config_revision, r.provider_origin_revision, r.provider_status_revision, r.total_count, r.succeeded_count, r.failed_count, r.error_code, r.message, r.created_at, r.started_at, r.completed_at, c.provider_id, c.protocols, c.adapter_key, c.credential,
+SELECT r.id, r.channel_id, r.source, r.status, r.channel_config_revision, r.provider_origin_revision, r.provider_status_revision, r.total_count, r.succeeded_count, r.failed_count, r.error_code, r.message, r.created_at, r.started_at, r.completed_at, c.provider_id, c.protocols, c.adapter_key, c.credential, c.supply_form,
     c.status AS channel_status, c.config_revision AS current_channel_config_revision,
     p.slug AS provider_slug, p.origin,
     p.origin_revision AS current_provider_origin_revision,
@@ -706,6 +709,7 @@ type GetChannelModelVerificationExecutionSnapshotRow struct {
 	Protocols                     []string
 	AdapterKey                    string
 	Credential                    string
+	SupplyForm                    string
 	ChannelStatus                 string
 	CurrentChannelConfigRevision  int64
 	ProviderSlug                  string
@@ -737,6 +741,7 @@ func (q *Queries) GetChannelModelVerificationExecutionSnapshot(ctx context.Conte
 		&i.Protocols,
 		&i.AdapterKey,
 		&i.Credential,
+		&i.SupplyForm,
 		&i.ChannelStatus,
 		&i.CurrentChannelConfigRevision,
 		&i.ProviderSlug,

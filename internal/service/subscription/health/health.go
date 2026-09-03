@@ -42,7 +42,10 @@ type Recorder struct {
 	runtime   RuntimeStore
 	logger    *zap.Logger
 	threshold float64
-	now       func() time.Time
+	// thresholdFn 优先于静态 threshold：接 appsettings 后阈值可热更新，
+	// 每次用量观测现读（观测频率 = 请求频率，读的是内存缓存的设置快照，无额外 IO）。
+	thresholdFn func(ctx context.Context) float64
+	now         func() time.Time
 }
 
 // NewRecorder 创建账号观测记录器。thresholdPercent <= 0 时使用默认 90。
@@ -57,6 +60,22 @@ func NewRecorder(queries Queries, runtime RuntimeStore, logger *zap.Logger, thre
 		queries: queries, runtime: runtime, logger: logger,
 		threshold: thresholdPercent, now: time.Now,
 	}
+}
+
+// WithThresholdProvider 注入阈值热读取（appsettings）；fn 返回 <=0 或 >100 时回落静态默认。
+func (r *Recorder) WithThresholdProvider(fn func(ctx context.Context) float64) *Recorder {
+	r.thresholdFn = fn
+	return r
+}
+
+// thresholdFor 取本次观测生效的阈值。
+func (r *Recorder) thresholdFor(ctx context.Context) float64 {
+	if r.thresholdFn != nil {
+		if v := r.thresholdFn(ctx); v > 0 && v <= 100 {
+			return v
+		}
+	}
+	return r.threshold
 }
 
 // usageSnapshotDoc 是 usage_snapshot 列的持久化形态（迁移 000069 注释约定的 schema）。
@@ -125,7 +144,7 @@ func (r *Recorder) applyUsagePause(ctx context.Context, accountID int64, usage *
 	if r.runtime == nil {
 		return
 	}
-	window, over := r.exceededWindow(usage, now)
+	window, over := r.exceededWindow(ctx, usage, now)
 	if !over {
 		// 快照回落阈值之下（或窗口已重置）：显式恢复，不等旧暂停自然到期——
 		// 付费即时重置的账号应当立即回到调度。
@@ -164,7 +183,8 @@ func (e exceeded) durationMs(now time.Time) int64 {
 }
 
 // exceededWindow 返回触顶的窗口（primary 优先：它先重置，暂停代价最小）。
-func (r *Recorder) exceededWindow(usage *adapter.AccountUsageFacts, now time.Time) (exceeded, bool) {
+func (r *Recorder) exceededWindow(ctx context.Context, usage *adapter.AccountUsageFacts, now time.Time) (exceeded, bool) {
+	threshold := r.thresholdFor(ctx)
 	windows := []struct {
 		name  breakerstore.AccountUsageWindow
 		facts adapter.AccountUsageWindowFacts
@@ -173,7 +193,7 @@ func (r *Recorder) exceededWindow(usage *adapter.AccountUsageFacts, now time.Tim
 		{breakerstore.AccountUsageWindowSecondary, usage.Secondary},
 	}
 	for _, w := range windows {
-		if !w.facts.Present || w.facts.UsedPercent < r.threshold {
+		if !w.facts.Present || w.facts.UsedPercent < threshold {
 			continue
 		}
 		resetAt := w.facts.ResetAtUnix

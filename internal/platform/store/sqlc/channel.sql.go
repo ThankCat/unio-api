@@ -684,6 +684,7 @@ SELECT
     c.response_timeout_ms,
     c.first_token_timeout_ms,
     c.credential,
+    c.supply_form,
     c.concurrency_limit,
     c.created_at,
     c.last_tested_at,
@@ -812,6 +813,7 @@ type ChannelsOpsTableRow struct {
 	ResponseTimeoutMs       pgtype.Int4
 	FirstTokenTimeoutMs     pgtype.Int4
 	Credential              string
+	SupplyForm              string
 	ConcurrencyLimit        pgtype.Int4
 	CreatedAt               pgtype.Timestamptz
 	LastTestedAt            pgtype.Timestamptz
@@ -874,6 +876,7 @@ func (q *Queries) ChannelsOpsTable(ctx context.Context, arg ChannelsOpsTablePara
 			&i.ResponseTimeoutMs,
 			&i.FirstTokenTimeoutMs,
 			&i.Credential,
+			&i.SupplyForm,
 			&i.ConcurrencyLimit,
 			&i.CreatedAt,
 			&i.LastTestedAt,
@@ -1428,6 +1431,19 @@ deleted_channel_model_verification_runs AS (
 ),
 deleted_provider_probe_records AS (
     DELETE FROM provider_probe_records WHERE provider_probe_records.channel_id = $1
+),
+deleted_subscription_ledger AS (
+    DELETE FROM subscription_ledger_entries
+    WHERE subscription_ledger_entries.account_id IN (
+        SELECT subscription_accounts.id FROM subscription_accounts
+        WHERE subscription_accounts.channel_id = $1
+    )
+),
+deleted_subscription_accounts AS (
+    DELETE FROM subscription_accounts WHERE subscription_accounts.channel_id = $1
+),
+deleted_runtime_control_operations AS (
+    DELETE FROM runtime_control_operations WHERE runtime_control_operations.channel_id = $1
 )
 DELETE FROM channels WHERE channels.id = $1
 `
@@ -1448,6 +1464,11 @@ DELETE FROM channels WHERE channels.id = $1
 // 子配置先删除，语句末 channels 的删除不会留下悬挂引用。若 channel 仍被请求/账务历史
 // （request_attempts/request_records/cost_snapshots/settlement_recovery_jobs）引用，
 // 整条语句报 23503 全部回滚，上层降级为 conflict，提示改用停用/保持归档。返回值为 channels 行的受影响数（0 表示 channel 不存在）。
+// 池型渠道的订阅账号及其台账是「渠道自身供给配置」：账号从未服务过请求时随渠道一并清理；
+// 一旦有请求历史（request_records.final_account_id NO ACTION），语句报 23503 整体回滚，
+// 与渠道自身的历史引用同一兜底（上层降级 conflict，提示保持归档）。
+// 两阶段发布的运维审计行（channel_capacity 操作）随渠道清理：
+// 它是运行态控制的内部审计，不是请求/账务事实，硬删渠道时保留无意义且会挡删除（23503）。
 func (q *Queries) DeleteChannelCascade(ctx context.Context, id int64) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteChannelCascade, id)
 	if err != nil {
@@ -1565,6 +1586,7 @@ SELECT
     c.credential,
     c.credential_valid,
     c.config_revision,
+    c.supply_form,
     p.slug AS provider_slug,
     p.origin,
     p.origin_revision,
@@ -1583,6 +1605,7 @@ type GetChannelProbeSnapshotRow struct {
 	Credential      string
 	CredentialValid bool
 	ConfigRevision  int64
+	SupplyForm      string
 	ProviderSlug    string
 	Origin          string
 	OriginRevision  int64
@@ -1590,6 +1613,7 @@ type GetChannelProbeSnapshotRow struct {
 }
 
 // GetChannelProbeSnapshot 一次读取主动检测所需的 Channel、Provider 与 Origin 冻结事实；检测结果只允许按三类 revision CAS 回写。
+// supply_form 决定凭据来源：credential 型用渠道凭据，pool 型必须解析账号身份出站（凭据在账号上）。
 func (q *Queries) GetChannelProbeSnapshot(ctx context.Context, channelID int64) (GetChannelProbeSnapshotRow, error) {
 	row := q.db.QueryRow(ctx, getChannelProbeSnapshot, channelID)
 	var i GetChannelProbeSnapshotRow
@@ -1601,6 +1625,7 @@ func (q *Queries) GetChannelProbeSnapshot(ctx context.Context, channelID int64) 
 		&i.Credential,
 		&i.CredentialValid,
 		&i.ConfigRevision,
+		&i.SupplyForm,
 		&i.ProviderSlug,
 		&i.Origin,
 		&i.OriginRevision,
@@ -2400,6 +2425,56 @@ func (q *Queries) UpdateChannel(ctx context.Context, arg UpdateChannelParams) (C
 		arg.StickyTtlMs,
 		arg.ID,
 	)
+	var i Channel
+	err := row.Scan(
+		&i.ID,
+		&i.ProviderID,
+		&i.Name,
+		&i.AdapterKey,
+		&i.Credential,
+		&i.ConfigRevision,
+		&i.CapacityRevision,
+		&i.Status,
+		&i.Priority,
+		&i.StickyEnabled,
+		&i.StickyTtlMs,
+		&i.ResponseTimeoutMs,
+		&i.FirstTokenTimeoutMs,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.LastTestedAt,
+		&i.LastTestOk,
+		&i.LastTestLatencyMs,
+		&i.LastTestError,
+		&i.CredentialValid,
+		&i.ArchivedAt,
+		&i.ConcurrencyLimit,
+		&i.SupportsOpenaiFast,
+		&i.Protocols,
+		&i.SupplyForm,
+		&i.AccountDefaultConcurrency,
+	)
+	return i, err
+}
+
+const updateChannelAccountDefaultConcurrency = `-- name: UpdateChannelAccountDefaultConcurrency :one
+UPDATE channels
+SET account_default_concurrency = $1,
+    config_revision = config_revision + 1,
+    updated_at = now()
+WHERE id = $2
+RETURNING id, provider_id, name, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast, protocols, supply_form, account_default_concurrency
+`
+
+type UpdateChannelAccountDefaultConcurrencyParams struct {
+	AccountDefaultConcurrency pgtype.Int4
+	ID                        int64
+}
+
+// UpdateChannelAccountDefaultConcurrency 修改池型渠道的账号默认并发（NULL=继承全局，0=不限，正数=上限）。
+// 候选快照按请求 JOIN channels 读取本列，普通列更新即热生效；bump config_revision 让迟到的检测结果按 CAS 落历史。
+func (q *Queries) UpdateChannelAccountDefaultConcurrency(ctx context.Context, arg UpdateChannelAccountDefaultConcurrencyParams) (Channel, error) {
+	row := q.db.QueryRow(ctx, updateChannelAccountDefaultConcurrency, arg.AccountDefaultConcurrency, arg.ID)
 	var i Channel
 	err := row.Scan(
 		&i.ID,

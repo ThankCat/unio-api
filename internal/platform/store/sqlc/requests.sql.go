@@ -87,24 +87,25 @@ WHERE ($1::bigint IS NULL OR user_id = $1::bigint)
   AND ($3::text IS NULL OR request_id = $3::text)
   AND ($4::text IS NULL OR status = $4::text)
   AND ($5::text IS NULL OR requested_model_id ILIKE '%' || $5::text || '%')
+  AND ($6::bigint IS NULL OR final_account_id = $6::bigint)
   AND (
-      ($6::bigint IS NULL AND $7::bigint IS NULL AND $8::text IS NULL)
+      ($7::bigint IS NULL AND $8::bigint IS NULL AND $9::text IS NULL)
       OR EXISTS (
           SELECT 1
           FROM request_attempts a
           WHERE a.request_record_id = request_records.id
-            AND ($6::bigint IS NULL OR a.channel_id = $6::bigint)
-            AND ($7::bigint IS NULL OR a.id = $7::bigint)
+            AND ($7::bigint IS NULL OR a.channel_id = $7::bigint)
+            AND ($8::bigint IS NULL OR a.id = $8::bigint)
             AND (
-                $8::text IS NULL
-                OR ($8::text = 'ttft' AND a.ttft_scoring_sample)
-                OR ($8::text = 'error' AND a.error_scoring_sample)
-                OR ($8::text = 'any' AND (a.ttft_scoring_sample OR a.error_scoring_sample))
+                $9::text IS NULL
+                OR ($9::text = 'ttft' AND a.ttft_scoring_sample)
+                OR ($9::text = 'error' AND a.error_scoring_sample)
+                OR ($9::text = 'any' AND (a.ttft_scoring_sample OR a.error_scoring_sample))
             )
       )
   )
-  AND ($9::timestamptz IS NULL OR created_at >= $9::timestamptz)
-  AND ($10::timestamptz IS NULL OR created_at < $10::timestamptz)
+  AND ($10::timestamptz IS NULL OR created_at >= $10::timestamptz)
+  AND ($11::timestamptz IS NULL OR created_at < $11::timestamptz)
 `
 
 type CountRequestRecordsParams struct {
@@ -113,6 +114,7 @@ type CountRequestRecordsParams struct {
 	RequestID     pgtype.Text
 	Status        pgtype.Text
 	Model         pgtype.Text
+	AccountID     pgtype.Int8
 	ChannelID     pgtype.Int8
 	AttemptID     pgtype.Int8
 	ScoringSample pgtype.Text
@@ -128,6 +130,7 @@ func (q *Queries) CountRequestRecords(ctx context.Context, arg CountRequestRecor
 		arg.RequestID,
 		arg.Status,
 		arg.Model,
+		arg.AccountID,
 		arg.ChannelID,
 		arg.AttemptID,
 		arg.ScoringSample,
@@ -966,6 +969,7 @@ WITH filtered_page AS (
       AND ($8::text IS NULL OR r.request_id = $8::text)
       AND ($9::text IS NULL OR r.status = $9::text)
       AND ($10::text IS NULL OR r.requested_model_id ILIKE '%' || $10::text || '%')
+      AND ($11::bigint IS NULL OR r.final_account_id = $11::bigint)
       AND (
           ($1::bigint IS NULL AND $2::bigint IS NULL AND $3::text IS NULL)
           OR EXISTS (
@@ -982,8 +986,8 @@ WITH filtered_page AS (
                 )
           )
       )
-      AND ($11::timestamptz IS NULL OR r.created_at >= $11::timestamptz)
-      AND ($12::timestamptz IS NULL OR r.created_at < $12::timestamptz)
+      AND ($12::timestamptz IS NULL OR r.created_at >= $12::timestamptz)
+      AND ($13::timestamptz IS NULL OR r.created_at < $13::timestamptz)
     ORDER BY
       CASE WHEN COALESCE($4::text, 'created_at') IN ('', 'created_at') AND COALESCE($5::bool, true) THEN r.created_at END DESC NULLS LAST,
       CASE WHEN COALESCE($4::text, 'created_at') IN ('', 'created_at') AND NOT COALESCE($5::bool, true) THEN r.created_at END ASC NULLS LAST,
@@ -996,7 +1000,7 @@ WITH filtered_page AS (
       CASE WHEN $4::text = 'stream' AND COALESCE($5::bool, false) THEN r.stream END DESC NULLS LAST,
       CASE WHEN $4::text = 'stream' AND NOT COALESCE($5::bool, false) THEN r.stream END ASC NULLS LAST,
       r.id DESC
-    LIMIT $14 OFFSET $13
+    LIMIT $15 OFFSET $14
 )
 SELECT
     fp.total_count,
@@ -1014,6 +1018,10 @@ SELECT
     r.status,
     r.final_provider_id,
     r.final_channel_id,
+    r.final_account_id,
+    COALESCE((
+        SELECT sa.display_name FROM subscription_accounts sa WHERE sa.id = r.final_account_id
+    ), '')::text AS final_account_name,
     r.error_code,
     r.error_message,
     r.delivery_status,
@@ -1184,6 +1192,7 @@ type ListRequestRecordsPageParams struct {
 	RequestID     pgtype.Text
 	Status        pgtype.Text
 	Model         pgtype.Text
+	AccountID     pgtype.Int8
 	FromTime      pgtype.Timestamptz
 	ToTime        pgtype.Timestamptz
 	PageOffset    int32
@@ -1206,6 +1215,8 @@ type ListRequestRecordsPageRow struct {
 	Status                          string
 	FinalProviderID                 pgtype.Int8
 	FinalChannelID                  pgtype.Int8
+	FinalAccountID                  pgtype.Int8
+	FinalAccountName                string
 	ErrorCode                       pgtype.Text
 	ErrorMessage                    pgtype.Text
 	DeliveryStatus                  string
@@ -1306,6 +1317,7 @@ func (q *Queries) ListRequestRecordsPage(ctx context.Context, arg ListRequestRec
 		arg.RequestID,
 		arg.Status,
 		arg.Model,
+		arg.AccountID,
 		arg.FromTime,
 		arg.ToTime,
 		arg.PageOffset,
@@ -1334,6 +1346,8 @@ func (q *Queries) ListRequestRecordsPage(ctx context.Context, arg ListRequestRec
 			&i.Status,
 			&i.FinalProviderID,
 			&i.FinalChannelID,
+			&i.FinalAccountID,
+			&i.FinalAccountName,
 			&i.ErrorCode,
 			&i.ErrorMessage,
 			&i.DeliveryStatus,

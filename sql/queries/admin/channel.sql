@@ -316,8 +316,19 @@ FROM channels
 WHERE id = $1
 LIMIT 1;
 
+-- name: UpdateChannelAccountDefaultConcurrency :one
+-- UpdateChannelAccountDefaultConcurrency 修改池型渠道的账号默认并发（NULL=继承全局，0=不限，正数=上限）。
+-- 候选快照按请求 JOIN channels 读取本列，普通列更新即热生效；bump config_revision 让迟到的检测结果按 CAS 落历史。
+UPDATE channels
+SET account_default_concurrency = sqlc.narg(account_default_concurrency),
+    config_revision = config_revision + 1,
+    updated_at = now()
+WHERE id = sqlc.arg(id)
+RETURNING *;
+
 -- name: GetChannelProbeSnapshot :one
 -- GetChannelProbeSnapshot 一次读取主动检测所需的 Channel、Provider 与 Origin 冻结事实；检测结果只允许按三类 revision CAS 回写。
+-- supply_form 决定凭据来源：credential 型用渠道凭据，pool 型必须解析账号身份出站（凭据在账号上）。
 SELECT
     c.id AS channel_id,
     c.provider_id,
@@ -326,6 +337,7 @@ SELECT
     c.credential,
     c.credential_valid,
     c.config_revision,
+    c.supply_form,
     p.slug AS provider_slug,
     p.origin,
     p.origin_revision,
@@ -644,6 +656,24 @@ deleted_channel_model_verification_runs AS (
 ),
 deleted_provider_probe_records AS (
     DELETE FROM provider_probe_records WHERE provider_probe_records.channel_id = sqlc.arg(id)
+),
+-- 池型渠道的订阅账号及其台账是「渠道自身供给配置」：账号从未服务过请求时随渠道一并清理；
+-- 一旦有请求历史（request_records.final_account_id NO ACTION），语句报 23503 整体回滚，
+-- 与渠道自身的历史引用同一兜底（上层降级 conflict，提示保持归档）。
+deleted_subscription_ledger AS (
+    DELETE FROM subscription_ledger_entries
+    WHERE subscription_ledger_entries.account_id IN (
+        SELECT subscription_accounts.id FROM subscription_accounts
+        WHERE subscription_accounts.channel_id = sqlc.arg(id)
+    )
+),
+deleted_subscription_accounts AS (
+    DELETE FROM subscription_accounts WHERE subscription_accounts.channel_id = sqlc.arg(id)
+),
+-- 两阶段发布的运维审计行（channel_capacity 操作）随渠道清理：
+-- 它是运行态控制的内部审计，不是请求/账务事实，硬删渠道时保留无意义且会挡删除（23503）。
+deleted_runtime_control_operations AS (
+    DELETE FROM runtime_control_operations WHERE runtime_control_operations.channel_id = sqlc.arg(id)
 )
 DELETE FROM channels WHERE channels.id = sqlc.arg(id);
 
@@ -666,6 +696,7 @@ SELECT
     c.response_timeout_ms,
     c.first_token_timeout_ms,
     c.credential,
+    c.supply_form,
     c.concurrency_limit,
     c.created_at,
     c.last_tested_at,

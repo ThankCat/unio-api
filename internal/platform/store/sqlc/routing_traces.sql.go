@@ -795,6 +795,7 @@ INSERT INTO routing_decision_traces (
     request_record_id, mode, requested_model_id, protocol, endpoint,
     pool_size, algorithm_version,
     sticky_key_present, sticky_before_channel_id, sticky_before_version,
+    sticky_before_account_id,
     sticky_action, sticky_reason, sticky_after_channel_id, sticky_after_version,
     trace_status, schema_version, eligible_count, baseline_order, actual_scan_order,
     attempted_channel_ids, selected_channel_id, fallback_count, final_result,
@@ -805,19 +806,21 @@ INSERT INTO routing_decision_traces (
     $3, $4, $5,
     $6, $7,
     $8, $9,
-    $10, $11, $12,
-    $13, $14,
-    $15, $16, $17,
-    $18, $19, $20,
-    $21, $22, $23,
-    $24, $25, $26,
-    $27, $28
+    $10, $11,
+    $12, $13,
+    $14, $15,
+    $16, $17, $18,
+    $19, $20, $21,
+    $22, $23, $24,
+    $25, $26, $27,
+    $28, $29
 )
 ON CONFLICT (request_record_id) DO UPDATE SET
     pool_size = EXCLUDED.pool_size,
     sticky_key_present = EXCLUDED.sticky_key_present,
     sticky_before_channel_id = EXCLUDED.sticky_before_channel_id,
     sticky_before_version = EXCLUDED.sticky_before_version,
+    sticky_before_account_id = EXCLUDED.sticky_before_account_id,
     sticky_action = EXCLUDED.sticky_action,
     sticky_reason = EXCLUDED.sticky_reason,
     sticky_after_channel_id = EXCLUDED.sticky_after_channel_id,
@@ -854,6 +857,7 @@ type UpsertRoutingDecisionTraceParams struct {
 	StickyKeyPresent      bool
 	StickyBeforeChannelID pgtype.Int8
 	StickyBeforeVersion   pgtype.Int8
+	StickyBeforeAccountID pgtype.Int8
 	StickyAction          pgtype.Text
 	StickyReason          pgtype.Text
 	StickyAfterChannelID  pgtype.Int8
@@ -889,6 +893,7 @@ func (q *Queries) UpsertRoutingDecisionTrace(ctx context.Context, arg UpsertRout
 		arg.StickyKeyPresent,
 		arg.StickyBeforeChannelID,
 		arg.StickyBeforeVersion,
+		arg.StickyBeforeAccountID,
 		arg.StickyAction,
 		arg.StickyReason,
 		arg.StickyAfterChannelID,

@@ -132,6 +132,7 @@ type tracePayloadSticky struct {
 	KeyPresent         bool   `json:"key_present"`
 	BeforeChannelID    int64  `json:"before_channel_id,omitempty"`
 	BeforeVersion      int64  `json:"before_version,omitempty"`
+	BeforeAccountID    int64  `json:"before_account_id,omitempty"`
 	Action             string `json:"action,omitempty"`
 	Reason             string `json:"reason,omitempty"`
 	AfterChannelID     int64  `json:"after_channel_id,omitempty"`
@@ -336,7 +337,8 @@ func (r *RoutingTraceRecorder) record(ctx context.Context, in RoutingDecisionTra
 		AttemptedAccount: nonNilInt64s(in.AttemptedAccountIDs),
 		Sticky: tracePayloadSticky{
 			KeyPresent: audit.KeyPresent, BeforeChannelID: audit.BeforeChannelID,
-			BeforeVersion: audit.BeforeVersion, Action: string(audit.Action), Reason: audit.Reason,
+			BeforeVersion: audit.BeforeVersion, BeforeAccountID: audit.BeforeAccountID,
+			Action: string(audit.Action), Reason: audit.Reason,
 			AfterChannelID: audit.AfterChannelID, AfterVersion: audit.AfterVersion,
 			Pinned: in.Plan.StickyPinned, PinnedNonPreferred: in.Plan.StickyPinnedNonPreferred,
 		},
@@ -403,6 +405,7 @@ func (r *RoutingTraceRecorder) record(ctx context.Context, in RoutingDecisionTra
 		StickyKeyPresent:      audit.KeyPresent,
 		StickyBeforeChannelID: optionalTraceInt64(audit.BeforeChannelID),
 		StickyBeforeVersion:   optionalTraceInt64(audit.BeforeVersion),
+		StickyBeforeAccountID: optionalTraceInt64(audit.BeforeAccountID),
 		StickyAction:          optionalTraceText(string(audit.Action)),
 		StickyReason:          optionalTraceText(audit.Reason),
 		StickyAfterChannelID:  optionalTraceInt64(audit.AfterChannelID),

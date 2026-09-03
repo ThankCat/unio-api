@@ -29,6 +29,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 	adminchannel "github.com/ThankCat/unio-gateway/internal/service/admin/channel"
 	"github.com/ThankCat/unio-gateway/internal/service/appsettings"
+	"github.com/ThankCat/unio-gateway/internal/service/subscription"
 )
 
 // channelModelStatusEnabled 是 channel_models 启用状态值（与 DB 约束一致）。
@@ -84,6 +85,9 @@ type TestInput struct {
 	Model string
 	// Source 是本次检测来源（manual/worker）；留空按 manual 处理。决定日志写入口径（R1(b)）。
 	Source string
+	// AccountID 可选（仅池型渠道）：按号检测——以指定账号身份出站。0 表示自动选号
+	// （enabled 中 priority 最小者，与真实调度同向）。credential 型渠道传非零值报 400。
+	AccountID int64
 }
 
 // TestResult 是一次渠道检测结果。它始终代表「检测已成功执行」；渠道是否健康看 Success。
@@ -96,8 +100,11 @@ type TestResult struct {
 	Message       string // 成功为空；失败为可读原因（归类后的中文说明）
 	UpstreamError string // 失败时上游返回的原始错误体截断快照；成功/无响应体（连不上/超时）时为空
 	TestedAt      time.Time
-	facts         *adapter.ResponseFacts
-	accountingErr error
+	// TestedAccountID/TestedAccountName：池型渠道本次检测使用的账号（credential 型恒为零值）。
+	TestedAccountID   int64
+	TestedAccountName string
+	facts             *adapter.ResponseFacts
+	accountingErr     error
 }
 
 // PermissionRecheckInput 固化 403 发生时的内部绑定身份与三类 revision。
@@ -117,6 +124,11 @@ type PermissionRecheckResult struct {
 	Stale bool
 }
 
+// AccountIdentityResolver 为池型渠道检测解析账号出站身份（生产实现 subscription.ProbeIdentityResolver）。
+type AccountIdentityResolver interface {
+	ResolveProbeIdentity(ctx context.Context, channelID, accountID int64) (subscription.ProbeIdentity, error)
+}
+
 // Service 编排渠道主动检测：选模型 → 构造 Runtime → 发探测请求 → 归类 → 落库。
 type Service struct {
 	store      Store
@@ -124,6 +136,7 @@ type Service struct {
 	settings   *appsettings.SettingsStore
 	metrics    CredentialRotationMetrics
 	accountant ProbeAccountant
+	accounts   AccountIdentityResolver
 }
 
 // CredentialRotationMetrics records only the bounded five-state verification result.
@@ -151,6 +164,12 @@ func (s *Service) SetMetrics(recorder CredentialRotationMetrics) {
 	}
 }
 
+// WithAccountResolver 接入池型渠道的账号身份解析（bootstrap 注入）。
+func (s *Service) WithAccountResolver(resolver AccountIdentityResolver) *Service {
+	s.accounts = resolver
+	return s
+}
+
 type probeSnapshot struct {
 	ChannelID              int64
 	ProviderID             int64
@@ -159,10 +178,22 @@ type probeSnapshot struct {
 	Credential             string
 	CredentialValid        bool
 	ConfigRevision         int64
+	SupplyForm             string
 	ProviderSlug           string
 	Origin                 string
 	OriginRevision         int64
 	ProviderStatusRevision int64
+
+	// Account 是池型渠道本次检测冻结的账号身份（credential 型恒零值）；
+	// 池型时 Credential 已换成该账号的 access token。
+	Account corechannel.AccountIdentity
+	// AccountDisplayName 供检测结果回显（哪个号被测了）。
+	AccountDisplayName string
+}
+
+// isPool 判断快照是否池型渠道。
+func (p probeSnapshot) isPool() bool {
+	return corechannel.SupplyForm(p.SupplyForm).IsPool()
 }
 
 // Test 对指定渠道执行一次主动检测。读取、探测与结果回写均冻结三类 revision；迟到结果只写历史日志。
@@ -179,6 +210,9 @@ func (s *Service) Test(ctx context.Context, in TestInput) (TestResult, error) {
 		return TestResult{}, storeFailed(err, "get channel probe snapshot")
 	}
 	snapshot := probeSnapshotFromRow(row)
+	if err := s.attachProbeAccount(ctx, &snapshot, in.AccountID); err != nil {
+		return TestResult{}, err
+	}
 	workCtx, cancel := s.detachedOperationContext(ctx)
 	defer cancel()
 
@@ -189,10 +223,40 @@ func (s *Service) Test(ctx context.Context, in TestInput) (TestResult, error) {
 	if result.accountingErr != nil {
 		return TestResult{}, result.accountingErr
 	}
+	// 池型失败带上被测账号名：检测日志（last_test_error / channel_test_logs.message 只存失败 Message）
+	// 必须能回答「坏的是哪个号」，否则排障只能靠猜。成功不写 Message，避免污染 last_test_error。
+	if snapshot.isPool() && !result.Success && result.Message != "" && snapshot.AccountDisplayName != "" {
+		result.Message = "账号「" + snapshot.AccountDisplayName + "」：" + result.Message
+	}
 	if _, err := s.applyProbeResult(workCtx, snapshot, in.Source, result); err != nil {
 		return TestResult{}, storeFailed(err, "persist channel probe result")
 	}
 	return result, nil
+}
+
+// attachProbeAccount 为池型渠道解析并冻结检测账号身份；credential 型校验不带账号维度。
+func (s *Service) attachProbeAccount(ctx context.Context, snapshot *probeSnapshot, accountID int64) error {
+	if !snapshot.isPool() {
+		if accountID != 0 {
+			return invalidArgument("account_id", "credential 型渠道没有账号维度，不能按号检测")
+		}
+		return nil
+	}
+	if s.accounts == nil {
+		return storeFailed(errors.New("account resolver is unavailable"), "resolve probe account")
+	}
+	identity, err := s.accounts.ResolveProbeIdentity(ctx, snapshot.ChannelID, accountID)
+	if err != nil {
+		return err
+	}
+	snapshot.Credential = identity.AccessToken
+	snapshot.Account = corechannel.AccountIdentity{
+		ID:                identity.AccountID,
+		UpstreamAccountID: identity.UpstreamAccountID,
+		ProxyURL:          identity.ProxyURL,
+	}
+	snapshot.AccountDisplayName = identity.DisplayName
+	return nil
 }
 
 // RecheckPermission 复用渠道检测 adapter 链路，对指定内部 model_id 的当前绑定发一次真实探测。
@@ -214,6 +278,15 @@ func (s *Service) RecheckPermission(ctx context.Context, in PermissionRecheckInp
 			if err := s.insertPermissionRecheckAudit(ctx, in, result); err != nil {
 				return PermissionRecheckResult{}, err
 			}
+		}
+		return result, nil
+	}
+	// 池型渠道的 403 复检同样必须以账号身份出站；池空（无 enabled 账号）时复检无法执行，按 stale 审计收口。
+	if err := s.attachProbeAccount(ctx, &snapshot, 0); err != nil {
+		result := PermissionRecheckResult{Stale: true, Probe: stalePermissionProbe(binding.UpstreamModel)}
+		result.Probe.Message = "池内无可用账号，权限复检无法执行：" + err.Error()
+		if auditErr := s.insertPermissionRecheckAudit(ctx, in, result); auditErr != nil {
+			return PermissionRecheckResult{}, auditErr
 		}
 		return result, nil
 	}
@@ -325,6 +398,7 @@ func probeSnapshotFromRow(row sqlc.GetChannelProbeSnapshotRow) probeSnapshot {
 	return probeSnapshot{
 		ChannelID: row.ChannelID, ProviderID: row.ProviderID, Protocol: primaryProtocol(row.Protocols), AdapterKey: row.AdapterKey,
 		Credential: row.Credential, CredentialValid: row.CredentialValid, ConfigRevision: row.ConfigRevision,
+		SupplyForm:   row.SupplyForm,
 		ProviderSlug: row.ProviderSlug, Origin: row.Origin,
 		OriginRevision: row.OriginRevision, ProviderStatusRevision: row.StatusRevision,
 	}
@@ -367,6 +441,8 @@ func (s *Service) executeProbeCandidates(ctx context.Context, snapshot probeSnap
 		APIKey: strings.TrimSpace(snapshot.Credential), ProviderSlug: snapshot.ProviderSlug,
 		// 渠道巡检是非流式探测，只需要响应超时；探测超时独立于业务默认值。
 		ResponseTimeout: probeTimeout,
+		// 池型渠道以账号身份出站（access token + 上游账号头 + 账号代理）；credential 型为零值。
+		Account: snapshot.Account,
 	}
 	var result TestResult
 	for i, candidate := range candidates {
@@ -380,6 +456,7 @@ func (s *Service) executeProbeCandidates(ctx context.Context, snapshot probeSnap
 		result = TestResult{
 			LatencyMs: latency.Milliseconds(), TestedModel: upstreamModel,
 			HTTPStatus: probeResult.StatusCode, TestedAt: time.Now().UTC(), facts: probeResult.Facts,
+			TestedAccountID: snapshot.Account.ID, TestedAccountName: snapshot.AccountDisplayName,
 		}
 		if probeErr == nil {
 			result.Success = true
@@ -490,6 +567,11 @@ func (s *Service) applyProbeResult(ctx context.Context, snapshot probeSnapshot, 
 	}
 	nextCredentialValid := pgtype.Bool{}
 	switch {
+	// 池型渠道不持渠道级凭据：credential_valid 是路由候选的硬过滤（gateway 候选 SQL
+	// `AND c.credential_valid`），而池型检测失败只说明「被测的那个账号」有问题——
+	// 账号级健康由请求路径的账号反馈隔离。这里绝不能因一个账号 401 把整条池踢出路由。
+	case snapshot.isPool():
+		// 保持 NULL：不动 credential_valid（池型建渠道时恒 true）。
 	case result.Success:
 		nextCredentialValid = pgtype.Bool{Bool: true, Valid: true}
 	case result.ErrorCode == ErrCodeCredentialInvalid:

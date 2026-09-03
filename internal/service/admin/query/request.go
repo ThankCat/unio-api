@@ -34,6 +34,8 @@ type RequestListParams struct {
 	Model         string
 	ChannelID     *int64
 	AttemptID     *int64
+	// AccountID 按最终命中的订阅账号过滤（账号下钻）；nil 不过滤。
+	AccountID     *int64
 	ScoringSample string
 	From          *time.Time
 	To            *time.Time
@@ -59,6 +61,8 @@ type RequestSummary struct {
 	Status                string
 	FinalProviderID       *int64
 	FinalChannelID        *int64
+	FinalAccountID        *int64
+	FinalAccountName      string
 	ErrorCode             *string
 	ErrorMessage          *string
 	DeliveryStatus        string
@@ -343,6 +347,7 @@ func (s *RequestService) List(ctx context.Context, params RequestListParams) ([]
 		Model:         textNarg(params.Model),
 		ChannelID:     int8Narg(params.ChannelID),
 		AttemptID:     int8Narg(params.AttemptID),
+		AccountID:     int8Narg(params.AccountID),
 		ScoringSample: textNarg(params.ScoringSample),
 		FromTime:      tsNarg(params.From),
 		ToTime:        tsNarg(params.To),
@@ -368,6 +373,7 @@ func (s *RequestService) List(ctx context.Context, params RequestListParams) ([]
 			Model:         listParams.Model,
 			ChannelID:     listParams.ChannelID,
 			AttemptID:     listParams.AttemptID,
+			AccountID:     listParams.AccountID,
 			ScoringSample: listParams.ScoringSample,
 			FromTime:      listParams.FromTime,
 			ToTime:        listParams.ToTime,
@@ -505,6 +511,8 @@ func toRequestListItem(r sqlc.ListRequestRecordsPageRow) RequestListItem {
 			Status:                r.Status,
 			FinalProviderID:       int8Ptr(r.FinalProviderID),
 			FinalChannelID:        int8Ptr(r.FinalChannelID),
+			FinalAccountID:        int8Ptr(r.FinalAccountID),
+			FinalAccountName:      r.FinalAccountName,
 			ErrorCode:             textPtr(r.ErrorCode),
 			ErrorMessage:          textPtr(r.ErrorMessage),
 			DeliveryStatus:        r.DeliveryStatus,

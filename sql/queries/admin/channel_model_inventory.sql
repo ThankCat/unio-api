@@ -46,6 +46,7 @@ SELECT
     c.protocols,
     c.adapter_key,
     c.credential,
+    c.supply_form,
     c.status AS channel_status,
     c.config_revision AS current_channel_config_revision,
     p.slug AS provider_slug,
@@ -251,7 +252,7 @@ WHERE r.id = candidate.id
 RETURNING r.*;
 
 -- name: GetChannelModelVerificationExecutionSnapshot :one
-SELECT r.*, c.provider_id, c.protocols, c.adapter_key, c.credential,
+SELECT r.*, c.provider_id, c.protocols, c.adapter_key, c.credential, c.supply_form,
     c.status AS channel_status, c.config_revision AS current_channel_config_revision,
     p.slug AS provider_slug, p.origin,
     p.origin_revision AS current_provider_origin_revision,

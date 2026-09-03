@@ -48,6 +48,7 @@ type Store interface {
 	GetProvider(ctx context.Context, id int64) (sqlc.Provider, error)
 	ListChannelsPage(ctx context.Context, arg sqlc.ListChannelsPageParams) ([]sqlc.ListChannelsPageRow, error)
 	CountChannels(ctx context.Context, arg sqlc.CountChannelsParams) (int64, error)
+	UpdateChannelAccountDefaultConcurrency(ctx context.Context, arg sqlc.UpdateChannelAccountDefaultConcurrencyParams) (sqlc.Channel, error)
 	GetChannel(ctx context.Context, id int64) (sqlc.Channel, error)
 	CreateChannel(ctx context.Context, arg sqlc.CreateChannelParams) (sqlc.Channel, error)
 	UpdateChannel(ctx context.Context, arg sqlc.UpdateChannelParams) (sqlc.Channel, error)
@@ -223,6 +224,10 @@ type UpdateInput struct {
 	// CapacityProvided 区分「字段缺省=保持不变」与「显式 null=继承全局默认」。
 	CapacityProvided bool
 	ConcurrencyLimit *int64
+	// AccountDefaultConcurrencyProvided 区分「缺省=保持不变」与「显式 null=继承全局默认」；
+	// 仅池型渠道可设。候选快照按请求读库，改动即刻生效，无需容量重发布。
+	AccountDefaultConcurrencyProvided bool
+	AccountDefaultConcurrency         *int64
 	// Confirmation 是暂停 Channel 流量前的客户影响确认；不允许借此修改 Offering。
 	Confirmation supply.Confirmation
 }
@@ -572,6 +577,25 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Channel, error) {
 		return Channel{}, invalidArgument("supports_openai_fast", "OpenAI Fast is only available for OpenAI channels")
 	}
 	in.SupportsOpenAIFast = &desiredSupportsOpenAIFast
+
+	// 账号默认并发（仅池型）：候选快照按请求读库，普通列更新即热生效。
+	// 先于容量/停用分支执行，保证与其它字段组合提交时任一路径都不丢。
+	if in.AccountDefaultConcurrencyProvided {
+		if cur.SupplyForm != SupplyFormPool {
+			return Channel{}, invalidArgument("account_default_concurrency", "仅池型渠道可配账号默认并发")
+		}
+		if in.AccountDefaultConcurrency != nil && *in.AccountDefaultConcurrency < 0 {
+			return Channel{}, invalidArgument("account_default_concurrency", "账号默认并发不可为负")
+		}
+		updated, adcErr := s.store.UpdateChannelAccountDefaultConcurrency(ctx, sqlc.UpdateChannelAccountDefaultConcurrencyParams{
+			ID:                        in.ID,
+			AccountDefaultConcurrency: rateLimitParam(in.AccountDefaultConcurrency),
+		})
+		if adcErr != nil {
+			return Channel{}, storeFailed(adcErr, "update channel account default concurrency")
+		}
+		cur = updated
+	}
 	provider, err := s.store.GetProvider(ctx, cur.ProviderID)
 	if err != nil {
 		return Channel{}, storeFailed(err, "load provider for channel")
@@ -856,6 +880,18 @@ func (s *Service) RotateCredential(ctx context.Context, in RotateCredentialInput
 	in.Credential = strings.TrimSpace(in.Credential)
 	if in.Credential == "" {
 		return RotateCredentialResult{}, invalidArgument("credential", "credential is required")
+	}
+	// 池型渠道不持渠道级凭据（不变量）：凭据在账号上，经导入/重新授权轮换。
+	// 不挡这里的话，塞进来的 credential 会让「池型渠道 credential 恒空」的全部假设失效。
+	cur, err := s.store.GetChannel(ctx, in.ID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return RotateCredentialResult{}, notFound("channel not found")
+		}
+		return RotateCredentialResult{}, storeFailed(err, "get channel for credential rotation")
+	}
+	if cur.SupplyForm == SupplyFormPool {
+		return RotateCredentialResult{}, invalidArgument("credential", "池型渠道不持渠道级凭据；请在账号页签导入或重新授权账号")
 	}
 	if s.credentialRotator == nil {
 		return RotateCredentialResult{}, storeFailed(errors.New("credential rotator is unavailable"), "rotate channel credential")

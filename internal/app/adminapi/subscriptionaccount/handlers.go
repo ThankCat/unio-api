@@ -6,7 +6,8 @@
 //	POST   /channels/{id}/accounts/import          批量文件导入（sub2api-data v1）
 //	POST   /channels/{id}/accounts/oauth/start     OAuth 导入：生成授权链接
 //	POST   /channels/{id}/accounts/oauth/complete  OAuth 导入：回填 code 完成落库
-//	PATCH  /subscription-accounts/{id}             调度参数编辑（并发/优先级/代理/备注名）
+//	PATCH  /subscription-accounts/{id}             调度参数编辑（并发/优先级/代理/备注名/订阅到期）
+//	DELETE /subscription-accounts/{id}             物理删除（仅归档账号；有请求历史则拒绝）
 //	POST   /subscription-accounts/{id}/status      启停/归档/恢复（含供给联动确认门）
 //	POST   /subscription-accounts/{id}/refresh-token 手动令牌刷新
 //	GET    /subscription-accounts/{id}/ledger      订阅台账
@@ -43,10 +44,12 @@ func Register(r chi.Router, service *subscriptionaccount.Service) {
 	}
 	h := &Handler{service: service}
 	r.Get("/channels/{id}/accounts", h.list)
+	r.Get("/monitoring/account-pools", h.poolsOverview)
 	r.Post("/channels/{id}/accounts/import", h.importFile)
 	r.Post("/channels/{id}/accounts/oauth/start", h.oauthStart)
 	r.Post("/channels/{id}/accounts/oauth/complete", h.oauthComplete)
 	r.Patch("/subscription-accounts/{id}", h.updateConfig)
+	r.Delete("/subscription-accounts/{id}", h.deleteAccount)
 	r.Post("/subscription-accounts/{id}/status", h.setStatus)
 	r.Post("/subscription-accounts/{id}/refresh-token", h.refreshToken)
 	r.Get("/subscription-accounts/{id}/ledger", h.listLedger)
@@ -76,6 +79,15 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	adminhttp.WriteData(w, http.StatusOK, result)
+}
+
+func (h *Handler) poolsOverview(w http.ResponseWriter, r *http.Request) {
+	pools, err := h.service.PoolsOverview(r.Context())
+	if err != nil {
+		adminhttp.WriteServiceError(w, err)
+		return
+	}
+	adminhttp.WriteData(w, http.StatusOK, map[string]any{"pools": pools})
 }
 
 func (h *Handler) importFile(w http.ResponseWriter, r *http.Request) {
@@ -158,12 +170,17 @@ func (h *Handler) oauthComplete(w http.ResponseWriter, r *http.Request) {
 		))
 		return
 	}
-	account, err := h.service.CompleteOAuth(r.Context(), req.SessionID, req.Code, req.State)
+	result, err := h.service.CompleteOAuth(r.Context(), req.SessionID, req.Code, req.State)
 	if err != nil {
 		adminhttp.WriteServiceError(w, err)
 		return
 	}
-	adminhttp.WriteData(w, http.StatusCreated, account)
+	// 重新授权语义上是更新既有账号，回 200；新导入回 201。
+	status := http.StatusCreated
+	if result.Reauthorized {
+		status = http.StatusOK
+	}
+	adminhttp.WriteData(w, status, result)
 }
 
 type updateConfigRequest struct {
@@ -171,6 +188,8 @@ type updateConfigRequest struct {
 	ProxyURL         string `json:"proxy_url"`
 	ConcurrencyLimit *int64 `json:"concurrency_limit"`
 	Priority         int32  `json:"priority"`
+	// SubscriptionExpiresAt 是订阅到期时间（RFC3339）；空串/缺省表示清除（未知）。
+	SubscriptionExpiresAt string `json:"subscription_expires_at"`
 }
 
 func (h *Handler) updateConfig(w http.ResponseWriter, r *http.Request) {
@@ -186,12 +205,24 @@ func (h *Handler) updateConfig(w http.ResponseWriter, r *http.Request) {
 		))
 		return
 	}
+	var expiresAt *time.Time
+	if req.SubscriptionExpiresAt != "" {
+		parsed, parseErr := time.Parse(time.RFC3339, req.SubscriptionExpiresAt)
+		if parseErr != nil {
+			adminhttp.WriteServiceError(w, failure.New(
+				failure.CodeAdminInvalidArgument, failure.WithMessage("subscription_expires_at must be RFC3339"),
+			))
+			return
+		}
+		expiresAt = &parsed
+	}
 	account, err := h.service.UpdateConfig(r.Context(), subscriptionaccount.UpdateConfigInput{
-		AccountID:        accountID,
-		DisplayName:      req.DisplayName,
-		ProxyURL:         req.ProxyURL,
-		ConcurrencyLimit: req.ConcurrencyLimit,
-		Priority:         req.Priority,
+		AccountID:             accountID,
+		DisplayName:           req.DisplayName,
+		ProxyURL:              req.ProxyURL,
+		ConcurrencyLimit:      req.ConcurrencyLimit,
+		Priority:              req.Priority,
+		SubscriptionExpiresAt: expiresAt,
 	})
 	if err != nil {
 		adminhttp.WriteServiceError(w, err)
@@ -204,6 +235,8 @@ type setStatusRequest struct {
 	Action              string `json:"action"`
 	DisabledReason      string `json:"disabled_reason"`
 	ConfirmSupplyImpact bool   `json:"confirm_supply_impact"`
+	// ExpectedImpactFingerprint 与渠道停用确认同构：预览返回的指纹原样带回。
+	ExpectedImpactFingerprint string `json:"expected_impact_fingerprint"`
 }
 
 func (h *Handler) setStatus(w http.ResponseWriter, r *http.Request) {
@@ -220,16 +253,30 @@ func (h *Handler) setStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	account, err := h.service.SetStatus(r.Context(), subscriptionaccount.SetStatusInput{
-		AccountID:           accountID,
-		Action:              req.Action,
-		DisabledReason:      req.DisabledReason,
-		ConfirmSupplyImpact: req.ConfirmSupplyImpact,
+		AccountID:                 accountID,
+		Action:                    req.Action,
+		DisabledReason:            req.DisabledReason,
+		ConfirmSupplyImpact:       req.ConfirmSupplyImpact,
+		ExpectedImpactFingerprint: req.ExpectedImpactFingerprint,
 	})
 	if err != nil {
 		adminhttp.WriteServiceError(w, err)
 		return
 	}
 	adminhttp.WriteData(w, http.StatusOK, account)
+}
+
+func (h *Handler) deleteAccount(w http.ResponseWriter, r *http.Request) {
+	accountID, err := pathID(r, "id")
+	if err != nil {
+		adminhttp.WriteServiceError(w, err)
+		return
+	}
+	if err := h.service.Delete(r.Context(), accountID); err != nil {
+		adminhttp.WriteServiceError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *Handler) refreshToken(w http.ResponseWriter, r *http.Request) {

@@ -35,6 +35,8 @@ type requestSummaryDTO struct {
 	Status                string  `json:"status"`
 	FinalProviderID       *int64  `json:"final_provider_id"`
 	FinalChannelID        *int64  `json:"final_channel_id"`
+	FinalAccountID        *int64  `json:"final_account_id,omitempty"`
+	FinalAccountName      string  `json:"final_account_name,omitempty"`
 	ErrorCode             *string `json:"error_code"`
 	ErrorMessage          *string `json:"error_message"`
 	DeliveryStatus        string  `json:"delivery_status"`
@@ -274,6 +276,11 @@ func (h *requestsHandler) list(w http.ResponseWriter, r *http.Request) {
 		adminhttp.WriteServiceError(w, err)
 		return
 	}
+	accountID, err := adminhttp.OptionalInt64Query(r, "account_id")
+	if err != nil {
+		adminhttp.WriteServiceError(w, err)
+		return
+	}
 	scoringSample := adminhttp.QueryString(r, "scoring_sample")
 	switch scoringSample {
 	case "", "ttft", "error", "any":
@@ -318,6 +325,7 @@ func (h *requestsHandler) list(w http.ResponseWriter, r *http.Request) {
 		Model:         adminhttp.QueryString(r, "model"),
 		ChannelID:     channelID,
 		AttemptID:     attemptID,
+		AccountID:     accountID,
 		ScoringSample: scoringSample,
 		From:          from,
 		To:            to,
@@ -367,6 +375,8 @@ func toRequestSummaryDTO(s query.RequestSummary) requestSummaryDTO {
 		Status:                s.Status,
 		FinalProviderID:       s.FinalProviderID,
 		FinalChannelID:        s.FinalChannelID,
+		FinalAccountID:        s.FinalAccountID,
+		FinalAccountName:      s.FinalAccountName,
 		ErrorCode:             s.ErrorCode,
 		ErrorMessage:          s.ErrorMessage,
 		DeliveryStatus:        s.DeliveryStatus,

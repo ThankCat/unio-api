@@ -113,11 +113,23 @@ func (s *Service) ExecuteNextDiscovery(ctx context.Context) (bool, error) {
 	}
 
 	settings := appsettings.AdminBackendChannelModelDiscovery(ctx, s.settings)
-	workCtx, cancel := context.WithTimeout(ctx, settings.Timeout)
-	result, listErr := s.lister.ListChannelModels(workCtx, primaryProtocol(snapshot.Protocols), snapshot.AdapterKey, corechannel.Runtime{
+	runtime := corechannel.Runtime{
 		ID: snapshot.ChannelID, Origin: snapshot.Origin, APIKey: strings.TrimSpace(snapshot.Credential),
 		ProviderSlug: snapshot.ProviderSlug, ResponseTimeout: settings.Timeout,
-	})
+	}
+	// 池型渠道：渠道不持凭据，模型清单必须以账号身份出站（access token + 账号头 + 账号代理）。
+	if identity, isPool, idErr := s.poolRuntimeIdentity(ctx, snapshot.SupplyForm, snapshot.ChannelID); idErr != nil {
+		return true, s.finishDiscoveryError(ctx, run, idErr)
+	} else if isPool {
+		runtime.APIKey = identity.AccessToken
+		runtime.Account = corechannel.AccountIdentity{
+			ID:                identity.AccountID,
+			UpstreamAccountID: identity.UpstreamAccountID,
+			ProxyURL:          identity.ProxyURL,
+		}
+	}
+	workCtx, cancel := context.WithTimeout(ctx, settings.Timeout)
+	result, listErr := s.lister.ListChannelModels(workCtx, primaryProtocol(snapshot.Protocols), snapshot.AdapterKey, runtime)
 	cancel()
 	if listErr != nil {
 		return true, s.finishDiscoveryError(ctx, run, listErr)
@@ -210,6 +222,11 @@ func classifyDiscoveryError(err error) (string, string, time.Duration) {
 			message = "上游模型发现失败"
 		}
 		return discovered.Code, message, discovered.RetryAfter
+	}
+	// 池型渠道账号身份解析失败（池空/账号归档等）不是「协议不支持」：
+	// 按凭据问题归类并保留可读原因，否则会误导管理员去手工绑定。
+	if failure.CodeOf(err) != "" {
+		return modeldiscovery.CodeCredentialInvalid, err.Error(), 0
 	}
 	return modeldiscovery.CodeUnsupportedEndpoint, "当前协议适配器不支持上游模型发现，请使用手工绑定", 0
 }

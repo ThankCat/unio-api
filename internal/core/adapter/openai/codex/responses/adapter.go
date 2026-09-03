@@ -20,6 +20,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	openairesponses "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/responses"
 	"github.com/ThankCat/unio-gateway/internal/core/channel"
+	"github.com/ThankCat/unio-gateway/internal/core/servicetier"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
 
@@ -52,6 +53,7 @@ func NewAdapter(client *http.Client, clientFor func(proxyURL string) *http.Clien
 		GuardRequest:          guardCodexRequest,
 		HeaderFacts:           applyCodexHeaderFacts,
 		RetryAfterFromHeaders: codexRetryAfter,
+		FinalizeFacts:         finalizeCodexFacts,
 	}
 	if clientFor != nil {
 		wire.ClientFor = func(ch channel.Runtime) *http.Client {
@@ -104,6 +106,22 @@ func guardCodexRequest(req openairesponses.Request) error {
 			failure.WithMessage("codex responses adapter rejects previous_response_id (upstream does not store responses)"),
 		),
 	)
+}
+
+// finalizeCodexFacts 把结算档位改为出站请求档位权威（边界 15 的 Fast 结算例外）。
+//
+// Codex 订阅后端对 service_tier=priority 的请求仍回 auto/default——响应档位不可信。
+// 按「响应事实结算」的总原则在此 wire 开例外：出站带 priority/fast 即按 Fast 结算，
+// 否则按 Standard；响应原始值保留在 UpstreamRaw 供审计对照。是否真的按 Fast 计费
+// 仍受结算侧「Fast 价格已配置」闸门约束（未配置回落 Standard，方向少收不多收）。
+func finalizeCodexFacts(req openairesponses.Request, facts *adapter.ResponseFacts) {
+	var probe struct {
+		ServiceTier *string `json:"service_tier"`
+	}
+	if err := json.Unmarshal(req.Body, &probe); err != nil {
+		return
+	}
+	facts.ServiceTier = servicetier.ResolveWireOutboundAuthoritative(probe.ServiceTier, facts.ServiceTier.UpstreamRaw)
 }
 
 // applyCodexHeaderFacts 解析 x-codex-* 用量头（upstream-usage-headers.json 逐字段对照）。

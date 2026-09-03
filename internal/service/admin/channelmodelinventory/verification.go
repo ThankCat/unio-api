@@ -181,6 +181,23 @@ func (s *Service) ExecuteNextVerification(ctx context.Context) (bool, error) {
 		ID: snapshot.ChannelID, Origin: snapshot.Origin, APIKey: strings.TrimSpace(snapshot.Credential),
 		ProviderSlug: snapshot.ProviderSlug, ResponseTimeout: probeTimeout,
 	}
+	// 池型渠道：逐模型验证同样必须以账号身份出站；池内无可用账号时整轮验证失败并给出可读原因。
+	if identity, isPool, idErr := s.poolRuntimeIdentity(ctx, snapshot.SupplyForm, snapshot.ChannelID); idErr != nil {
+		_, _ = s.queries.SkipRemainingChannelModelVerificationItems(ctx, sqlc.SkipRemainingChannelModelVerificationItemsParams{
+			ErrorCode: textParam(VerificationErrorCredentialInvalid), Message: textParam(idErr.Error()), RunID: run.ID,
+		})
+		if _, finishErr := s.queries.FinishChannelModelVerificationRun(ctx, sqlc.FinishChannelModelVerificationRunParams{RunID: run.ID}); finishErr != nil {
+			return true, storeFailed(finishErr, "finish channel model verification without account")
+		}
+		return true, nil
+	} else if isPool {
+		runtime.APIKey = identity.AccessToken
+		runtime.Account = corechannel.AccountIdentity{
+			ID:                identity.AccountID,
+			UpstreamAccountID: identity.UpstreamAccountID,
+			ProxyURL:          identity.ProxyURL,
+		}
+	}
 	execute := func(item sqlc.ChannelModelVerificationItem) verificationExecutionResult {
 		if _, startErr := s.queries.StartChannelModelVerificationItem(ctx, item.ID); startErr != nil {
 			return verificationExecutionResult{err: storeFailed(startErr, "start channel model verification item")}

@@ -117,6 +117,7 @@ func (a *Adapter) StreamResponse(ctx context.Context, ch channel.Runtime, req Re
 		facts := responsesFacts(*terminalResp, *finalUsage, meta, usage.SourceUpstreamStream)
 		// wire 专属事实（Codex 用量头）在初始响应头上，与非流式同源。
 		a.applyHeaderFacts(upstreamResp.Header, &facts)
+		a.finalizeFacts(req, &facts)
 		return adapter.StreamOutcome{Facts: &facts}
 	}
 
