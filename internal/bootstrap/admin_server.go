@@ -264,11 +264,13 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		channelTestService.WithAccountResolver(probeIdentity)
 		channelModelInventoryService.WithAccountResolver(probeIdentity)
 		// 探测/验证成功即回填账号观测（用量水位 + LRU）：与请求路径同一 Recorder，阈值同样热更新。
+		// 探测 429 另写账号冷却（同一 Redis），否则检测已确认限流、列表仍显示「启用 · 正常」。
 		probeHealth := subscriptionhealth.NewRecorder(queries, sharedBreakerStore, deps.Logger, 0).
 			WithThresholdProvider(func(ctx context.Context) float64 {
 				return appsettings.GatewayAccountUsagePauseThreshold(ctx, settingsStore)
 			})
 		channelTestService.WithAccountHealth(probeHealth)
+		channelTestService.WithAccountRuntime(sharedBreakerStore)
 		channelModelInventoryService.WithAccountHealth(probeHealth)
 	}
 	proxyAdminService := adminproxy.NewService(queries)

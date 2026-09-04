@@ -9,6 +9,8 @@ import (
 
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/adminhttp"
 
+	"github.com/ThankCat/unio-gateway/internal/core/adapter"
+	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/channeltest"
 )
@@ -45,6 +47,35 @@ type channelTestResultDTO struct {
 	// 池型渠道：本次检测使用的账号（credential 型为 null/空）。
 	TestedAccountID   *int64 `json:"tested_account_id,omitempty"`
 	TestedAccountName string `json:"tested_account_name,omitempty"`
+	// AccountUsage：本次上游响应携带的账号用量水位（成功头 / 429 失败头同源；无观测省略）。
+	// 上游对水位满的最小探测可能仍回 200——弹窗需要它来解释「检测通过但账号已满/已暂停」。
+	AccountUsage *accountUsageDTO `json:"account_usage,omitempty"`
+	// AccountRuntime：检测处置落地后的账号运行态回读（冷却/隔离/暂停剩余；credential 型省略）。
+	AccountRuntime *accountRuntimeDTO `json:"account_runtime,omitempty"`
+}
+
+// accountUsageDTO 是账号用量水位观测（字段口径与账号列表 usage_snapshot 一致）。
+type accountUsageDTO struct {
+	PlanType  string                 `json:"plan_type,omitempty"`
+	Primary   *accountUsageWindowDTO `json:"primary,omitempty"`
+	Secondary *accountUsageWindowDTO `json:"secondary,omitempty"`
+}
+
+type accountUsageWindowDTO struct {
+	UsedPercent   float64 `json:"used_percent"`
+	WindowMinutes int64   `json:"window_minutes,omitempty"`
+	ResetAt       int64   `json:"reset_at,omitempty"`
+}
+
+// accountRuntimeDTO 与账号列表接口的 runtime 字段同构（同一 Redis 事实）。
+type accountRuntimeDTO struct {
+	CooldownRemainingMs      int64  `json:"cooldown_remaining_ms"`
+	CooldownWindow           string `json:"cooldown_window,omitempty"`
+	UnschedulableRemainingMs int64  `json:"unschedulable_remaining_ms"`
+	UnschedulableReason      string `json:"unschedulable_reason,omitempty"`
+	UsagePauseRemainingMs    int64  `json:"usage_pause_remaining_ms"`
+	UsagePauseWindow         string `json:"usage_pause_window,omitempty"`
+	InFlight                 int64  `json:"in_flight"`
 }
 
 type channelTestHandler struct {
@@ -263,5 +294,51 @@ func toChannelTestResultDTO(r channeltest.TestResult) channelTestResultDTO {
 		dto.TestedAccountID = &id
 		dto.TestedAccountName = r.TestedAccountName
 	}
+	dto.AccountUsage = toAccountUsageDTO(r.AccountUsage)
+	dto.AccountRuntime = toAccountRuntimeDTO(r.AccountRuntime)
 	return dto
+}
+
+func toAccountUsageDTO(usage *adapter.AccountUsageFacts) *accountUsageDTO {
+	if usage == nil {
+		return nil
+	}
+	dto := &accountUsageDTO{PlanType: usage.PlanType}
+	dto.Primary = toAccountUsageWindowDTO(usage.Primary)
+	dto.Secondary = toAccountUsageWindowDTO(usage.Secondary)
+	if dto.PlanType == "" && dto.Primary == nil && dto.Secondary == nil {
+		return nil
+	}
+	return dto
+}
+
+func toAccountUsageWindowDTO(window adapter.AccountUsageWindowFacts) *accountUsageWindowDTO {
+	if !window.Present {
+		return nil
+	}
+	dto := &accountUsageWindowDTO{
+		UsedPercent:   window.UsedPercent,
+		WindowMinutes: window.WindowMinutes,
+		ResetAt:       window.ResetAtUnix,
+	}
+	// 上游只给相对秒时折算成绝对时刻，前端不用再关心两种形态。
+	if dto.ResetAt <= 0 && window.ResetAfterSeconds > 0 {
+		dto.ResetAt = time.Now().Unix() + window.ResetAfterSeconds
+	}
+	return dto
+}
+
+func toAccountRuntimeDTO(runtime *breakerstore.AccountRuntime) *accountRuntimeDTO {
+	if runtime == nil {
+		return nil
+	}
+	return &accountRuntimeDTO{
+		CooldownRemainingMs:      runtime.CooldownRemainingMs,
+		CooldownWindow:           string(runtime.CooldownWindow),
+		UnschedulableRemainingMs: runtime.UnschedulableRemainingMs,
+		UnschedulableReason:      string(runtime.UnschedulableReason),
+		UsagePauseRemainingMs:    runtime.UsagePauseRemainingMs,
+		UsagePauseWindow:         string(runtime.UsagePauseWindow),
+		InFlight:                 runtime.InFlight,
+	}
 }

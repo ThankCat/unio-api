@@ -150,6 +150,7 @@ func NewWorkerServerApp(ctx context.Context, deps WorkerServerAppDeps) (*WorkerS
 			return appsettings.GatewayAccountUsagePauseThreshold(ctx, settingsStore)
 		})
 	channelTestService.WithAccountHealth(probeHealth)
+	channelTestService.WithAccountRuntime(permitStore)
 	channelModelInventoryService.WithAccountHealth(probeHealth)
 	permissionStore := permitStore
 	if err := permissionStore.VerifySingleNodeDeployment(ctx); err != nil {

@@ -25,6 +25,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	corechannel "github.com/ThankCat/unio-gateway/internal/core/channel"
 	"github.com/ThankCat/unio-gateway/internal/core/providerledger"
+	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 	adminchannel "github.com/ThankCat/unio-gateway/internal/service/admin/channel"
@@ -130,8 +131,16 @@ type TestResult struct {
 	// TestedAccountID/TestedAccountName：池型渠道本次检测使用的账号（credential 型恒为零值）。
 	TestedAccountID   int64
 	TestedAccountName string
-	facts             *adapter.ResponseFacts
-	accountingErr     error
+	// AccountUsage 是本次上游响应（成功头 / 429 失败头）携带的账号用量水位；无观测为 nil。
+	// 检测弹窗必须能展示它：上游对水位满的最小请求可能仍回 200，「检测通过」与「窗口已满」
+	// 并存是真实状态，不带水位回去就会显得自相矛盾。
+	AccountUsage *adapter.AccountUsageFacts
+	// AccountRuntime 是检测处置（冷却/清除/暂停）落地后的账号运行态回读（Redis 实况），
+	// 供弹窗直接回答「这个号现在还接不接客户流量」。credential 型或读取失败为 nil。
+	AccountRuntime *breakerstore.AccountRuntime
+	facts          *adapter.ResponseFacts
+	probeErr       error
+	accountingErr  error
 }
 
 // PermissionRecheckInput 固化 403 发生时的内部绑定身份与三类 revision。
@@ -156,22 +165,33 @@ type AccountIdentityResolver interface {
 	ResolveProbeIdentity(ctx context.Context, channelID, accountID int64) (subscription.ProbeIdentity, error)
 }
 
-// AccountHealthSink 消费池型探测成功后的账号观测（用量快照/LRU/阈值暂停），
+// AccountHealthSink 消费池型探测的账号观测（用量快照/LRU/阈值暂停），
 // 与请求路径同一实现（subscription/health.Recorder）。探测响应头本来就带 x-codex-* 水位，
 // 不采集等于把免费观测扔掉——管理员装配阶段就该能看到用量水位。
 type AccountHealthSink interface {
 	RecordAccountSuccess(ctx context.Context, accountID int64, usage *adapter.AccountUsageFacts)
+	RecordAccountUsageObservation(ctx context.Context, accountID int64, usage *adapter.AccountUsageFacts)
+}
+
+// AccountRuntimeFeedback 把检测结果写进账号 Redis 运行态（与请求路径同一原语）。
+// 生产实现是 breakerstore.Store。429 必须落冷却，否则管理页一直显示「启用 · 正常」；
+// 探测成功以 durationMs<=0 清除残留冷却（SetAccountCooldown 覆盖语义），付费重置后立即回池。
+// AccountRuntimeMany 用于处置落地后的运行态回读（冷却/暂停/隔离剩余），随检测结果回给弹窗。
+type AccountRuntimeFeedback interface {
+	SetAccountCooldown(ctx context.Context, accountID, durationMs int64, window breakerstore.AccountUsageWindow) (int64, error)
+	AccountRuntimeMany(ctx context.Context, accountIDs []int64) ([]breakerstore.AccountRuntime, error)
 }
 
 // Service 编排渠道主动检测：选模型 → 构造 Runtime → 发探测请求 → 归类 → 落库。
 type Service struct {
-	store         Store
-	prober        Prober
-	settings      *appsettings.SettingsStore
-	metrics       CredentialRotationMetrics
-	accountant    ProbeAccountant
-	accounts      AccountIdentityResolver
-	accountHealth AccountHealthSink
+	store          Store
+	prober         Prober
+	settings       *appsettings.SettingsStore
+	metrics        CredentialRotationMetrics
+	accountant     ProbeAccountant
+	accounts       AccountIdentityResolver
+	accountHealth  AccountHealthSink
+	accountRuntime AccountRuntimeFeedback
 }
 
 // CredentialRotationMetrics records only the bounded five-state verification result.
@@ -208,6 +228,12 @@ func (s *Service) WithAccountResolver(resolver AccountIdentityResolver) *Service
 // WithAccountHealth 接入账号观测回写（bootstrap 注入；nil 表示探测不回填用量）。
 func (s *Service) WithAccountHealth(sink AccountHealthSink) *Service {
 	s.accountHealth = sink
+	return s
+}
+
+// WithAccountRuntime 接入账号运行态写入（bootstrap 注入；nil 表示检测失败不写冷却）。
+func (s *Service) WithAccountRuntime(feedback AccountRuntimeFeedback) *Service {
+	s.accountRuntime = feedback
 	return s
 }
 
@@ -281,14 +307,82 @@ func (s *Service) test(ctx context.Context, in TestInput, emit func(ProbeEvent))
 	if snapshot.isPool() && !result.Success && result.Message != "" && snapshot.AccountDisplayName != "" {
 		result.Message = "账号「" + snapshot.AccountDisplayName + "」：" + result.Message
 	}
-	// 探测成功即回填账号观测：用量水位快照 + LRU 时间（best-effort，与请求路径同一 Recorder）。
-	if snapshot.isPool() && result.Success && result.TestedAccountID > 0 && s.accountHealth != nil && result.facts != nil {
-		s.accountHealth.RecordAccountSuccess(ctx, result.TestedAccountID, result.facts.AccountUsage)
+	// 探测成功回填用量 + LRU；失败（尤其 429）必须同步写账号运行态——
+	// 检测已经拿到真实上游限流，再不落冷却，管理页会一直显示「启用 · 正常」，
+	// 下一笔客户请求也会再撞一次同一面墙。账号 status 仍保持 enabled（429 不是吊销）。
+	if snapshot.isPool() && result.TestedAccountID > 0 {
+		if result.Success {
+			if s.accountHealth != nil && result.facts != nil {
+				s.accountHealth.RecordAccountSuccess(ctx, result.TestedAccountID, result.facts.AccountUsage)
+			}
+			// 探测成功 = 该账号此刻真实可服务：清除残留 429 冷却（durationMs<=0 即清除）。
+			// 付费即时重置后管理员重测通过，页面与调度必须立即回「正常」，不能等旧冷却自然到期。
+			if s.accountRuntime != nil {
+				_, _ = s.accountRuntime.SetAccountCooldown(ctx, result.TestedAccountID, 0, "")
+			}
+		} else {
+			s.applyAccountProbeFailure(ctx, result.TestedAccountID, result.probeErr)
+		}
+		// 处置落地后回读运行态：上游对水位满的最小请求可能仍回 200（限流按用量而非逐请求硬拒），
+		// 「检测通过」与「已因水位满暂停调度」并存是真实状态——不带回运行态，弹窗只报「通过」
+		// 会显得与列表页自相矛盾。回读失败不影响检测结果本身。
+		result.AccountRuntime = s.readAccountRuntime(ctx, result.TestedAccountID)
 	}
 	if _, err := s.applyProbeResult(workCtx, snapshot, in.Source, result); err != nil {
 		return TestResult{}, storeFailed(err, "persist channel probe result")
 	}
 	return result, nil
+}
+
+// readAccountRuntime 回读单个账号的 Redis 运行态（best-effort：失败返回 nil，不阻断检测）。
+func (s *Service) readAccountRuntime(ctx context.Context, accountID int64) *breakerstore.AccountRuntime {
+	if s.accountRuntime == nil || accountID <= 0 {
+		return nil
+	}
+	runtimes, err := s.accountRuntime.AccountRuntimeMany(ctx, []int64{accountID})
+	if err != nil || len(runtimes) != 1 {
+		return nil
+	}
+	runtime := runtimes[0]
+	return &runtime
+}
+
+// applyAccountProbeFailure 把池型检测失败写进账号运行态（与请求路径 recordAccountRuntimeFeedback 对齐）：
+//
+//   - 429 → 账号冷却（时长取 adapter 已折算的 RetryAfter：x-codex 重置头或 usage_limit_reached 错误体；
+//     解析不出时落渠道 429 策略的秒级兜底，与请求路径同一口径——绝不能因解析失败而完全不冷却）；
+//     同时回写失败响应携带的用量观测（水位通常已到顶，管理页冷却期内也能看到真实窗口）。
+//   - 其它失败本次不处置账号：401/403 仍走既有隔离路径由请求反馈确认，避免检测一次误伤。
+//
+// 全部 best-effort：运行态写入失败不阻断检测结果落库。
+func (s *Service) applyAccountProbeFailure(ctx context.Context, accountID int64, probeErr error) {
+	if accountID <= 0 || probeErr == nil {
+		return
+	}
+	category, ok := adapter.UpstreamCategoryOf(probeErr)
+	if !ok || category != adapter.UpstreamErrorRateLimit {
+		return
+	}
+	meta, _ := adapter.UpstreamMetadataOf(probeErr)
+	cooldown := meta.RetryAfter
+	if cooldown <= 0 {
+		cooldown = s.rateLimitCooldownFallback(ctx)
+	}
+	if durationMs := cooldown.Milliseconds(); durationMs > 0 && s.accountRuntime != nil {
+		_, _ = s.accountRuntime.SetAccountCooldown(ctx, accountID, durationMs, "")
+	}
+	if s.accountHealth != nil && meta.AccountUsage != nil {
+		s.accountHealth.RecordAccountUsageObservation(ctx, accountID, meta.AccountUsage)
+	}
+}
+
+// rateLimitCooldownFallback 取渠道 429 策略的默认冷却时长（settings 未注入时回代码默认）。
+// 上游 429 既无重置头也无可解析错误体时用它兜底，保证「检测到限流」必然在运行态留下痕迹。
+func (s *Service) rateLimitCooldownFallback(ctx context.Context) time.Duration {
+	if s.settings == nil {
+		return appsettings.DefaultChannelCooldownSettings().Cooldown
+	}
+	return appsettings.GatewayChannelCooldown(ctx, s.settings).Cooldown
 }
 
 // attachProbeAccount 为池型渠道解析并冻结检测账号身份；credential 型校验不带账号维度。
@@ -540,10 +634,15 @@ func (s *Service) executeProbeCandidatesStream(ctx context.Context, snapshot pro
 		}
 		if probeErr == nil {
 			result.Success = true
+			if probeResult.Facts != nil {
+				result.AccountUsage = probeResult.Facts.AccountUsage
+			}
 		} else {
+			result.probeErr = probeErr
 			result.ErrorCode, result.Message = classifyProbeError(probeErr, probeTimeout, latency)
 			if meta, ok := adapter.UpstreamMetadataOf(probeErr); ok {
 				result.UpstreamError = meta.ResponseSnippet
+				result.AccountUsage = meta.AccountUsage
 			}
 		}
 		if s.accountant != nil {
@@ -665,6 +764,7 @@ func (s *Service) applyProbeResult(ctx context.Context, snapshot probeSnapshot, 
 	// 账号级健康由请求路径的账号反馈隔离。这里绝不能因一个账号 401 把整条池踢出路由。
 	case snapshot.isPool():
 		// 保持 NULL：不动 credential_valid（池型建渠道时恒 true）。
+		// 被测账号的 429/401 由 applyAccountProbeFailure 写入账号运行态，不在这里翻渠道。
 	case result.Success:
 		nextCredentialValid = pgtype.Bool{Bool: true, Valid: true}
 	case result.ErrorCode == ErrCodeCredentialInvalid:

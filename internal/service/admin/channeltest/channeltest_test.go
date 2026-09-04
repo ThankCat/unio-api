@@ -4,13 +4,17 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	corechannel "github.com/ThankCat/unio-gateway/internal/core/channel"
+	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 	adminchannel "github.com/ThankCat/unio-gateway/internal/service/admin/channel"
+	"github.com/ThankCat/unio-gateway/internal/service/appsettings"
+	"github.com/ThankCat/unio-gateway/internal/service/subscription"
 )
 
 type fakeStore struct {
@@ -398,5 +402,228 @@ func TestPermissionRecheckProbeBecomesStaleAndOnlyAudits(t *testing.T) {
 	}
 	if store.applyCalls != 0 || store.permissionLogParam.Message.String == "" {
 		t.Fatalf("stale probe must only write explanatory audit: apply=%d log=%+v", store.applyCalls, store.permissionLogParam)
+	}
+}
+
+type fakeAccountResolver struct {
+	identity subscription.ProbeIdentity
+}
+
+func (r fakeAccountResolver) ResolveProbeIdentity(context.Context, int64, int64) (subscription.ProbeIdentity, error) {
+	return r.identity, nil
+}
+
+type fakeAccountHealth struct {
+	successCalls      int
+	observationCalls  int
+	observedAccountID int64
+	observedUsage     *adapter.AccountUsageFacts
+}
+
+func (h *fakeAccountHealth) RecordAccountSuccess(context.Context, int64, *adapter.AccountUsageFacts) {
+	h.successCalls++
+}
+
+func (h *fakeAccountHealth) RecordAccountUsageObservation(_ context.Context, accountID int64, usage *adapter.AccountUsageFacts) {
+	h.observationCalls++
+	h.observedAccountID = accountID
+	h.observedUsage = usage
+}
+
+type fakeAccountRuntime struct {
+	calls      int
+	accountID  int64
+	durationMs int64
+	// runtime 是 AccountRuntimeMany 回读返回的运行态（模拟处置落地后的 Redis 实况）。
+	runtime    breakerstore.AccountRuntime
+	runtimeErr error
+}
+
+func (r *fakeAccountRuntime) SetAccountCooldown(_ context.Context, accountID, durationMs int64, _ breakerstore.AccountUsageWindow) (int64, error) {
+	r.calls++
+	r.accountID = accountID
+	r.durationMs = durationMs
+	return durationMs, nil
+}
+
+func (r *fakeAccountRuntime) AccountRuntimeMany(_ context.Context, accountIDs []int64) ([]breakerstore.AccountRuntime, error) {
+	if r.runtimeErr != nil {
+		return nil, r.runtimeErr
+	}
+	out := make([]breakerstore.AccountRuntime, 0, len(accountIDs))
+	for _, id := range accountIDs {
+		runtime := r.runtime
+		runtime.AccountID = id
+		out = append(out, runtime)
+	}
+	return out, nil
+}
+
+func poolProbeSnapshot() sqlc.GetChannelProbeSnapshotRow {
+	row := permissionSnapshot(8)
+	row.SupplyForm = "pool"
+	row.Credential = ""
+	row.AdapterKey = "codex"
+	return row
+}
+
+func poolProbeIdentity() subscription.ProbeIdentity {
+	return subscription.ProbeIdentity{
+		AccountID:         3,
+		DisplayName:       "rakes-hurried-Oj@icloud.com",
+		AccessToken:       "tok-probe",
+		UpstreamAccountID: "b396c2bc-d4e2-4ab8-99f4-3e34aff25a41",
+	}
+}
+
+// 池型检测拿到真实 429 时，必须把账号冷却与用量观测写进运行态——
+// 只展示「被限流」却不改 Redis，管理页会一直显示「启用 · 正常」，下一笔客户请求也会再撞一次墙。
+func TestPoolProbe429WritesAccountCooldownAndUsage(t *testing.T) {
+	store := &fakeStore{
+		probeSnapshot: poolProbeSnapshot(),
+		bindings:      enabledBinding(),
+		applied:       sqlc.ApplyChannelProbeResultRow{ResultApplied: true, CurrentConfigRevision: 8},
+	}
+	usage := &adapter.AccountUsageFacts{
+		PlanType: "plus",
+		Primary:  adapter.AccountUsageWindowFacts{Present: true, UsedPercent: 100, WindowMinutes: 180, ResetAtUnix: 1788499015},
+	}
+	prober := &fakeProber{
+		status: 429,
+		err: adapter.NewUpstreamError(
+			adapter.UpstreamErrorRateLimit,
+			adapter.UpstreamMetadata{
+				StatusCode:      429,
+				RetryAfter:      8800 * time.Second,
+				AccountUsage:    usage,
+				ResponseSnippet: `{"error":{"type":"usage_limit_reached","resets_in_seconds":8800}}`,
+			},
+			errors.New("upstream rate limited"),
+		),
+	}
+	health := &fakeAccountHealth{}
+	runtime := &fakeAccountRuntime{
+		runtime: breakerstore.AccountRuntime{CooldownRemainingMs: 8800_000, CooldownWindow: breakerstore.AccountUsageWindowPrimary},
+	}
+	service := NewService(store, prober, nil).
+		WithAccountResolver(fakeAccountResolver{identity: poolProbeIdentity()}).
+		WithAccountHealth(health).
+		WithAccountRuntime(runtime)
+
+	result, err := service.Test(context.Background(), TestInput{ChannelID: 7, AccountID: 3})
+	if err != nil {
+		t.Fatalf("test: %v", err)
+	}
+	if result.Success || result.ErrorCode != ErrCodeRateLimited || result.TestedAccountID != 3 {
+		t.Fatalf("unexpected 429 result: %+v", result)
+	}
+	if runtime.calls != 1 || runtime.accountID != 3 || runtime.durationMs != 8800_000 {
+		t.Fatalf("pool 429 must write account cooldown: %+v", runtime)
+	}
+	if health.successCalls != 0 {
+		t.Fatalf("429 must not touch last_success: successCalls=%d", health.successCalls)
+	}
+	if health.observationCalls != 1 || health.observedAccountID != 3 || health.observedUsage != usage {
+		t.Fatalf("pool 429 must write usage observation: %+v", health)
+	}
+	// 失败响应携带的水位与处置后的运行态必须随结果回给弹窗（否则「被限流」与列表状态对不上）。
+	if result.AccountUsage != usage {
+		t.Fatalf("429 result must carry account usage observation: %+v", result.AccountUsage)
+	}
+	if result.AccountRuntime == nil || result.AccountRuntime.CooldownRemainingMs != 8800_000 {
+		t.Fatalf("429 result must carry post-feedback account runtime: %+v", result.AccountRuntime)
+	}
+}
+
+func TestCredentialProbe429DoesNotWriteAccountRuntime(t *testing.T) {
+	store := &fakeStore{
+		probeSnapshot: permissionSnapshot(8),
+		bindings:      enabledBinding(),
+		applied:       sqlc.ApplyChannelProbeResultRow{ResultApplied: true, CurrentConfigRevision: 8},
+	}
+	runtime := &fakeAccountRuntime{}
+	service := NewService(store, &fakeProber{
+		status: 429,
+		err: adapter.NewUpstreamError(
+			adapter.UpstreamErrorRateLimit,
+			adapter.UpstreamMetadata{StatusCode: 429, RetryAfter: 60 * time.Second},
+			errors.New("upstream rate limited"),
+		),
+	}, nil).WithAccountRuntime(runtime)
+
+	result, err := service.Test(context.Background(), TestInput{ChannelID: 7})
+	if err != nil {
+		t.Fatalf("test: %v", err)
+	}
+	if result.Success || result.ErrorCode != ErrCodeRateLimited {
+		t.Fatalf("unexpected credential 429 result: %+v", result)
+	}
+	if runtime.calls != 0 {
+		t.Fatalf("credential 429 must not write account cooldown, calls=%d", runtime.calls)
+	}
+}
+
+// 429 既无重置头也无可解析错误体（RetryAfter=0）时，必须落秒级兜底冷却而不是什么都不写——
+// 否则又回到「检测到被限流、管理页仍显示正常」的老问题（与请求路径的渠道 429 策略同口径）。
+func TestPoolProbe429WithoutResetSignalFallsBackToDefaultCooldown(t *testing.T) {
+	store := &fakeStore{
+		probeSnapshot: poolProbeSnapshot(),
+		bindings:      enabledBinding(),
+		applied:       sqlc.ApplyChannelProbeResultRow{ResultApplied: true, CurrentConfigRevision: 8},
+	}
+	runtime := &fakeAccountRuntime{}
+	service := NewService(store, &fakeProber{
+		status: 429,
+		err: adapter.NewUpstreamError(
+			adapter.UpstreamErrorRateLimit,
+			adapter.UpstreamMetadata{StatusCode: 429},
+			errors.New("upstream rate limited"),
+		),
+	}, nil).
+		WithAccountResolver(fakeAccountResolver{identity: poolProbeIdentity()}).
+		WithAccountRuntime(runtime)
+
+	result, err := service.Test(context.Background(), TestInput{ChannelID: 7, AccountID: 3})
+	if err != nil {
+		t.Fatalf("test: %v", err)
+	}
+	if result.Success || result.ErrorCode != ErrCodeRateLimited {
+		t.Fatalf("unexpected 429 result: %+v", result)
+	}
+	wantMs := appsettings.DefaultChannelCooldownSettings().Cooldown.Milliseconds()
+	if runtime.calls != 1 || runtime.accountID != 3 || runtime.durationMs != wantMs {
+		t.Fatalf("429 without reset signal must fall back to default cooldown %dms: %+v", wantMs, runtime)
+	}
+}
+
+// 探测成功必须清除残留 429 冷却（durationMs=0 覆盖清除）：付费即时重置后管理员重测通过，
+// 页面与调度要立即回「正常」，不能等旧冷却自然到期。
+func TestPoolProbeSuccessClearsAccountCooldown(t *testing.T) {
+	store := &fakeStore{
+		probeSnapshot: poolProbeSnapshot(),
+		bindings:      enabledBinding(),
+		applied:       sqlc.ApplyChannelProbeResultRow{ResultApplied: true, CurrentConfigRevision: 8},
+	}
+	// 模拟「水位满但上游仍放行最小请求」后的实况：成功 + 用量暂停并存。
+	runtime := &fakeAccountRuntime{
+		runtime: breakerstore.AccountRuntime{UsagePauseRemainingMs: 4_486_000, UsagePauseWindow: breakerstore.AccountUsageWindowPrimary},
+	}
+	service := NewService(store, &fakeProber{status: 200}, nil).
+		WithAccountResolver(fakeAccountResolver{identity: poolProbeIdentity()}).
+		WithAccountRuntime(runtime)
+
+	result, err := service.Test(context.Background(), TestInput{ChannelID: 7, AccountID: 3})
+	if err != nil {
+		t.Fatalf("test: %v", err)
+	}
+	if !result.Success || result.TestedAccountID != 3 {
+		t.Fatalf("unexpected success result: %+v", result)
+	}
+	if runtime.calls != 1 || runtime.accountID != 3 || runtime.durationMs != 0 {
+		t.Fatalf("pool probe success must clear account cooldown: %+v", runtime)
+	}
+	// 「检测通过」也必须回读运行态：水位满触发的用量暂停要能在弹窗里解释清楚。
+	if result.AccountRuntime == nil || result.AccountRuntime.UsagePauseRemainingMs != 4_486_000 {
+		t.Fatalf("success result must carry post-probe account runtime: %+v", result.AccountRuntime)
 	}
 }
