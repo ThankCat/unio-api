@@ -341,13 +341,19 @@ config_revision + 台账 created_by 承担，统一审计属平台级另立项�
       选路诊断给出 `account_pool_empty` 专属原因、Admin 账号页签在池空且渠道启用时显式提示
       「这不是熔断」。三处各自可见。
 - [x] 429/封号错误体（边界 27）：按上游标准形状实现（error.code=token_revoked 已实测拿到真实样本，
-      见 E2E）；429 真实样本仍缺（账号已吊销无法触发），错误体判据维持 Sub2API 口径待校准。
+      见 E2E）。**429 真实样本已取得并校准（2026-09-04）**：PlusPool 账号连撞 5h 窗口上限，
+      渠道检测触发真实 429，错误体为 `{"error":{"type":"usage_limit_reached","resets_at":<unix>,
+      "resets_in_seconds":<sec>}}`，与既有 `RetryAfterFromBody` 判据（识别 usage_limit_reached /
+      rate_limit_exceeded、优先 resets_in_seconds 再 resets_at）完全吻合，Sub2API 口径无需修正。
+      样本已归档 `sandbox/codex/wire/samples/upstream-rate-limits-429-body.json`（channel_test_logs id 12/13）。
 
 ## 六、OAuth 导入与令牌保活（unio-gateway）
 
-- [ ] `internal/service/subscription/oauth`（新包，按平台可插拔，本期实现 openai/codex）：
+- [x] OAuth PKCE 导入（本期实现 openai/codex）：实现落在 `internal/service/subscription/oauth.go`
+      （与令牌保活同包，不拆子包——refresh/outbound/oauth 共享 credentials 编解码与账号代理解析）：
   - PKCE 授权链接生成 → 回填 code → 常量时间校验 state → 换令牌 → 解析 id_token 得
-    邮箱/账号 ID/套餐 → 落库为 `disabled`，显式启用；换码请求走账号绑定代理。
+    邮箱/账号 ID/套餐 → 落库为 `disabled`，显式启用；换码请求走账号绑定代理。管理面向导已接
+    （`subscriptionaccount.StartOAuth`/`CompleteOAuth`，同渠道同上游账号走重授权覆盖）。
   - 不做指纹伪装类 enrichment。
 
 - [x] 令牌保活（`internal/service/subscription`，refresh 与 outbound 同包不再拆子包）：
@@ -662,7 +668,9 @@ ADR 可以按最终代码行为开写。以下清单待执行：
   - ADR-0006 / ADR-0017（反向桥接：chat 候选资格放开、桥接路径的权威首字与 usage 口径）。
   - ADR-0007 的原子准入、Redis 权威与 fail-closed 结论**原样沿用**，不修订。
 - [ ] Admin 侧补账号管理页面设计文档。
-- [ ] 取得 429/封号真实样本后，回写蓝图证据等级并更新 `sandbox/codex/wire/samples/`。
+- [x] 取得 429/封号真实样本后，回写蓝图证据等级并更新 `sandbox/codex/wire/samples/`。
+      （2026-09-04：真实 429 错误体样本已归档 `upstream-rate-limits-429-body.json`，判据校准见第五节。
+      封号 token_revoked 样本此前 E2E 已实测。）
 
 ## 风险与注意事项
 

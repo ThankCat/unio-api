@@ -1,0 +1,16 @@
+{
+  "_source": "渠道检测真实触发（2026-09-04，PlusPool 账号 rakes-hurried 连撞 5h 窗口上限；channel_test_logs id 12/13）",
+  "_what": "上游 HTTP 出站 POST /backend-api/codex/responses 在 5h 窗口用尽时返回的 429 错误响应体：type=usage_limit_reached，同时给绝对重置时刻 resets_at 与相对秒 resets_in_seconds",
+  "_caution": "这是 HTTP 出站路径（渠道检测 / 号池请求）的错误体形态，与 CLI 原生 WS 的 codex.rate_limits 事件不同源。归因分层把 429 归账号：优先 x-codex-*-reset-after-seconds 头，头缺失才解析本 body 的 resets_in_seconds/resets_at（RetryAfterFromBody 兜底），两者都无再落渠道 429 策略秒级兜底。plan_type=plus 与账号套餐一致；eligible_promo 观测为 null。",
+  "status_code": 429,
+  "response_body": {
+    "error": {
+      "type": "usage_limit_reached",
+      "message": "The usage limit has been reached",
+      "plan_type": "plus",
+      "resets_at": 1788499015,
+      "eligible_promo": null,
+      "resets_in_seconds": 8800
+    }
+  }
+}
