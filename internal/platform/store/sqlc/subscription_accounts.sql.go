@@ -99,6 +99,7 @@ SELECT
     count(*)::bigint AS total_requests,
     (count(*) FILTER (WHERE r.status = 'succeeded'))::bigint AS succeeded_requests,
     (count(*) FILTER (WHERE r.status = 'failed'))::bigint AS failed_requests,
+    (count(*) FILTER (WHERE r.status = 'canceled'))::bigint AS canceled_requests,
     COALESCE(sum(
         ur.uncached_input_tokens + ur.cache_read_input_tokens
         + ur.cache_creation_5m_input_tokens + ur.cache_creation_1h_input_tokens
@@ -120,12 +121,14 @@ type AdminChannelAccountsUsage24hRow struct {
 	TotalRequests     int64
 	SucceededRequests int64
 	FailedRequests    int64
+	CanceledRequests  int64
 	TotalTokens       int64
 	AvgLatencyMs      int64
 	AvgFirstTokenMs   int64
 }
 
-// AdminChannelAccountsUsage24h 按账号聚合近 24 小时的请求/成功/失败/token/延迟（渠道账号页「24H」列）。
+// AdminChannelAccountsUsage24h 按账号聚合近 24 小时的请求/成功/失败/取消/token/延迟（渠道账号页「24H」列）。
+// total_requests 包含已归属账号的全部终态记录（含 canceled）；running 尚未写入 final_account_id，不在此聚合。
 // token 口径与请求详情一致：全部输入形态 + 输出总量；延迟只统计成功请求（失败的时长无意义）。
 func (q *Queries) AdminChannelAccountsUsage24h(ctx context.Context, channelID int64) ([]AdminChannelAccountsUsage24hRow, error) {
 	rows, err := q.db.Query(ctx, adminChannelAccountsUsage24h, channelID)
@@ -141,6 +144,7 @@ func (q *Queries) AdminChannelAccountsUsage24h(ctx context.Context, channelID in
 			&i.TotalRequests,
 			&i.SucceededRequests,
 			&i.FailedRequests,
+			&i.CanceledRequests,
 			&i.TotalTokens,
 			&i.AvgLatencyMs,
 			&i.AvgFirstTokenMs,

@@ -140,10 +140,12 @@ type Account struct {
 }
 
 // AccountUsage24hView 是「24H」列的数据（request_records + usage_records + ledger_entries 聚合）。
+// TotalRequests 包含已归属账号的全部终态记录（含 canceled）；进行中请求由 Runtime.InFlight 单独提供。
 type AccountUsage24hView struct {
 	TotalRequests     int64 `json:"total_requests"`
 	SucceededRequests int64 `json:"succeeded_requests"`
 	FailedRequests    int64 `json:"failed_requests"`
+	CanceledRequests  int64 `json:"canceled_requests"`
 	TotalTokens       int64 `json:"total_tokens"`
 	// SaleAmounts 按币种的净扣费串（"8.4021 CNY"），多币种逗号相连；金额走十进制字符串，不经 float。
 	SaleAmounts     string `json:"sale_amounts,omitempty"`
@@ -270,6 +272,7 @@ func (s *Service) attachUsage24h(ctx context.Context, channelID int64, accounts 
 			TotalRequests:     row.TotalRequests,
 			SucceededRequests: row.SucceededRequests,
 			FailedRequests:    row.FailedRequests,
+			CanceledRequests:  row.CanceledRequests,
 			TotalTokens:       row.TotalTokens,
 			AvgLatencyMs:      row.AvgLatencyMs,
 			AvgFirstTokenMs:   row.AvgFirstTokenMs,
