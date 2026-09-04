@@ -206,3 +206,10 @@ WHERE r.final_account_id IN (SELECT sa.id FROM subscription_accounts sa WHERE sa
   AND r.status = 'failed'
   AND r.created_at > now() - interval '24 hours'
 ORDER BY r.final_account_id, r.created_at DESC;
+
+-- name: AdminChannelAccountsLifetimeStats :many
+-- AdminChannelAccountsLifetimeStats 读取渠道下各账号的生命周期累计（「用量」列）。
+-- 数据由结算路径增量累加（subscription_account_stats），O(1) 读取，绝不做请求表全时聚合。
+SELECT s.account_id, s.lifetime_requests, s.lifetime_input_tokens, s.lifetime_output_tokens, s.lifetime_sale_amount
+FROM subscription_account_stats s
+WHERE s.account_id IN (SELECT sa.id FROM subscription_accounts sa WHERE sa.channel_id = sqlc.arg(channel_id));

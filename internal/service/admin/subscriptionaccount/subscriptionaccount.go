@@ -49,6 +49,7 @@ type Queries interface {
 	AdminChannelAccountsUsage24h(ctx context.Context, channelID int64) ([]sqlc.AdminChannelAccountsUsage24hRow, error)
 	AdminChannelAccountsSale24h(ctx context.Context, channelID int64) ([]sqlc.AdminChannelAccountsSale24hRow, error)
 	AdminChannelAccountsLastFailure24h(ctx context.Context, channelID int64) ([]sqlc.AdminChannelAccountsLastFailure24hRow, error)
+	AdminChannelAccountsLifetimeStats(ctx context.Context, channelID int64) ([]sqlc.AdminChannelAccountsLifetimeStatsRow, error)
 }
 
 // AccountRuntimeReader 读取账号运行态（冷却/隔离/暂停/在途），供列表页展示。
@@ -137,6 +138,20 @@ type Account struct {
 	Runtime *AccountRuntimeView `json:"runtime,omitempty"`
 	// Usage24h 是近 24 小时按账号聚合的产出（请求/成功率/token/售卖额），列表批量拉取。
 	Usage24h *AccountUsage24hView `json:"usage_24h,omitempty"`
+	// UsageLifetime 是生命周期累计（结算路径增量累加进 subscription_account_stats；「用量」列）。
+	// 从未产生结算终态的账号为 nil。
+	UsageLifetime *AccountUsageLifetimeView `json:"usage_lifetime,omitempty"`
+}
+
+// AccountUsageLifetimeView 是「用量」列的数据（建号至今累计，非 24H）。
+// 口径与账号 24H 聚合一致：只含已归属账号的结算终态；金额为客户实扣净额的十进制字符串（USD）。
+type AccountUsageLifetimeView struct {
+	TotalRequests int64 `json:"total_requests"`
+	InputTokens   int64 `json:"input_tokens"`
+	OutputTokens  int64 `json:"output_tokens"`
+	TotalTokens   int64 `json:"total_tokens"`
+	// SaleAmount 是累计售卖额十进制字符串（不经 float）；无扣费为 "0"。
+	SaleAmount string `json:"sale_amount"`
 }
 
 // AccountUsage24hView 是「24H」列的数据（request_records + usage_records + ledger_entries 聚合）。
@@ -221,6 +236,7 @@ func (s *Service) List(ctx context.Context, channelID int64, status string) (Lis
 		}
 	}
 	s.attachUsage24h(ctx, channelID, result.Accounts)
+	s.attachUsageLifetime(ctx, channelID, result.Accounts)
 	if s.runtime != nil && len(ids) > 0 {
 		runtimes, runtimeErr := s.runtime.AccountRuntimeMany(ctx, ids)
 		if runtimeErr == nil {
@@ -314,6 +330,34 @@ func (s *Service) attachUsage24h(ctx context.Context, channelID int64, accounts 
 	for index := range accounts {
 		if view, ok := views[accounts[index].ID]; ok {
 			accounts[index].Usage24h = view
+		}
+	}
+}
+
+// attachUsageLifetime 批量拉生命周期累计并挂到账号视图（O(1) 计数器读取，非请求表聚合）。
+// 与 24h 聚合同纪律：观测查询失败不阻断列表主体（该列显示为空，问题在日志里暴露）。
+func (s *Service) attachUsageLifetime(ctx context.Context, channelID int64, accounts []Account) {
+	rows, err := s.queries.AdminChannelAccountsLifetimeStats(ctx, channelID)
+	if err != nil {
+		return
+	}
+	views := make(map[int64]*AccountUsageLifetimeView, len(rows))
+	for _, row := range rows {
+		sale := numericToDecimalString(row.LifetimeSaleAmount)
+		if sale == "" {
+			sale = "0"
+		}
+		views[row.AccountID] = &AccountUsageLifetimeView{
+			TotalRequests: row.LifetimeRequests,
+			InputTokens:   row.LifetimeInputTokens,
+			OutputTokens:  row.LifetimeOutputTokens,
+			TotalTokens:   row.LifetimeInputTokens + row.LifetimeOutputTokens,
+			SaleAmount:    sale,
+		}
+	}
+	for index := range accounts {
+		if view, ok := views[accounts[index].ID]; ok {
+			accounts[index].UsageLifetime = view
 		}
 	}
 }

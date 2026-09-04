@@ -11,6 +11,39 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const addAccountLifetimeStats = `-- name: AddAccountLifetimeStats :exec
+INSERT INTO subscription_account_stats (
+    account_id, lifetime_requests, lifetime_input_tokens, lifetime_output_tokens, lifetime_sale_amount, updated_at
+)
+VALUES ($1, 1, $2, $3, $4, now())
+ON CONFLICT (account_id) DO UPDATE SET
+    lifetime_requests = subscription_account_stats.lifetime_requests + 1,
+    lifetime_input_tokens = subscription_account_stats.lifetime_input_tokens + EXCLUDED.lifetime_input_tokens,
+    lifetime_output_tokens = subscription_account_stats.lifetime_output_tokens + EXCLUDED.lifetime_output_tokens,
+    lifetime_sale_amount = subscription_account_stats.lifetime_sale_amount + EXCLUDED.lifetime_sale_amount,
+    updated_at = now()
+`
+
+type AddAccountLifetimeStatsParams struct {
+	AccountID    int64
+	InputTokens  int64
+	OutputTokens int64
+	SaleAmount   pgtype.Numeric
+}
+
+// AddAccountLifetimeStats 在首次结算事务内为归属账号增量累加生命周期计数（「用量」列数据源）。
+// 幂等保障来自结算的 running 状态闸门：重放在进入本语句前已短路，绝不重复累加。
+// 口径与账号 24H 聚合一致（只统计已归属账号的结算终态）；token 为账单口径，金额为客户实扣。
+func (q *Queries) AddAccountLifetimeStats(ctx context.Context, arg AddAccountLifetimeStatsParams) error {
+	_, err := q.db.Exec(ctx, addAccountLifetimeStats,
+		arg.AccountID,
+		arg.InputTokens,
+		arg.OutputTokens,
+		arg.SaleAmount,
+	)
+	return err
+}
+
 const adminChannelAccountsLastFailure24h = `-- name: AdminChannelAccountsLastFailure24h :many
 SELECT DISTINCT ON (r.final_account_id)
     r.final_account_id AS account_id,
@@ -40,6 +73,48 @@ func (q *Queries) AdminChannelAccountsLastFailure24h(ctx context.Context, channe
 	for rows.Next() {
 		var i AdminChannelAccountsLastFailure24hRow
 		if err := rows.Scan(&i.AccountID, &i.FailedAt, &i.ErrorCode); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const adminChannelAccountsLifetimeStats = `-- name: AdminChannelAccountsLifetimeStats :many
+SELECT s.account_id, s.lifetime_requests, s.lifetime_input_tokens, s.lifetime_output_tokens, s.lifetime_sale_amount
+FROM subscription_account_stats s
+WHERE s.account_id IN (SELECT sa.id FROM subscription_accounts sa WHERE sa.channel_id = $1)
+`
+
+type AdminChannelAccountsLifetimeStatsRow struct {
+	AccountID            int64
+	LifetimeRequests     int64
+	LifetimeInputTokens  int64
+	LifetimeOutputTokens int64
+	LifetimeSaleAmount   pgtype.Numeric
+}
+
+// AdminChannelAccountsLifetimeStats 读取渠道下各账号的生命周期累计（「用量」列）。
+// 数据由结算路径增量累加（subscription_account_stats），O(1) 读取，绝不做请求表全时聚合。
+func (q *Queries) AdminChannelAccountsLifetimeStats(ctx context.Context, channelID int64) ([]AdminChannelAccountsLifetimeStatsRow, error) {
+	rows, err := q.db.Query(ctx, adminChannelAccountsLifetimeStats, channelID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AdminChannelAccountsLifetimeStatsRow
+	for rows.Next() {
+		var i AdminChannelAccountsLifetimeStatsRow
+		if err := rows.Scan(
+			&i.AccountID,
+			&i.LifetimeRequests,
+			&i.LifetimeInputTokens,
+			&i.LifetimeOutputTokens,
+			&i.LifetimeSaleAmount,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

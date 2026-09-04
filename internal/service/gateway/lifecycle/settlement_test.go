@@ -1708,3 +1708,77 @@ func TestChatSettlementRollsBackFactsWhenBillingFails(t *testing.T) {
 		t.Fatalf("expected cost snapshot rollback, got %v", err)
 	}
 }
+
+// 池型账号生命周期累计（「用量」列数据源）：首次结算把请求数/token/售卖额增量累加进
+// subscription_account_stats；幂等重放（同参数再结算）在终态分支短路，绝不重复累加。
+func TestChatSettlementAccumulatesAccountLifetimeStats(t *testing.T) {
+	deps := newChatSettlementDBDeps(t)
+
+	var accountID int64
+	upstreamAccountID := fmt.Sprintf("lifetime-stats-%d", time.Now().UnixNano())
+	if err := deps.pool.QueryRow(deps.ctx, `
+		INSERT INTO subscription_accounts (channel_id, platform, credential_type, upstream_account_id, display_name, credentials, status)
+		VALUES ($1, 'openai', 'oauth', $2, 'lifetime-stats-test', '{}'::jsonb, 'enabled')
+		RETURNING id
+	`, deps.channelID, upstreamAccountID).Scan(&accountID); err != nil {
+		t.Fatalf("seed subscription account: %v", err)
+	}
+	t.Cleanup(func() {
+		// 本清理先于 deps 的自动清理执行（t.Cleanup LIFO），且不能依赖 deps.cleanup——它末尾会关闭
+		// 连接池。账号被 request_records.final_account_id 引用（NO ACTION），须自行按外键顺序先清
+		// 请求侧再删账号；统计行随账号外键级联删除。deps 自动清理随后重跑同组删除，幂等无害。
+		cleanupCtx := context.Background()
+		if deps.requestRecord.ID != 0 {
+			for _, stmt := range []string{
+				`DELETE FROM settlement_recovery_jobs WHERE request_record_id = $1`,
+				`DELETE FROM provider_service_tier_cost_risks WHERE request_record_id = $1`,
+				`DELETE FROM ledger_billing_exceptions WHERE request_record_id = $1`,
+				`DELETE FROM ledger_reservations WHERE request_record_id = $1`,
+				`DELETE FROM ledger_entries WHERE request_record_id = $1`,
+				`DELETE FROM provider_ledger_entries WHERE request_record_id = $1`,
+				`DELETE FROM cost_snapshots WHERE request_record_id = $1`,
+				`DELETE FROM price_snapshots WHERE request_record_id = $1`,
+				`DELETE FROM usage_records WHERE request_record_id = $1`,
+				`DELETE FROM request_attempts WHERE request_record_id = $1`,
+				`DELETE FROM request_records WHERE id = $1`,
+			} {
+				_, _ = deps.pool.Exec(cleanupCtx, stmt, deps.requestRecord.ID)
+			}
+		}
+		_, _ = deps.pool.Exec(cleanupCtx, `DELETE FROM subscription_accounts WHERE id = $1`, accountID)
+	})
+
+	billingCalculator := chatSettlementBilling(testNumeric(61_000000, -10))
+	ledgerService := ledger.NewService(deps.pool, deps.queries)
+	service := NewChatSettlementService(deps.pool, deps.queries, billingCalculator, ledgerService, &fakeChatProviderLedger{})
+
+	params := deps.params()
+	params.FinalAccountID = accountID
+	if err := service.SettleSuccessfulChat(deps.ctx, params); err != nil {
+		t.Fatalf("settle successful chat: %v", err)
+	}
+
+	assertLifetimeStats := func(phase string) {
+		t.Helper()
+		var requests, inputTokens, outputTokens int64
+		var sale pgtype.Numeric
+		if err := deps.pool.QueryRow(deps.ctx, `
+			SELECT lifetime_requests, lifetime_input_tokens, lifetime_output_tokens, lifetime_sale_amount
+			FROM subscription_account_stats
+			WHERE account_id = $1
+		`, accountID).Scan(&requests, &inputTokens, &outputTokens, &sale); err != nil {
+			t.Fatalf("%s: query lifetime stats: %v", phase, err)
+		}
+		// usage facts：Uncached(7)+CacheRead(3)=输入 10，OutputTotal=5；售卖额=实扣 0.0061。
+		if requests != 1 || inputTokens != 10 || outputTokens != 5 {
+			t.Fatalf("%s: expected 1 request / 10 input / 5 output, got %d/%d/%d", phase, requests, inputTokens, outputTokens)
+		}
+		assertNumericEqual(t, sale, testNumeric(61_000000, -10))
+	}
+	assertLifetimeStats("first settlement")
+
+	if err := service.SettleSuccessfulChat(deps.ctx, params); err != nil {
+		t.Fatalf("replay settlement: %v", err)
+	}
+	assertLifetimeStats("idempotent replay")
+}

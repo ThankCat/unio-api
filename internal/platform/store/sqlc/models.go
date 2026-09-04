@@ -956,6 +956,15 @@ type SubscriptionAccount struct {
 	ProxyID               pgtype.Int8
 }
 
+type SubscriptionAccountStat struct {
+	AccountID            int64
+	LifetimeRequests     int64
+	LifetimeInputTokens  int64
+	LifetimeOutputTokens int64
+	LifetimeSaleAmount   pgtype.Numeric
+	UpdatedAt            pgtype.Timestamptz
+}
+
 type SubscriptionLedgerEntry struct {
 	ID          int64
 	AccountID   int64

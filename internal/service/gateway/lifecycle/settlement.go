@@ -1265,6 +1265,32 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		return err
 	}
 
+	// 池型账号生命周期累计（账号列表「用量」列）：请求数/token/售卖额随首次结算增量累加。
+	// 幂等保障与 AddAPIKeySpentTotal 同源——重放在上方终态分支短路，绝不重复累加；
+	// 口径与账号 24H 聚合一致：只统计已归属账号（final_account_id）的结算终态。
+	// token 取账单口径（输入=uncached+cache read+三档 cache write，输出含 reasoning），
+	// 解析不出（partial 异常）按 0 计——请求数照常 +1，不因缺 usage 丢计数。
+	if params.FinalAccountID > 0 {
+		inputTokens, _ := facts.Usage.ObservedInputTokens()
+		outputTokens, _ := facts.Usage.OutputTokensTotal.BillableValue()
+		saleAmount := charge.Amount
+		if !saleAmount.Valid {
+			saleAmount = pgtype.Numeric{Int: big.NewInt(0), Valid: true}
+		}
+		if err := txQueries.AddAccountLifetimeStats(ctx, sqlc.AddAccountLifetimeStatsParams{
+			AccountID:    params.FinalAccountID,
+			InputTokens:  inputTokens,
+			OutputTokens: outputTokens,
+			SaleAmount:   saleAmount,
+		}); err != nil {
+			return failure.Wrap(
+				failure.CodeGatewayChatSettlementFailed,
+				err,
+				failure.WithMessage("add account lifetime stats"),
+			)
+		}
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return failure.Wrap(
 			failure.CodeGatewayChatSettlementFailed,

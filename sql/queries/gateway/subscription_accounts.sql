@@ -102,3 +102,18 @@ WHERE a.platform = $1
 -- name: GetEnabledProxyURL :one
 -- GetEnabledProxyURL 取启用代理的规范 URL（disabled/不存在返回 no rows → 调用方按直连处理）。
 SELECT url FROM proxies WHERE id = $1 AND status = 'enabled';
+
+-- name: AddAccountLifetimeStats :exec
+-- AddAccountLifetimeStats 在首次结算事务内为归属账号增量累加生命周期计数（「用量」列数据源）。
+-- 幂等保障来自结算的 running 状态闸门：重放在进入本语句前已短路，绝不重复累加。
+-- 口径与账号 24H 聚合一致（只统计已归属账号的结算终态）；token 为账单口径，金额为客户实扣。
+INSERT INTO subscription_account_stats (
+    account_id, lifetime_requests, lifetime_input_tokens, lifetime_output_tokens, lifetime_sale_amount, updated_at
+)
+VALUES (sqlc.arg(account_id), 1, sqlc.arg(input_tokens), sqlc.arg(output_tokens), sqlc.arg(sale_amount), now())
+ON CONFLICT (account_id) DO UPDATE SET
+    lifetime_requests = subscription_account_stats.lifetime_requests + 1,
+    lifetime_input_tokens = subscription_account_stats.lifetime_input_tokens + EXCLUDED.lifetime_input_tokens,
+    lifetime_output_tokens = subscription_account_stats.lifetime_output_tokens + EXCLUDED.lifetime_output_tokens,
+    lifetime_sale_amount = subscription_account_stats.lifetime_sale_amount + EXCLUDED.lifetime_sale_amount,
+    updated_at = now();
