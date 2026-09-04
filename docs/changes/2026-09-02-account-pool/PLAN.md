@@ -657,17 +657,20 @@ turn2 原样回放 → 上游接受并延续推理上下文答对）✓。
 **唯一剩余批次**：实现已全部定型（Fast 结算例外、经营视图、按号检测、完整供给预览均已落地），
 ADR 可以按最终代码行为开写。以下清单待执行：
 
-- [ ] 新增网关 ADR「订阅账号实体与账号级准入」（实体与绑定式生命周期、两阶段选号、`AttemptPermit`
+- [x] 新增网关 ADR「订阅账号实体与账号级准入」（实体与绑定式生命周期、两阶段选号、`AttemptPermit`
       账号维度、同渠道换号重试）。
-- [ ] 修订既有决策并显式记录关系：
+      （2026-09-04：unio-blueprint `docs/products/gateway/decisions/adr-0022-subscription-account-pool.md`，
+      已登记决策索引，架构底稿「相关决策」已指向。）
+- [x] 修订既有决策并显式记录关系（2026-09-04：各 ADR 增设「账号池修订/扩展/沿用」区块并互链 0022）：
   - ADR-0016（容量分输入、Sticky 绑定值、单请求不重复 Channel 的换号例外）；
   - ADR-0014（429/401 归因下沉到账号）；
   - ADR-0012（账号生命周期采用绑定式语义的差异）；
   - ADR-0020（账号操作接入模型供给影响预览）；
-  - 服务档位与 OpenAI FastMode（「按响应事实结算」增加 wire 级响应档位权威性例外）；
+  - 服务档位与 OpenAI FastMode（「按响应事实结算」增加 wire 级响应档位权威性例外，记录于 ADR-0022 第 11 条）；
   - ADR-0006 / ADR-0017（反向桥接：chat 候选资格放开、桥接路径的权威首字与 usage 口径）。
-  - ADR-0007 的原子准入、Redis 权威与 fail-closed 结论**原样沿用**，不修订。
-- [ ] Admin 侧补账号管理页面设计文档。
+  - ADR-0007 的原子准入、Redis 权威与 fail-closed 结论**原样沿用**，不修订（ADR-0022 引用确认）。
+- [x] Admin 侧补账号管理页面设计文档。
+      （2026-09-04：unio-blueprint `docs/products/admin/pages/subscription-account-management.md`，已登记页面索引。）
 - [x] 取得 429/封号真实样本后，回写蓝图证据等级并更新 `sandbox/codex/wire/samples/`。
       （2026-09-04：真实 429 错误体样本已归档 `upstream-rate-limits-429-body.json`，判据校准见第五节。
       封号 token_revoked 样本此前 E2E 已实测。）
