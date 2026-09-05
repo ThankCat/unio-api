@@ -480,7 +480,8 @@ func TestClassifyStickyFailure(t *testing.T) {
 	}{
 		{name: "nil error", err: nil},
 		{name: "upstream 5xx clears", err: upstream(adapter.UpstreamErrorServer), wantClear: true},
-		{name: "first token timeout clears", err: upstream(adapter.UpstreamErrorTimeout), wantClear: true},
+		// 2026-09-05：超时不清绑定（预算掐断不是渠道故障，清绑会把整段会话的缓存亲和推走）。
+		{name: "upstream timeout preserves", err: upstream(adapter.UpstreamErrorTimeout)},
 		{name: "401 credential clears", err: upstream(adapter.UpstreamErrorAuth), wantClear: true},
 		{name: "403 permission clears", err: upstream(adapter.UpstreamErrorPermission), wantClear: true},
 		{name: "429 preserves", err: upstream(adapter.UpstreamErrorRateLimit), wantTemporary: true},

@@ -46,9 +46,10 @@ func (h *responsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 只捕获进 ctx，是否可用由 service 提取器判定。
 	r = r.WithContext(sessionhint.WithClientSessionID(r.Context(), r.Header.Get("session-id")))
 
-	// x-codex-turn-metadata 携带客户端会话线程与轮次标识，只落本地请求审计、不转发上游。
+	// x-codex-turn-metadata / x-codex-window-id 携带客户端会话线程与轮次标识：解析值落本地请求审计，
+	// 原文交给 Codex wire 按账号命名空间改写后转发（官方客户端与 Sub2API 都发这两个头）；原文本身不出站。
 	r = r.WithContext(clientmeta.WithTurn(
-		r.Context(), clientmeta.ParseCodexTurnMetadata(r.Header.Get("x-codex-turn-metadata")),
+		r.Context(), clientmeta.ParseCodexHeaders(r.Header.Get("x-codex-turn-metadata"), r.Header.Get("x-codex-window-id")),
 	))
 
 	if err := httpx.DecodeJSON(w, r, &req); err != nil {
@@ -75,6 +76,10 @@ func (h *responsesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			_ = httpx.WriteError(w, http.StatusInternalServerError, "streaming_unsupported", "streaming unsupported")
 			return
 		}
+		// 下游保活：上游长思考期间客户端只会收到 SSE 注释帧，防止中间代理/客户端空闲断开
+		// （gateway.stream_keepalive_interval_ms，对齐 Sub2API）。
+		stopKeepalive := sw.RunKeepalive(httpx.SSEKeepaliveInterval())
+		defer stopKeepalive()
 
 		err = h.service.StreamResponse(r.Context(), req, func(ev ResponsesStreamEvent) error {
 			payload, marshalErr := json.Marshal(ev)

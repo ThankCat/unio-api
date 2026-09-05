@@ -61,8 +61,8 @@ func (a *Adapter) StreamResponse(ctx context.Context, ch channel.Runtime, req Re
 	}
 
 	// 响应头预算只约束「上游开始响应」，不约束流本体：Responses 流在长任务（图像生成等）
-	// 期间会先回 200 再静默数分钟才吐事件。首字预算与响应头同起点（§11.2），
-	// 首个有效生成 Token 之后才交给 idle 看门狗——否则「秒回 200 然后静默」会绕过首字保护。
+	// 期间会先回 200 再静默数分钟才吐事件。首字预算与响应头同起点（§11.2），由首个上游进展解除；
+	// idle 看门狗从响应头到达起守护数据间隔（三项都以 0 表示不限制）。
 	streamCtx, timeouts := adapter.StreamTimeoutContext(ctx, adapter.StreamTimeoutConfig{
 		ResponseHeader: ch.ResponseTimeout,
 		FirstToken:     ch.FirstTokenTimeout,
@@ -146,8 +146,13 @@ func (a *Adapter) StreamResponse(ctx context.Context, ch channel.Runtime, req Re
 		}
 
 		chunk := StreamChunk{EventType: eventType, Data: data}
-		if FirstTokenPayload(chunk) != "" {
-			timeouts.FirstToken()
+		// 进展（结构性事件）解除首字预算；TTFT 按当前口径记：semantic 记首个进展，visible 记首个可见内容。
+		progress := StreamProgress(chunk)
+		visible := FirstTokenPayload(chunk) != ""
+		if progress || visible {
+			timeouts.Progress()
+		}
+		if adapter.TTFTEligible(progress, visible) {
 			adapter.MarkFirstTokenEligible(streamCtx)
 		}
 

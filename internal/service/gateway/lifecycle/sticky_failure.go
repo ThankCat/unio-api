@@ -64,7 +64,9 @@ func classifyStickyFailure(err error) stickyFailureVerdict {
 		// 403 模型权限失效同样是渠道级永久失格。
 		return stickyFailureVerdict{clear: true, reason: "upstream_model_permission_revoked"}
 	case adapter.UpstreamErrorTimeout:
-		return stickyFailureVerdict{clear: true, reason: "upstream_timeout"}
+		// 超时不清绑定（2026-09-05）：reasoning 长思考被预算掐断是网关侧的判断而非渠道故障，
+		// 清绑会把整段会话的 prompt cache 亲和推到别的渠道/账号上；保留绑定、也不刷新 TTL。
+		return stickyFailureVerdict{reason: "upstream_timeout"}
 	case adapter.UpstreamErrorServer:
 		return stickyFailureVerdict{clear: true, reason: "upstream_server_error"}
 	default:

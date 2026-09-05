@@ -53,6 +53,7 @@ type SettingItem struct {
 	Label       string
 	Description string
 	HotReload   bool
+	ReadOnly    bool
 	Default     json.RawMessage
 	Value       json.RawMessage
 	Source      string // redis | db | default
@@ -77,6 +78,7 @@ func (s *Service) List(ctx context.Context) []SettingItem {
 			Label:       d.Label,
 			Description: d.Description,
 			HotReload:   d.HotReload,
+			ReadOnly:    d.ReadOnly,
 			Default:     d.Default,
 		}
 		if isRuntimeControlSetting(d.Key) {
@@ -127,6 +129,9 @@ func (s *Service) SetRawWithResult(ctx context.Context, key string, value json.R
 	}
 	if def.DedicatedControl {
 		return SettingWriteResult{}, errors.New("appsettings: setting " + key + " requires its dedicated control API")
+	}
+	if def.ReadOnly {
+		return SettingWriteResult{}, errors.New("appsettings: setting " + key + " is system-managed and read-only")
 	}
 	if def.Validate != nil {
 		if err := def.Validate(value); err != nil {

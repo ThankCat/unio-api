@@ -17,11 +17,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 
+	corechannel "github.com/ThankCat/unio-gateway/internal/core/channel"
 	"github.com/ThankCat/unio-gateway/internal/core/runtimecontrol"
 	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
@@ -47,6 +49,7 @@ type Queries interface {
 	AdminListPoolChannels(ctx context.Context) ([]sqlc.AdminListPoolChannelsRow, error)
 	GetEnabledProxyURL(ctx context.Context, id int64) (string, error)
 	AdminChannelAccountsUsage24h(ctx context.Context, channelID int64) ([]sqlc.AdminChannelAccountsUsage24hRow, error)
+	AdminChannelAccountsAttempts24h(ctx context.Context, channelID int64) ([]sqlc.AdminChannelAccountsAttempts24hRow, error)
 	AdminChannelAccountsSale24h(ctx context.Context, channelID int64) ([]sqlc.AdminChannelAccountsSale24hRow, error)
 	AdminChannelAccountsLastFailure24h(ctx context.Context, channelID int64) ([]sqlc.AdminChannelAccountsLastFailure24hRow, error)
 	AdminChannelAccountsLifetimeStats(ctx context.Context, channelID int64) ([]sqlc.AdminChannelAccountsLifetimeStatsRow, error)
@@ -131,8 +134,13 @@ type Account struct {
 	ConfigRevision        int64      `json:"config_revision"`
 	TokenExpiresAt        string     `json:"token_expires_at,omitempty"`
 	HasRefreshToken       bool       `json:"has_refresh_token"`
-	CreatedAt             time.Time  `json:"created_at"`
-	UpdatedAt             time.Time  `json:"updated_at"`
+	// FingerprintMode 是指纹收敛档位（off / device）。种子是系统内部事实，永不下发。
+	FingerprintMode string `json:"fingerprint_mode"`
+	// ResponseTimeoutMs / FirstTokenTimeoutMs 是账号级超时覆写：nil 继承渠道、0 不限制、正数覆写。
+	ResponseTimeoutMs   *int32    `json:"response_timeout_ms"`
+	FirstTokenTimeoutMs *int32    `json:"first_token_timeout_ms"`
+	CreatedAt           time.Time `json:"created_at"`
+	UpdatedAt           time.Time `json:"updated_at"`
 
 	// Runtime 是 Redis 运行态（冷却/临时不可调度/用量暂停/在途），列表读取时批量拉取。
 	Runtime *AccountRuntimeView `json:"runtime,omitempty"`
@@ -161,7 +169,12 @@ type AccountUsage24hView struct {
 	SucceededRequests int64 `json:"succeeded_requests"`
 	FailedRequests    int64 `json:"failed_requests"`
 	CanceledRequests  int64 `json:"canceled_requests"`
-	TotalTokens       int64 `json:"total_tokens"`
+	// AttemptTotal / AttemptSucceeded 是 attempt 口径的成功率事实（分母 = 成功 + 上游归责失败），
+	// 与渠道运维表完全同口径——账号成功率必须可以和渠道成功率直接对比。
+	// request 级计数（上面四项）只写成功路径的账号归因，不能用来算成功率。
+	AttemptTotal     int64 `json:"attempt_total"`
+	AttemptSucceeded int64 `json:"attempt_succeeded"`
+	TotalTokens      int64 `json:"total_tokens"`
 	// SaleAmounts 按币种的净扣费串（"8.4021 CNY"），多币种逗号相连；金额走十进制字符串，不经 float。
 	SaleAmounts     string `json:"sale_amounts,omitempty"`
 	AvgLatencyMs    int64  `json:"avg_latency_ms"`
@@ -280,18 +293,37 @@ func (s *Service) attachUsage24h(ctx context.Context, channelID int64, accounts 
 		return
 	}
 	views := make(map[int64]*AccountUsage24hView, len(usageRows))
+	ensure := func(accountID int64) *AccountUsage24hView {
+		view, ok := views[accountID]
+		if !ok {
+			view = &AccountUsage24hView{}
+			views[accountID] = view
+		}
+		return view
+	}
 	for _, row := range usageRows {
 		if !row.AccountID.Valid {
 			continue
 		}
-		views[row.AccountID.Int64] = &AccountUsage24hView{
-			TotalRequests:     row.TotalRequests,
-			SucceededRequests: row.SucceededRequests,
-			FailedRequests:    row.FailedRequests,
-			CanceledRequests:  row.CanceledRequests,
-			TotalTokens:       row.TotalTokens,
-			AvgLatencyMs:      row.AvgLatencyMs,
-			AvgFirstTokenMs:   row.AvgFirstTokenMs,
+		view := ensure(row.AccountID.Int64)
+		view.TotalRequests = row.TotalRequests
+		view.SucceededRequests = row.SucceededRequests
+		view.FailedRequests = row.FailedRequests
+		view.CanceledRequests = row.CanceledRequests
+		view.TotalTokens = row.TotalTokens
+		view.AvgLatencyMs = row.AvgLatencyMs
+		view.AvgFirstTokenMs = row.AvgFirstTokenMs
+	}
+	// attempt 口径成功率：失败 attempt 也归到账号，只有成功记录的账号不再显示 100%。
+	// 该聚合可能命中 request 聚合没有的账号（全部失败、无一归因成功），ensure 会补建视图。
+	if attemptRows, attemptErr := s.queries.AdminChannelAccountsAttempts24h(ctx, channelID); attemptErr == nil {
+		for _, row := range attemptRows {
+			if !row.AccountID.Valid {
+				continue
+			}
+			view := ensure(row.AccountID.Int64)
+			view.AttemptTotal = row.AttemptTotal
+			view.AttemptSucceeded = row.AttemptSucceeded
 		}
 	}
 	if saleRows, saleErr := s.queries.AdminChannelAccountsSale24h(ctx, channelID); saleErr == nil {
@@ -319,10 +351,7 @@ func (s *Service) attachUsage24h(ctx context.Context, channelID int64, accounts 
 			if !row.AccountID.Valid {
 				continue
 			}
-			view, ok := views[row.AccountID.Int64]
-			if !ok {
-				continue
-			}
+			view := ensure(row.AccountID.Int64)
 			view.LastFailureAt = row.FailedAt.Time.UTC().Format(time.RFC3339)
 			view.LastFailureCode = row.ErrorCode
 		}
@@ -593,6 +622,11 @@ type UpdateConfigInput struct {
 	// SubscriptionExpiresAt 是订阅到期时间（到期预警数据源）。上游不提供机读到期时间，
 	// 运营在这里录入/更正；nil 表示清除（未知）。
 	SubscriptionExpiresAt *time.Time
+	// FingerprintMode 是指纹收敛档位（off / device）；空串表示不改。种子由系统管理，不可指定。
+	FingerprintMode string
+	// ResponseTimeoutMs / FirstTokenTimeoutMs 是账号级超时覆写：nil 写 NULL（继承渠道），0 不限制，正数覆写。
+	ResponseTimeoutMs   *int32
+	FirstTokenTimeoutMs *int32
 }
 
 // UpdateConfig 修改调度参数并把变更传播到运行态围栏（账号 config_revision +1、
@@ -609,6 +643,18 @@ func (s *Service) UpdateConfig(ctx context.Context, in UpdateConfigInput) (Accou
 	}
 	if in.ConcurrencyLimit != nil && *in.ConcurrencyLimit < 0 {
 		return Account{}, invalidArgument("concurrency_limit", "concurrency limit must be >= 0")
+	}
+	fingerprintMode := strings.TrimSpace(in.FingerprintMode)
+	switch corechannel.FingerprintMode(fingerprintMode) {
+	case "", corechannel.FingerprintModeOff, corechannel.FingerprintModeDevice:
+	default:
+		return Account{}, invalidArgument("fingerprint_mode", "fingerprint mode must be one of: off, device")
+	}
+	if in.ResponseTimeoutMs != nil && *in.ResponseTimeoutMs < 0 {
+		return Account{}, invalidArgument("response_timeout_ms", "response_timeout_ms must be >= 0 when set (0 = unlimited)")
+	}
+	if in.FirstTokenTimeoutMs != nil && *in.FirstTokenTimeoutMs < 0 {
+		return Account{}, invalidArgument("first_token_timeout_ms", "first_token_timeout_ms must be >= 0 when set (0 = unlimited)")
 	}
 	account, err := s.queries.AdminGetSubscriptionAccount(ctx, in.AccountID)
 	if err != nil {
@@ -639,9 +685,29 @@ func (s *Service) UpdateConfig(ctx context.Context, in UpdateConfigInput) (Accou
 			ConcurrencyLimit:      optionalInt4(in.ConcurrencyLimit),
 			Priority:              in.Priority,
 			SubscriptionExpiresAt: expiresAt,
+			ResponseTimeoutMs:     optionalInt4From32(in.ResponseTimeoutMs),
+			FirstTokenTimeoutMs:   optionalInt4From32(in.FirstTokenTimeoutMs),
 		})
 		if updateErr != nil {
 			return storeFailed(updateErr, "update subscription account config")
+		}
+		updated = row
+		if fingerprintMode == "" || fingerprintMode == row.FingerprintMode {
+			return nil
+		}
+		// 指纹收敛档位改变出站设备身份：同事务切档，种子只在账号首次需要收敛时生成一次
+		//（切回 off 不清空，再开启时设备身份不变）。种子是系统随机值，永不用主键充当上游身份。
+		var seed pgtype.UUID
+		if fingerprintMode != string(corechannel.FingerprintModeOff) && !row.FingerprintSeed.Valid {
+			seed = pgtype.UUID{Bytes: uuid.New(), Valid: true}
+		}
+		row, updateErr = qtx.AdminSetSubscriptionAccountFingerprint(ctx, sqlc.AdminSetSubscriptionAccountFingerprintParams{
+			ID:              in.AccountID,
+			FingerprintMode: fingerprintMode,
+			Seed:            seed,
+		})
+		if updateErr != nil {
+			return storeFailed(updateErr, "update subscription account fingerprint mode")
 		}
 		updated = row
 		return nil
@@ -1001,8 +1067,10 @@ func accountFromListRow(row sqlc.AdminListSubscriptionAccountsRow) Account {
 		ID: row.ID, ChannelID: row.ChannelID, Platform: row.Platform,
 		CredentialType: row.CredentialType, UpstreamAccountID: row.UpstreamAccountID,
 		DisplayName: row.DisplayName, Priority: row.Priority, Status: row.Status,
-		ConfigRevision: row.ConfigRevision,
-		CreatedAt:      row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time,
+		ConfigRevision: row.ConfigRevision, FingerprintMode: row.FingerprintMode,
+		ResponseTimeoutMs:   timeoutOverrideResult(row.ResponseTimeoutMs),
+		FirstTokenTimeoutMs: timeoutOverrideResult(row.FirstTokenTimeoutMs),
+		CreatedAt:           row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time,
 	}
 	if has, ok := row.HasRefreshToken.(bool); ok {
 		account.HasRefreshToken = has
@@ -1056,8 +1124,10 @@ func accountFromRow(row sqlc.SubscriptionAccount) Account {
 		ID: row.ID, ChannelID: row.ChannelID, Platform: row.Platform,
 		CredentialType: row.CredentialType, UpstreamAccountID: row.UpstreamAccountID,
 		DisplayName: row.DisplayName, Priority: row.Priority, Status: row.Status,
-		ConfigRevision: row.ConfigRevision,
-		CreatedAt:      row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time,
+		ConfigRevision: row.ConfigRevision, FingerprintMode: row.FingerprintMode,
+		ResponseTimeoutMs:   timeoutOverrideResult(row.ResponseTimeoutMs),
+		FirstTokenTimeoutMs: timeoutOverrideResult(row.FirstTokenTimeoutMs),
+		CreatedAt:           row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time,
 	}
 	if credsErr == nil {
 		account.HasRefreshToken = creds.RefreshToken != ""
@@ -1137,6 +1207,22 @@ func optionalInt4(v *int64) pgtype.Int4 {
 		return pgtype.Int4{}
 	}
 	return pgtype.Int4{Int32: int32(*v), Valid: true}
+}
+
+func optionalInt4From32(v *int32) pgtype.Int4 {
+	if v == nil {
+		return pgtype.Int4{}
+	}
+	return pgtype.Int4{Int32: *v, Valid: true}
+}
+
+// timeoutOverrideResult 把账号级超时列还原为 *int32（NULL → nil）。
+func timeoutOverrideResult(v pgtype.Int4) *int32 {
+	if !v.Valid {
+		return nil
+	}
+	ms := v.Int32
+	return &ms
 }
 
 func accountLoadError(err error) error {

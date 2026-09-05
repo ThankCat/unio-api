@@ -74,7 +74,8 @@ type UpdateInput struct {
 	ModelID       int64
 	UpstreamModel string
 	Status        string
-	// VerificationItemID 是启用绑定或替换 upstream_model 时必须提交的当前成功验证证据。
+	// VerificationItemID 是启用绑定或替换 upstream_model 时必须提交的成功验证证据
+	//（同一绑定、验证成功即长期有效，不随配置修订过期；重验时机由运营决定）。
 	VerificationItemID *int64
 	// Confirmation 是停用或解绑前的影响确认与显式 Offering 选择（ADR-0019）。
 	Confirmation supply.Confirmation
@@ -195,7 +196,7 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Binding, error) {
 			ItemID: *in.VerificationItemID, ChannelID: in.ChannelID, ModelID: in.ModelID, UpstreamModel: upstreamModel,
 		}); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
-				return Binding{}, conflict("model verification is missing, failed, stale, or belongs to another binding")
+				return Binding{}, conflict("model verification is missing, failed, or belongs to another binding")
 			}
 			return Binding{}, storeFailed(err, "validate channel model verification evidence")
 		}

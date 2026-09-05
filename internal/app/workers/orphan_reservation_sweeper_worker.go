@@ -33,8 +33,10 @@ type OrphanAttemptPermitReader interface {
 }
 
 // OrphanReservationSweeperWorker 周期扫描并收口进程崩溃遗留的「孤儿」预授权（status=authorized、请求永久 running、
-// 未向客户交付内容、无 settlement 补偿任务）：无 running attempt 时直接收口；有 running attempt 时必须先确认
-// permit 已失效。收口会释放冻结、记 risk_exposure 上界敞口并把 request/attempt 推进到 failed。
+// 交付未完成、无 settlement 补偿任务）：无 running attempt 时直接收口；有 running attempt 时必须先确认
+// permit 已失效（进程死亡的跨进程证明——正常长流每 10s 续期）。交付已开始的流同样在范围内（2026-09-05）：
+// 热重启/崩溃杀死在途流后 usage 事实已丢失，不可能再结算，不扣费释放冻结。
+// 收口会释放冻结、记 risk_exposure 上界敞口并把 request/attempt 推进到 failed（交付中的一并标 interrupted）。
 //
 // 与 settlement_recovery worker 严格互补：扫描查询排除有补偿任务的预授权，单条收口在 request 行锁内再次
 // 确认 delivery/recovery/attempt 集合，绝不释放仍在正常长流或「上游可能已成功、等待 capture」的冻结。

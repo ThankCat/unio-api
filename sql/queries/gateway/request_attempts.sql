@@ -38,7 +38,8 @@ INSERT INTO request_attempts (
     routing_candidate_index,
     upstream_endpoint,
     requested_service_tier,
-    forwarded_service_tier
+    forwarded_service_tier,
+    account_id
 )
 SELECT request_guard.guarded_request_record_id,
            sqlc.arg(permit_id),
@@ -69,7 +70,8 @@ SELECT request_guard.guarded_request_record_id,
            sqlc.arg(routing_candidate_index),
            sqlc.arg(upstream_endpoint),
            sqlc.narg(requested_service_tier),
-           sqlc.narg(forwarded_service_tier)
+           sqlc.narg(forwarded_service_tier),
+           sqlc.narg(account_id)
 FROM request_guard
 RETURNING request_attempts.*;
 

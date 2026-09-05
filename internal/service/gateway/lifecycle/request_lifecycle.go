@@ -579,6 +579,9 @@ func (l *RequestLifecycle) CreateAttemptForEndpoint(
 		StartedAt:              time.Now(),
 		RequestedServiceTier:   requestRecord.RequestedServiceTier,
 		ForwardedServiceTier:   forwardedServiceTier,
+		// 池型候选在 permit 固化账号后由 applyAccountOutbound 写入 Channel.Account；credential 型为 0。
+		// attempt 级账号归因是账号维度成功率与失败下钻的数据源（request 级 final_account_id 只写成功路径）。
+		AccountID: candidate.Channel.Account.ID,
 	})
 	if err != nil {
 		return requestlog.AttemptRecord{}, err

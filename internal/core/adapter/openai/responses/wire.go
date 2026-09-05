@@ -1,6 +1,7 @@
 package responses
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"time"
@@ -55,6 +56,11 @@ type Wire struct {
 	// stream 是本次出站的目标流式形态。nil = 零转换直传（官方 wire 纪律不变）。
 	NormalizeRequest func(body []byte, stream bool) ([]byte, error)
 
+	// BindSession 在构造出站 HTTP 请求前把会话身份写进请求体，/responses 与 /responses/compact
+	// 共用（Codex：按 ctx 中的会话亲和事实与账号派生稳定标识，改写 prompt_cache_key；对应请求头
+	// 由 Decorate 用同一派生写入）。nil = 不表达会话身份（官方 wire 零转换）。
+	BindSession func(ctx context.Context, ch channel.Runtime, body []byte) ([]byte, error)
+
 	// ForceStreaming 表示上游只接受流式请求（Codex 后端对 stream=false 直接 400）。
 	// 置位后非流式调用由 adapter 以流式出站、聚合终态 response 对象还原成非流式响应。
 	ForceStreaming bool
@@ -66,6 +72,19 @@ func (a *Adapter) normalizeRequest(req Request, stream bool) (Request, error) {
 		return req, nil
 	}
 	body, err := a.wire.NormalizeRequest(req.Body, stream)
+	if err != nil {
+		return req, err
+	}
+	req.Body = body
+	return req, nil
+}
+
+// bindSession 应用 wire 出站前会话身份绑定；缺省 wire 零转换。
+func (a *Adapter) bindSession(ctx context.Context, ch channel.Runtime, req Request) (Request, error) {
+	if a.wire.BindSession == nil {
+		return req, nil
+	}
+	body, err := a.wire.BindSession(ctx, ch, req.Body)
 	if err != nil {
 		return req, err
 	}

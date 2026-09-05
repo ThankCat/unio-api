@@ -195,6 +195,9 @@ type CreateAttemptParams struct {
 	StartedAt              time.Time
 	RequestedServiceTier   servicetier.Tier
 	ForwardedServiceTier   servicetier.Tier
+	// AccountID 是 permit 固化的订阅账号（attempt 级归因，账号维度成功率/失败下钻的数据源）；
+	// credential 型渠道为 0（落库 NULL）。
+	AccountID int64
 }
 
 // AttemptRecord 表示一次上游 channel 尝试记录。

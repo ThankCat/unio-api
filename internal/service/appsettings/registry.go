@@ -27,6 +27,8 @@ type Definition struct {
 	HotReload bool
 	// DedicatedControl 表示该设置只能通过专用控制面读取和修改，不出现在通用设置接口中。
 	DedicatedControl bool
+	// ReadOnly 表示该设置由系统（如 worker 同步任务）独占写入：通用列表可见，通用写入口拒绝。
+	ReadOnly bool
 	// Default 是 DB 无记录时的默认值(规范 JSON)。
 	Default json.RawMessage
 	// Validate 在写入前校验值合法性;nil 表示不校验。
@@ -84,8 +86,13 @@ func DefaultRegistry() *Registry {
 		credential401ThresholdDefinition(),
 		accountUsagePauseThresholdDefinition(),
 		accountPoolPreferSoonestResetDefinition(),
+		codexClientVersionDefinition(),
+		codexClientVersionAutoSyncDefinition(),
+		codexClientVersionSyncedDefinition(),
 		defaultResponseTimeoutDefinition(),
 		defaultFirstTokenTimeoutDefinition(),
+		streamKeepaliveIntervalDefinition(),
+		openAITTFTModeDefinition(),
 		concurrencyDefaultsDefinition(),
 		routingBalanceDefinition(),
 		routingStickyDefinition(),

@@ -13,8 +13,8 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-// testPriceRatio 返回候选行上的模型售价倍率（1.0）；不设倍率会让售价解析因无效倍率报错。
-func testPriceRatio() pgtype.Numeric {
+// testSaleDiscount 返回候选行上的模型售价折扣（1.0）；不设倍率会让售价解析因无效倍率报错。
+func testSaleDiscount() pgtype.Numeric {
 	return pgtype.Numeric{Int: big.NewInt(1), Exp: 0, Valid: true}
 }
 
@@ -82,7 +82,7 @@ func TestRouterPlanChatReturnsOrderedCandidates(t *testing.T) {
 				Credential:              "secret://openai/main",
 				ResponseTimeoutMs:       pgtype.Int4{Int32: 15000, Valid: true},
 				UpstreamModel:           "gpt-4.1",
-				SalePriceRatio:          testPriceRatio(),
+				SaleDiscount:          testSaleDiscount(),
 			},
 			{
 				RequestedModelID:  "openai/gpt-4.1",
@@ -93,7 +93,7 @@ func TestRouterPlanChatReturnsOrderedCandidates(t *testing.T) {
 				Credential:        "secret://openai/backup",
 				ResponseTimeoutMs: pgtype.Int4{Int32: 30000, Valid: true},
 				UpstreamModel:     "gpt-4.1",
-				SalePriceRatio:    testPriceRatio(),
+				SaleDiscount:    testSaleDiscount(),
 			},
 		},
 	}
@@ -181,7 +181,7 @@ func TestRouterPlanChatFreezesProviderCostToSaleRatio(t *testing.T) {
 			Int: big.NewInt(10), Valid: true,
 		},
 		OutputPrice:     pgtype.Numeric{Int: big.NewInt(20), Valid: true},
-		SalePriceRatio:  testPriceRatio(),
+		SaleDiscount:  testSaleDiscount(),
 		CostCurrency:    "USD",
 		CostPricingUnit: "per_1m_tokens",
 		UncachedInputCost: pgtype.Numeric{
@@ -205,7 +205,8 @@ func TestRouterPlanChatFreezesProviderCostToSaleRatio(t *testing.T) {
 	}
 }
 
-func TestNewRouterUsesFallbackDefaultTimeout(t *testing.T) {
+// TestNewRouterZeroDefaultTimeoutMeansUnlimited 冻结 2026-09-05 语义：全局默认 0 = 不限制，没有内置兜底常量。
+func TestNewRouterZeroDefaultTimeoutMeansUnlimited(t *testing.T) {
 	store := &fakeStore{
 		rows: []sqlc.FindModelCandidatesRow{
 			{
@@ -215,7 +216,7 @@ func TestNewRouterUsesFallbackDefaultTimeout(t *testing.T) {
 				Credential:        "secret://openai/main",
 				ResponseTimeoutMs: pgtype.Int4{Valid: false},
 				UpstreamModel:     "gpt-4.1",
-				SalePriceRatio:    testPriceRatio(),
+				SaleDiscount:    testSaleDiscount(),
 			},
 		},
 	}
@@ -230,8 +231,8 @@ func TestNewRouterUsesFallbackDefaultTimeout(t *testing.T) {
 		t.Fatalf("PlanChat returned error: %v", err)
 	}
 
-	if got.Candidates[0].Channel.ResponseTimeout != defaultResponseTimeoutFallback {
-		t.Fatalf("expected fallback default timeout %v, got %v", defaultResponseTimeoutFallback, got.Candidates[0].Channel.ResponseTimeout)
+	if got.Candidates[0].Channel.ResponseTimeout != 0 {
+		t.Fatalf("default 0 must mean unlimited, got %v", got.Candidates[0].Channel.ResponseTimeout)
 	}
 }
 
@@ -245,7 +246,7 @@ func TestRouterSetDefaultTimeoutTakesEffect(t *testing.T) {
 				Credential:        "secret://openai/main",
 				ResponseTimeoutMs: pgtype.Int4{Valid: false},
 				UpstreamModel:     "gpt-4.1",
-				SalePriceRatio:    testPriceRatio(),
+				SaleDiscount:    testSaleDiscount(),
 			},
 		}
 	}
@@ -267,14 +268,22 @@ func TestRouterSetDefaultTimeoutTakesEffect(t *testing.T) {
 		t.Fatalf("expected hot-reloaded timeout 45s, got %v", got.Candidates[0].Channel.ResponseTimeout)
 	}
 
-	// <=0 兜底为内置 30s。
+	// 0 = 不限制（负数同样按不限制处理，settings 校验层已拒绝负数）。
 	router.SetDefaultResponseTimeout(0)
 	got, err = router.PlanChat(context.Background(), req)
 	if err != nil {
 		t.Fatalf("PlanChat returned error: %v", err)
 	}
-	if got.Candidates[0].Channel.ResponseTimeout != defaultResponseTimeoutFallback {
-		t.Fatalf("expected fallback timeout %v, got %v", defaultResponseTimeoutFallback, got.Candidates[0].Channel.ResponseTimeout)
+	if got.Candidates[0].Channel.ResponseTimeout != 0 {
+		t.Fatalf("expected unlimited (0), got %v", got.Candidates[0].Channel.ResponseTimeout)
+	}
+	router.SetDefaultResponseTimeout(-time.Second)
+	got, err = router.PlanChat(context.Background(), req)
+	if err != nil {
+		t.Fatalf("PlanChat returned error: %v", err)
+	}
+	if got.Candidates[0].Channel.ResponseTimeout != 0 {
+		t.Fatalf("negative default must be treated as unlimited, got %v", got.Candidates[0].Channel.ResponseTimeout)
 	}
 }
 
@@ -408,7 +417,7 @@ func TestRouterPlanChatSkipsBadCandidateKeepsGood(t *testing.T) {
 				Credential:        "secret://openai/good",
 				ResponseTimeoutMs: pgtype.Int4{Int32: 30000, Valid: true},
 				UpstreamModel:     "gpt-4.1",
-				SalePriceRatio:    testPriceRatio(),
+				SaleDiscount:    testSaleDiscount(),
 			},
 		},
 	}
@@ -484,7 +493,7 @@ func salePriceRow() sqlc.FindModelCandidatesRow {
 		BasePricingUnit:    "per_1m_tokens",
 		UncachedInputPrice: numeric(10, 0),
 		OutputPrice:        numeric(20, 0),
-		SalePriceRatio:     numeric(1, 0),
+		SaleDiscount:     numeric(1, 0),
 		CostCurrency:       "USD",
 		CostPricingUnit:    "per_1m_tokens",
 		UncachedInputCost:  numeric(1, 0),
@@ -492,11 +501,11 @@ func salePriceRow() sqlc.FindModelCandidatesRow {
 	}
 }
 
-// 售价倍率路径：模型没配绝对售价时，售价 = 基准价 × 该模型自己的倍率，
+// 售价折扣路径：模型没配绝对售价时，售价 = 基准价 × 该模型自己的倍率，
 // 且倍率落进快照供审计倒推基准价。
 func TestRouterPlanChatScalesSalePriceByRatio(t *testing.T) {
 	row := salePriceRow()
-	row.SalePriceRatio = numeric(25, -1) // 2.5
+	row.SaleDiscount = numeric(25, -1) // 2.5
 	store := &fakeStore{rows: []sqlc.FindModelCandidatesRow{row}}
 	router := NewRouter(store, 30*time.Second)
 
@@ -512,7 +521,7 @@ func TestRouterPlanChatScalesSalePriceByRatio(t *testing.T) {
 	if got := numericFloat(t, candidate.SalePrice.OutputPrice); got != 50 {
 		t.Fatalf("output sale price = %v, want 50 (20 × 2.5)", got)
 	}
-	if got := numericFloat(t, candidate.PriceRatio); got != 2.5 {
+	if got := numericFloat(t, candidate.SaleDiscount); got != 2.5 {
 		t.Fatalf("snapshot price ratio = %v, want 2.5", got)
 	}
 }
@@ -523,7 +532,7 @@ func TestRouterPlanChatPrefersAbsoluteSalePriceOverRatio(t *testing.T) {
 	row := salePriceRow()
 	row.SaleUncachedInputPrice = numeric(7, 0)
 	row.SaleOutputPrice = numeric(9, 0)
-	row.SalePriceRatio = numeric(25, -1) // 2.5，应被忽略
+	row.SaleDiscount = numeric(25, -1) // 2.5，应被忽略
 	store := &fakeStore{rows: []sqlc.FindModelCandidatesRow{row}}
 	router := NewRouter(store, 30*time.Second)
 
@@ -539,7 +548,7 @@ func TestRouterPlanChatPrefersAbsoluteSalePriceOverRatio(t *testing.T) {
 	if got := numericFloat(t, candidate.SalePrice.OutputPrice); got != 9 {
 		t.Fatalf("output sale price = %v, want 9 (绝对售价，不乘倍率)", got)
 	}
-	if candidate.PriceRatio.Valid {
+	if candidate.SaleDiscount.Valid {
 		t.Fatal("绝对售价路径下快照倍率必须留空")
 	}
 }
@@ -549,7 +558,7 @@ func TestRouterPlanChatDoesNotMixFastRatioWhenStandardAbsoluteConfigured(t *test
 	row := salePriceRow()
 	row.SaleUncachedInputPrice = numeric(7, 0)
 	row.SaleOutputPrice = numeric(9, 0)
-	row.SalePriceRatio = numeric(25, -1) // 2.5，绝对售价在场时不得用于 Fast
+	row.SaleDiscount = numeric(25, -1) // 2.5，绝对售价在场时不得用于 Fast
 	row.FastModelPriceServiceTierID = 88
 	row.FastUncachedInputPrice = numeric(10, 0)
 	row.FastOutputPrice = numeric(20, 0)
@@ -573,7 +582,7 @@ func TestRouterPlanChatDoesNotMixFastRatioWhenStandardAbsoluteConfigured(t *test
 // 倍率实体生效时，即使库里留着 Fast 绝对售价，Fast 也必须按倍率算，不能一边倍率一边绝对。
 func TestRouterPlanChatDoesNotUseFastAbsoluteWhenStandardUsesRatio(t *testing.T) {
 	row := salePriceRow()
-	row.SalePriceRatio = numeric(25, -1) // 2.5
+	row.SaleDiscount = numeric(25, -1) // 2.5
 	row.FastModelPriceServiceTierID = 88
 	row.FastUncachedInputPrice = numeric(10, 0)
 	row.FastOutputPrice = numeric(20, 0)
@@ -604,7 +613,7 @@ func TestRouterPlanChatUsesFastAbsoluteWithStandardAbsolute(t *testing.T) {
 	row := salePriceRow()
 	row.SaleUncachedInputPrice = numeric(7, 0)
 	row.SaleOutputPrice = numeric(9, 0)
-	row.SalePriceRatio = numeric(25, -1) // 2.5，应被整组忽略
+	row.SaleDiscount = numeric(25, -1) // 2.5，应被整组忽略
 	row.FastModelPriceServiceTierID = 88
 	row.FastUncachedInputPrice = numeric(10, 0)
 	row.FastOutputPrice = numeric(20, 0)
@@ -622,7 +631,7 @@ func TestRouterPlanChatUsesFastAbsoluteWithStandardAbsolute(t *testing.T) {
 	if got := numericFloat(t, candidate.FastSalePrice.UncachedInputPrice); got != 11 {
 		t.Fatalf("fast sale = %v, want 11 (Fast 绝对售价)", got)
 	}
-	if candidate.PriceRatio.Valid {
+	if candidate.SaleDiscount.Valid {
 		t.Fatal("绝对售价路径下快照倍率必须留空")
 	}
 }
@@ -634,7 +643,7 @@ func TestRouterPlanChatUsesFastAbsoluteWithStandardAbsolute(t *testing.T) {
 // 也不能兜底成 1.0——那等于按基准价原价卖，是一次静默的定价事故。
 func TestRouterPlanChatExcludesCandidateWhenSalePriceUnresolvable(t *testing.T) {
 	row := salePriceRow()
-	row.SalePriceRatio = pgtype.Numeric{}
+	row.SaleDiscount = pgtype.Numeric{}
 	store := &fakeStore{rows: []sqlc.FindModelCandidatesRow{row}}
 	router := NewRouter(store, 30*time.Second)
 

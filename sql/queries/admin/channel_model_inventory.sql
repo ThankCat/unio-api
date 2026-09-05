@@ -328,17 +328,17 @@ WHERE r.id = sqlc.arg(run_id) AND r.status = 'running'
 RETURNING r.*;
 
 -- name: GetCurrentChannelModelVerificationEvidence :one
+-- GetCurrentChannelModelVerificationEvidence 校验启用/改映射所提交的验证证据：必须属于同一
+-- (channel, model, upstream_model) 绑定、验证成功、且所在批次已终态。
+-- 2026-09-05 起不再要求证据的配置修订号与当前一致：任何一次渠道编辑（超时/优先级/代理……）都会提升
+-- 修订号，与「模型能不能用」无关，按修订号作废会强迫运营反复花钱重验（每次验证都是真实上游调用）。
+-- 验证结果长期有效，重验时机由运营决定；执行期的 stale 守卫（批次排队期间配置变化即作废）保留。
 SELECT i.*
 FROM channel_model_verification_items i
 JOIN channel_model_verification_runs r ON r.id = i.run_id
-JOIN channels c ON c.id = r.channel_id
-JOIN providers p ON p.id = c.provider_id
 WHERE i.id = sqlc.arg(item_id)
   AND r.channel_id = sqlc.arg(channel_id)
   AND i.model_id = sqlc.arg(model_id)
   AND i.upstream_model = sqlc.arg(upstream_model)
   AND i.status = 'succeeded' AND i.success = true
-  AND r.status IN ('succeeded', 'failed')
-  AND r.channel_config_revision = c.config_revision
-  AND r.provider_origin_revision = p.origin_revision
-  AND r.provider_status_revision = p.status_revision;
+  AND r.status IN ('succeeded', 'failed');

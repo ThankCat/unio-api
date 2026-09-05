@@ -34,7 +34,7 @@ func main() {
 		os.Exit(1)
 	}
 	logger, _ := zap.NewDevelopment()
-	outbound := subscription.NewOutbound(queries, subscription.NewTokenClient(nil), nil, nil, logger)
+	outbound := subscription.NewOutbound(queries, subscription.NewTokenClient(nil, nil), nil, nil, logger)
 	refreshed, err := outbound.RefreshAccount(ctx, 168, creds, "")
 	if err != nil {
 		fmt.Println("refresh:", err)

@@ -56,3 +56,15 @@ func FirstTokenPayload(chunk ChatStreamChunk) string {
 
 	return payload.String()
 }
+
+// StreamProgress 判定 chat chunk 是否表示上游已在推进本次响应（2026-09-05 对齐 Sub2API 的 semantic 口径：
+// Chat Completions 没有 Responses 那样的协议前导，首个携带 delta 的 chunk 即进展）。
+//
+// 算进展：任何带 role / 生成负载 / 工具调用的 chunk；不算进展：usage-only、finish-only、纯 ID/model 的空 chunk。
+// 它与 FirstTokenPayload 的区别只在 role-only chunk：role-only 是进展但不是可见内容。
+func StreamProgress(chunk ChatStreamChunk) bool {
+	if chunk.Role != "" || len(chunk.ToolCalls) > 0 || len(chunk.FunctionCall) > 0 {
+		return true
+	}
+	return FirstTokenPayload(chunk) != ""
+}

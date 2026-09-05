@@ -608,7 +608,8 @@ func (s *Service) executeProbeCandidatesStream(ctx context.Context, snapshot pro
 	runtime := corechannel.Runtime{
 		ID: snapshot.ChannelID, Origin: snapshot.Origin,
 		APIKey: strings.TrimSpace(snapshot.Credential), ProviderSlug: snapshot.ProviderSlug,
-		// 渠道巡检是非流式探测，只需要响应超时；探测超时独立于业务默认值。
+		// 渠道巡检是探测，只需要响应超时；探测超时独立于业务默认值（业务默认 0=不限制，探测不能悬挂）。
+		// 只收流式的 wire（Codex）会以流式出站聚合，同一个值同时约束其响应头阶段。
 		ResponseTimeout: probeTimeout,
 		// 渠道级出站代理；账号自带代理时 adapter 的回退链会优先账号代理。
 		ProxyURL: snapshot.ChannelProxyURL,

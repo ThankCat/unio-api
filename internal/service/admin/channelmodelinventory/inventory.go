@@ -13,11 +13,17 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 )
 
+// Inventory 是渠道模型清单的完整视图。
+//
+// 2026-09-05 起不再输出「快照/验证已过期」类展示事实：过期判定曾按渠道 config_revision 比对，而任何一次
+// 渠道编辑（超时、优先级、代理……）都会提升修订号，绝大多数与「模型能不能用」无关，导致页面长期挂着
+// 过期横幅、诱导运营反复花钱重验。发现与验证都是运营主动发起的动作，页面永远展示「最近一次结果 + 时间」，
+// 重跑时机由人决定；执行期的 stale_revision 守卫（run 排队期间配置变化即取消，防止旧凭据/旧 origin 探测
+// 后归因错误）保留不变。
 type Inventory struct {
 	Channel         InventoryChannel
 	LatestDiscovery *Run
 	Snapshot        *Run
-	SnapshotStale   bool
 	DiscoveredCount int
 	BindingCount    int
 	NewCount        int
@@ -60,7 +66,6 @@ type InventoryVerification struct {
 	ItemID      int64
 	RunID       int64
 	Status      string
-	Current     bool
 	HTTPStatus  int32
 	ErrorCode   string
 	Message     string
@@ -115,8 +120,6 @@ func (s *Service) GetInventory(ctx context.Context, channelID int64) (Inventory,
 	if row, err := s.queries.GetLatestSuccessfulChannelModelDiscoveryRun(ctx, channelID); err == nil {
 		run := discoveryRun(row)
 		result.Snapshot = &run
-		result.SnapshotStale = row.ChannelConfigRevision != contextRow.ConfigRevision ||
-			row.ProviderOriginRevision != contextRow.OriginRevision || row.ProviderStatusRevision != contextRow.StatusRevision
 		items, listErr := s.queries.ListChannelModelDiscoveryItems(ctx, row.ID)
 		if listErr != nil {
 			return Inventory{}, storeFailed(listErr, "list channel model discovery snapshot")
@@ -170,9 +173,6 @@ func (s *Service) GetInventory(ctx context.Context, channelID int64) (Inventory,
 			}
 			view.Verification = &InventoryVerification{
 				ItemID: verification.ID, RunID: verification.RunID, Status: verification.Status,
-				Current: verification.ChannelConfigRevision == contextRow.ConfigRevision &&
-					verification.ProviderOriginRevision == contextRow.OriginRevision &&
-					verification.ProviderStatusRevision == contextRow.StatusRevision,
 				HTTPStatus: verification.HttpStatus, ErrorCode: textValue(verification.ErrorCode),
 				Message: textValue(verification.Message), LatencyMs: latencyPtr,
 				CompletedAt: timeValue(verification.CompletedAt),
@@ -268,13 +268,15 @@ func buildInventoryMatch(bindings []InventoryBinding, rows []sqlc.ListChannelMod
 	return match
 }
 
+// inventoryItemPending 判定「待处理」：未绑定、绑定停用、或从未有过成功验证。
+// 验证结果不随配置修订过期（见 Inventory 注释），一次成功即长期有效，直到运营主动重验。
 func inventoryItemPending(item InventoryItem) bool {
 	if item.DiscoveryState != "discovered" || len(item.Bindings) == 0 {
 		return true
 	}
 	for _, binding := range item.Bindings {
 		if binding.Status == "disabled" || binding.Verification == nil ||
-			!binding.Verification.Current || binding.Verification.Status != "succeeded" {
+			binding.Verification.Status != "succeeded" {
 			return true
 		}
 	}

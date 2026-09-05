@@ -12,6 +12,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	"github.com/ThankCat/unio-gateway/internal/core/adapter/modeldiscovery"
 	"github.com/ThankCat/unio-gateway/internal/core/channel"
+	"github.com/ThankCat/unio-gateway/internal/core/codexidentity"
 )
 
 // maxModelsResponseBytes 限制模型清单响应体（清单含完整 instructions 模板，实测约 300KB）。
@@ -24,14 +25,17 @@ const maxModelsResponseBytes = int64(4 << 20)
 type ModelLister struct {
 	client    *http.Client
 	clientFor func(proxyURL string) *http.Client
+	version   codexidentity.VersionSource
+	decorate  func(*http.Request, channel.Runtime)
 }
 
-// NewModelLister 创建 Codex 模型清单 lister；clientFor 为按账号代理解析器（可为 nil）。
-func NewModelLister(client *http.Client, clientFor func(proxyURL string) *http.Client) *ModelLister {
+// NewModelLister 创建 Codex 模型清单 lister；clientFor 为按账号代理解析器（可为 nil），
+// version 为客户端版本来源（nil 用基线）——清单查询参数 client_version 与请求头 version 同源。
+func NewModelLister(client *http.Client, clientFor func(proxyURL string) *http.Client, version codexidentity.VersionSource) *ModelLister {
 	if client == nil {
 		client = http.DefaultClient
 	}
-	return &ModelLister{client: client, clientFor: clientFor}
+	return &ModelLister{client: client, clientFor: clientFor, version: version, decorate: codexDecorator(version)}
 }
 
 var _ adapter.ModelLister = (*ModelLister)(nil)
@@ -56,13 +60,14 @@ func (l *ModelLister) ListModels(ctx context.Context, runtime channel.Runtime) (
 		return adapter.ModelListResult{}, &modeldiscovery.Error{Code: modeldiscovery.CodeProtocolError}
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"?client_version="+clientVersion, nil)
+	identity := codexidentity.Resolve(l.version)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"?client_version="+identity.Version, nil)
 	if err != nil {
 		return adapter.ModelListResult{}, &modeldiscovery.Error{Code: modeldiscovery.CodeProtocolError}
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+runtime.APIKey)
-	decorateCodexRequest(req, runtime)
+	l.decorate(req, runtime)
 
 	client := l.client
 	if l.clientFor != nil {

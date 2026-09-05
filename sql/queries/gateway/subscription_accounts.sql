@@ -17,8 +17,8 @@ WHERE a.channel_id = $1
 ORDER BY a.priority, a.id;
 
 -- name: GetAccountOutboundCredential :one
--- GetAccountOutboundCredential 取指定账号的出站凭据与代理，供 transport 按 permit 固化的账号身份发请求。
--- 与 ListSchedulableAccountsByChannel 分开，避免把凭据带进每请求的候选快照。
+-- GetAccountOutboundCredential 取指定账号的出站凭据、代理、指纹收敛档位与账号级超时覆写，
+-- 供 transport 按 permit 固化的账号身份发请求。与 ListSchedulableAccountsByChannel 分开，避免把凭据带进每请求的候选快照。
 SELECT
     a.id,
     a.channel_id,
@@ -28,6 +28,10 @@ SELECT
     a.credentials,
     a.proxy_url,
     a.status,
+    a.fingerprint_mode,
+    a.fingerprint_seed,
+    a.response_timeout_ms,
+    a.first_token_timeout_ms,
     apx.url AS proxy_entity_url
 FROM subscription_accounts a
 LEFT JOIN proxies apx ON apx.id = a.proxy_id AND apx.status = 'enabled'

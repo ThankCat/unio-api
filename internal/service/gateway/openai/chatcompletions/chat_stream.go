@@ -96,6 +96,11 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 		Source:     stickyHint.Source,
 		Candidates: plan.Candidates,
 	})
+	// 同一会话键随 ctx 下发给出站 wire（含反向桥接到号池的路径），派生上游会话身份保住 prompt cache 亲和。
+	ctx = sessionhint.WithUpstreamAffinity(ctx, sessionhint.UpstreamAffinity{
+		SessionKey: stickyHint.Key,
+		APIKeyID:   principal.APIKeyID,
+	})
 
 	candidatePlan, err := s.prepareChatCandidates(ctx, req, plan.Candidates, true, stickySession.BoundChannelID())
 	if err != nil {

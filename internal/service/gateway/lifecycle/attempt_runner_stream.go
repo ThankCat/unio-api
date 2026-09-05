@@ -85,12 +85,21 @@ type RunStreamParams struct {
 //   - Usage 非 nil 时记为 final usage（仅供协议写出收尾帧，账务只认 adapter facts）；
 //   - SuppressEmit 为 true 时该 chunk 仅用于内部事实提取（如 chat 的 usage 控制 chunk），
 //     不写客户 SSE、也不置 emitted（保持「客户帧写出前可 fallback」语义）。
+//
+// 三个正交的首字类事实（2026-09-05 对齐 Sub2API，ADR-0017 修订）：
+//   - Progress：上游结构性进展。首个进展 chunk 到达即写出前导缓冲、锁定 fallback（attempt 提交）；
+//   - FirstTokenEligible：按当前 TTFT 口径算首字（semantic = Progress，visible = VisibleContent），
+//     决定 gateway_first_token_at 与上游 TTFT 样本；
+//   - VisibleContent：携带客户可用的生成内容。只有它成功交付后 partial settlement 才成立——
+//     口径切换不会让客户在没收到正文时被扣费。
 type StreamChunkMeta struct {
 	ID                 string
 	FinishReason       string
 	Usage              *adapter.ChatUsage
 	SuppressEmit       bool
+	Progress           bool
 	FirstTokenEligible bool // 独立协议元数据，不得由 !SuppressEmit 推导。
+	VisibleContent     bool
 	ProtocolEventType  string
 	TokenKind          string
 	Classification     string
@@ -238,13 +247,17 @@ func chatStreamChunkSize(chunk chatcompletionsadapter.ChatStreamChunk) int {
 // chatStreamChunkMeta 等价复刻原 chat inline onChunk 的元信息提取：usage 控制 chunk 抑制 emit，
 // 普通内容 chunk 透传。
 func chatStreamChunkMeta(chunk chatcompletionsadapter.ChatStreamChunk) StreamChunkMeta {
-	// 首字判定与可见文本同源：非空生成负载既是「算首字」的依据，也是 partial settlement 的计量文本。
+	// 可见文本与 partial settlement 的计量文本同源：非空生成负载就是客户可用内容。
 	firstTokenPayload := chatcompletionsadapter.FirstTokenPayload(chunk)
+	visible := firstTokenPayload != ""
+	progress := chunk.Usage == nil && chatcompletionsadapter.StreamProgress(chunk)
 	meta := StreamChunkMeta{
 		ID:                 chunk.ID,
 		Usage:              chunk.Usage,
 		SuppressEmit:       chunk.Usage != nil,
-		FirstTokenEligible: firstTokenPayload != "",
+		Progress:           progress,
+		FirstTokenEligible: adapter.TTFTEligible(progress, visible),
+		VisibleContent:     visible,
 		VisibleText:        firstTokenPayload,
 		ProtocolEventType:  "chat.completion.chunk",
 		TokenKind:          chatStreamTokenKind(chunk),
@@ -474,9 +487,14 @@ scan:
 			settledAttemptStatus := requestlog.AttemptStatusSucceeded
 			settledErrorCode, settledErrorMessage, settledInternalErrorDetail := "", "", ""
 
-			// gatewayFirstTokenAt 记录首个有效生成 Token 成功写给客户的时间，用于 Gateway TTFT。
+			// gatewayFirstTokenAt 记录首字帧（按当前 TTFT 口径）成功写给客户的时间，用于 Gateway TTFT。
 			var gatewayFirstTokenAt *time.Time
 			firstTokenDelivered := false
+			// progressCommitted 表示首个上游进展已到达并把前导缓冲写给了客户：attempt 自此提交，
+			// 不再 fallback（ADR-0017 第 8 条「写出任意帧后不得 fallback」）。
+			progressCommitted := false
+			// visibleDelivered 表示客户已收到可见生成内容：partial settlement 的唯一门槛，与 TTFT 口径无关。
+			visibleDelivered := false
 			prelude := make([]bufferedStreamChunk[C], 0, maxPreludeEvents)
 			preludeBytes := 0
 			leadingEventCount := 0
@@ -541,7 +559,7 @@ scan:
 					ProviderRechargeRateID:        candidate.ProviderRechargeRateID,
 					SalePrice:                     candidate.SalePrice,
 					FastSalePrice:                 candidate.FastSalePrice,
-					PriceRatio:                    candidate.PriceRatio,
+					SaleDiscount:                    candidate.SaleDiscount,
 					LongContextPolicy:             candidate.LongContextPolicy,
 					Facts:                         *streamFacts,
 				})
@@ -637,40 +655,6 @@ scan:
 				l.RecordStreamEvent(metrics.StreamEventStarted)
 			}
 
-			emitChunk := func(chunk C, meta StreamChunkMeta) (bool, bool, error) {
-				// 只分词一次：TPM 观测与 partial settlement 必须共用同一个输出口径，
-				// 而且 tokenest 没有缓存，重复调用会把 tokenizer 开销翻倍。
-				chunkOutputTokens := int64(0)
-				if params.CountOutputTokens != nil && meta.VisibleText != "" {
-					chunkOutputTokens = params.CountOutputTokens(candidate.UpstreamModel, meta.VisibleText)
-				}
-				// Channel 输出在上游 chunk 解析完成时就成立，与客户是否收到无关。
-				chunkObservedAt := time.Now()
-				l.ObserveChannelOutput(tpmScope, chunkObservedAt, chunkOutputTokens)
-
-				frameAcked := false
-				firstTokenAcked := false
-				err := params.EmitChunk(chunk, StreamWriteAcks{
-					Frame: func() {
-						frameAcked = true
-						acknowledgeWrite()
-					},
-					FirstToken: func() {
-						if !meta.FirstTokenEligible {
-							return
-						}
-						firstTokenAcked = true
-						acknowledgeWrite()
-					},
-				})
-				if firstTokenAcked && chunkOutputTokens > 0 {
-					partialOutputTokens += chunkOutputTokens
-					// Route 输出以客户写入确认为准：客户端提前断开时 Channel 会比 Route 多记一点。
-					l.ObserveRouteOutput(tpmScope, time.Now(), chunkOutputTokens)
-				}
-				return frameAcked, firstTokenAcked, err
-			}
-
 			markGatewayFirstToken := func(tokenKind string) {
 				if firstTokenDelivered {
 					return
@@ -683,6 +667,49 @@ scan:
 				// customer write acknowledgement; durable persistence remains async.
 				logfields.SetGatewayTTFT(ctx, nonNegativeDuration(requestRecord.StartedAt, now).Milliseconds())
 				launchStreamAudit(func() { l.MarkGatewayFirstToken(ctx, requestRecord, attemptRecord, now, tokenKind) })
+			}
+
+			// emitChunk 写出一帧并返回 (frameAcked, visibleAcked, err)：
+			//   - frameAcked：客户帧成功写出；若该帧按当前口径算首字，同步记 Gateway TTFT；
+			//   - visibleAcked：该帧携带可见生成内容且成功写出——partial settlement 的计量与门槛只看它。
+			emitChunk := func(chunk C, meta StreamChunkMeta) (bool, bool, error) {
+				// 只分词一次：TPM 观测与 partial settlement 必须共用同一个输出口径，
+				// 而且 tokenest 没有缓存，重复调用会把 tokenizer 开销翻倍。
+				chunkOutputTokens := int64(0)
+				if params.CountOutputTokens != nil && meta.VisibleText != "" {
+					chunkOutputTokens = params.CountOutputTokens(candidate.UpstreamModel, meta.VisibleText)
+				}
+				// Channel 输出在上游 chunk 解析完成时就成立，与客户是否收到无关。
+				chunkObservedAt := time.Now()
+				l.ObserveChannelOutput(tpmScope, chunkObservedAt, chunkOutputTokens)
+
+				frameAcked := false
+				visibleAcked := false
+				err := params.EmitChunk(chunk, StreamWriteAcks{
+					Frame: func() {
+						frameAcked = true
+						acknowledgeWrite()
+					},
+					FirstToken: func() {
+						if !meta.VisibleContent {
+							return
+						}
+						visibleAcked = true
+						acknowledgeWrite()
+					},
+				})
+				if frameAcked && meta.FirstTokenEligible {
+					markGatewayFirstToken(meta.TokenKind)
+				}
+				if visibleAcked {
+					visibleDelivered = true
+					if chunkOutputTokens > 0 {
+						partialOutputTokens += chunkOutputTokens
+						// Route 输出以客户写入确认为准：客户端提前断开时 Channel 会比 Route 多记一点。
+						l.ObserveRouteOutput(tpmScope, time.Now(), chunkOutputTokens)
+					}
+				}
+				return frameAcked, visibleAcked, err
 			}
 
 			onChunk := func(chunk C) error {
@@ -725,7 +752,8 @@ scan:
 					finalUsage = &usage
 				}
 
-				if !firstTokenDelivered && !meta.FirstTokenEligible {
+				// 进展之前只缓冲协议前导（response.created / in_progress 等）：这段时间失败仍可静默换号。
+				if !progressCommitted && !meta.Progress {
 					leadingEventCount++
 					leadingEventBytes += size
 					l.LogLeadingStreamEvent(
@@ -754,7 +782,10 @@ scan:
 					return nil
 				}
 
-				if !firstTokenDelivered && meta.FirstTokenEligible {
+				// 首个进展：上游已在为本次请求工作（reasoning 阶段亦然），按原顺序写出前导并提交 attempt。
+				// 与 Sub2API 一致：进展之后不再换号——换号意味着上游重算整轮，号池会双倍消耗额度。
+				if !progressCommitted {
+					progressCommitted = true
 					for _, buffered := range prelude {
 						if _, _, err := emitChunk(buffered.chunk, buffered.meta); err != nil {
 							return err
@@ -762,14 +793,6 @@ scan:
 					}
 					prelude = nil
 					preludeBytes = 0
-					_, firstTokenAcked, err := emitChunk(chunk, meta)
-					if err != nil {
-						return err
-					}
-					if firstTokenAcked {
-						markGatewayFirstToken(meta.TokenKind)
-					}
-					return nil
 				}
 
 				_, _, err := emitChunk(chunk, meta)
@@ -958,12 +981,12 @@ scan:
 					return result, err
 				}
 
-				// 客户端取消不是上游失败，也不触发 fallback。有效 Token 已交付时按 partial settlement
-				// 计费；仅前导帧已交付或首 token 前取消则普通释放冻结、不扣费。
+				// 客户端取消不是上游失败，也不触发 fallback。可见生成内容已交付时按 partial settlement
+				// 计费；仅前导/进展帧已交付或取消得更早则普通释放冻结、不扣费。
 				if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
 					logAttemptResult(err, false)
-					if firstTokenDelivered {
-						// 已 emit → partial settlement 会落真实成本快照，不再记敞口（避免双计）。
+					if visibleDelivered {
+						// 已交付可见内容 → partial settlement 会落真实成本快照，不再记敞口（避免双计）。
 						return finishPartial(PartialReasonClientCanceled, metrics.ChatOutcomeCanceled, metrics.StreamEventCanceled, false, err)
 					}
 
@@ -981,13 +1004,13 @@ scan:
 				if emitted {
 					logAttemptResult(err, false)
 					// SSE 已写出后无法再 fallback 或改写 JSON error。
-					if firstTokenDelivered {
-						// 已 emit 可用输出内容：按 partial settlement 计费（路线 B）；不在此处 MarkAttemptFailed——
+					if visibleDelivered {
+						// 已交付可见生成内容：按 partial settlement 计费（路线 B）；不在此处 MarkAttemptFailed——
 						// partial 走 settlement 会先结算 usage/ledger 再把 attempt 标 failed。
 						return finishPartial(PartialReasonInterrupted, metrics.ChatOutcomeFailed, metrics.StreamEventInterrupted, false, err)
 					}
-					// 已 emit 帧但无可用输出内容（仅控制帧/空内容后上游中断）：视同「上游流中断、无可用输出」——
-					// 一分钱不扣、全额释放预扣（对齐 new-api PR #4199）。
+					// 已 emit 帧但客户没收到任何可见内容（前导/进展帧之后上游中断，如思考阶段掉线）：
+					// 视同「上游流中断、无可用输出」——一分钱不扣、全额释放预扣（对齐 new-api PR #4199）。
 					l.MarkAttemptFailed(ctx, attemptRecord, "stream_adapter_error", err)
 					if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
 						l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
@@ -1034,12 +1057,12 @@ scan:
 			if streamFacts == nil {
 				logAttemptResult(failure.New(failure.CodeGatewayStreamUsageMissing), false)
 				// adapter 正常结束但缺 final usage（上游不支持 include_usage、代理吞尾包或 parser 漏解析）。
-				// 已 emit 时按 partial settlement 计费并标渠道异常（路线 D）；未 emit 则普通释放、不扣费（路线 C）。
-				if firstTokenDelivered {
+				// 已交付可见内容时按 partial settlement 计费并标渠道异常（路线 D）；否则普通释放、不扣费（路线 C）。
+				if visibleDelivered {
 					return finishPartial(PartialReasonFinalUsageMissing, metrics.ChatOutcomeSuccess, metrics.StreamEventMissingUsage, true, nil)
 				}
 				if emitted {
-					// 仅前导帧已交付但没有有效 Token：不进入 partial settlement。
+					// 仅前导/进展帧已交付但没有可见内容：不进入 partial settlement。
 					l.MarkAttemptFailed(ctx, attemptRecord, "stream_usage_missing", failure.New(failure.CodeGatewayStreamUsageMissing))
 					if releaseErr := l.ReleaseAuthorization(ctx, authorization); releaseErr != nil {
 						l.MarkRequestFailed(ctx, requestRecord, codes.AuthorizationReleaseFailedCode, releaseErr)
@@ -1084,8 +1107,9 @@ scan:
 				}
 			}
 
-			// 零输出成功流没有 Gateway 首字，但仍需在 durable settlement 完成后交付协议前导/终态事件。
-			if !firstTokenDelivered && len(prelude) > 0 {
+			// 零进展的成功流（上游直接从前导跳到终态）没有 Gateway 首字，但仍需在 durable settlement
+			// 完成后交付协议前导/终态事件。
+			if !progressCommitted && len(prelude) > 0 {
 				for _, buffered := range prelude {
 					if _, _, err := emitChunk(buffered.chunk, buffered.meta); err != nil {
 						l.MarkDeliveryInterrupted(ctx, requestRecord, firstTokenDelivered, err)

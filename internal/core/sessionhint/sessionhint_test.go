@@ -36,6 +36,23 @@ func TestOpenAISessionKeyPrecedence(t *testing.T) {
 	}
 }
 
+// TestUpstreamAffinityContextRoundTrip 验证 service → adapter 的会话亲和载体：写入即可读回，
+// 空白会话键不写入（本请求不向上游表达会话身份），未写入返回零值。
+func TestUpstreamAffinityContextRoundTrip(t *testing.T) {
+	ctx := WithUpstreamAffinity(context.Background(), UpstreamAffinity{SessionKey: "  thread-1  ", APIKeyID: 42})
+	if got := UpstreamAffinityFromContext(ctx); got != (UpstreamAffinity{SessionKey: "thread-1", APIKeyID: 42}) {
+		t.Fatalf("unexpected affinity: %+v", got)
+	}
+
+	blank := WithUpstreamAffinity(context.Background(), UpstreamAffinity{SessionKey: "   ", APIKeyID: 42})
+	if got := UpstreamAffinityFromContext(blank); got != (UpstreamAffinity{}) {
+		t.Fatalf("blank session key must not be stored, got %+v", got)
+	}
+	if got := UpstreamAffinityFromContext(context.Background()); got != (UpstreamAffinity{}) {
+		t.Fatalf("missing affinity must be zero value, got %+v", got)
+	}
+}
+
 func TestOpenAISessionHintReportsSelectedSource(t *testing.T) {
 	ctx := WithClientSessionID(context.Background(), "header-session")
 	bodyKey := "body-cache-key"

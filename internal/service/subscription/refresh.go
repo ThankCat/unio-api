@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ThankCat/unio-gateway/internal/core/codexidentity"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
 
@@ -21,8 +22,6 @@ const (
 	// defaultClientID 是 Codex CLI 的 OAuth client；凭据文档缺 client_id 时兜底
 	//（access token 的 client_id 声明优先）。
 	defaultClientID = "app_EMoamEEZ73f0CkXaXp7hrann"
-	// refreshUserAgent 与出站指纹同源（按账号收敛，边界 26）。
-	refreshUserAgent = "codex_cli_rs/0.152.1 (Mac OS 15.2.0; arm64) unio"
 )
 
 // RefreshResult 是一次令牌刷新/换码的上游响应。
@@ -46,16 +45,18 @@ func (e *RefreshRejectedError) Error() string {
 }
 
 // TokenClient 执行 OAuth 令牌端点调用；HTTP client 按账号代理解析（三条路径统一走账号代理）。
+// 凭据面出站身份（originator + User-Agent，不发 version）与推理面同源自 codexidentity。
 type TokenClient struct {
 	clientFor func(proxyURL string) *http.Client
+	version   codexidentity.VersionSource
 }
 
-// NewTokenClient 创建令牌客户端。clientFor 为 nil 时全部直连。
-func NewTokenClient(clientFor func(proxyURL string) *http.Client) *TokenClient {
+// NewTokenClient 创建令牌客户端。clientFor 为 nil 时全部直连；version 为 nil 时用基线身份。
+func NewTokenClient(clientFor func(proxyURL string) *http.Client, version codexidentity.VersionSource) *TokenClient {
 	if clientFor == nil {
 		clientFor = func(string) *http.Client { return http.DefaultClient }
 	}
-	return &TokenClient{clientFor: clientFor}
+	return &TokenClient{clientFor: clientFor, version: version}
 }
 
 // Refresh 用 refresh token 换新 access token（沙箱 token.py 已验证的流程）。
@@ -106,8 +107,7 @@ func (t *TokenClient) postTokenForm(ctx context.Context, form url.Values, proxyU
 		return RefreshResult{}, failure.Wrap(failure.CodeConfigInvalid, err, failure.WithMessage("create oauth token request"))
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("User-Agent", refreshUserAgent)
-	req.Header.Set("originator", "codex_cli_rs")
+	codexidentity.Resolve(t.version).ApplyCredentialHeaders(req.Header)
 
 	resp, err := t.clientFor(proxyURL).Do(req)
 	if err != nil {

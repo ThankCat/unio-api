@@ -1,7 +1,9 @@
 package bootstrap
 
 import (
+	"context"
 	"net/http"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -14,14 +16,31 @@ import (
 	codexresponses "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/codex/responses"
 	openaideepseek "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/deepseek/chatcompletions"
 	openairesponses "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/responses"
+	"github.com/ThankCat/unio-gateway/internal/core/codexidentity"
 	"github.com/ThankCat/unio-gateway/internal/platform/proxyclient"
+	"github.com/ThankCat/unio-gateway/internal/service/appsettings"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
+
+// codexVersionSource 把 settings store 包装成 Codex 客户端版本来源：每次读取都走 store
+// （本地 3s 缓存 → Redis → DB），Admin 改覆写或 worker 同步新版本后秒级生效，无需重启。
+func codexVersionSource(store *appsettings.SettingsStore) codexidentity.VersionSource {
+	if store == nil {
+		return nil
+	}
+	return func() string {
+		return appsettings.GatewayCodexClientVersion(context.Background(), store)
+	}
+}
 
 const (
 	upstreamMaxIdleConns        = 256
 	upstreamMaxIdleConnsPerHost = 32
 	upstreamMaxConnsPerHost     = 64
+	// upstreamH2PingIdle / upstreamH2PingTimeout 是 HTTP/2 连接健康探测参数：
+	// 连接上 30s 没有任何帧就发一次 PING，15s 内不回即判死并关闭（见 upstreamHTTPClient）。
+	upstreamH2PingIdle    = 30 * time.Second
+	upstreamH2PingTimeout = 15 * time.Second
 )
 
 // NewAdapterRegistry 创建当前 server 进程支持的双协议 adapter registry。
@@ -38,7 +57,10 @@ const (
 //
 // logger 注入到各 provider adapter，用于记录按 DEC-012 出站 Drop 的请求字段；传 nil 时
 // adapter 内部回退到 zap no-op logger。官方 1P adapter 零 Drop，无需 logger。
-func NewAdapterRegistry(client *http.Client, logger *zap.Logger) (*lifecycle.AdapterRegistry, error) {
+//
+// codexVersion 提供 Codex 出站身份的当前生效版本（Admin 覆写 → 自动同步 → 基线），
+// 由持有 settings store 的进程注入；nil 用编译期基线。
+func NewAdapterRegistry(client *http.Client, logger *zap.Logger, codexVersion codexidentity.VersionSource) (*lifecycle.AdapterRegistry, error) {
 	client = upstreamHTTPClient(client)
 
 	// 出站代理解析器（账号代理与渠道代理共用同一份 client 缓存）：
@@ -53,8 +75,8 @@ func NewAdapterRegistry(client *http.Client, logger *zap.Logger) (*lifecycle.Ada
 
 	// Codex 订阅 wire（号池渠道）：按账号代理经 proxyclient 解析，导入/刷新/正式请求三条路径
 	// 在 bootstrap 各自注入同一个解析器，adapter 不自管 client 池（边界 29）。
-	codexAdapter := codexresponses.NewAdapter(client, accountProxyClients.ClientFor)
-	codexModelLister := codexresponses.NewModelLister(client, accountProxyClients.ClientFor)
+	codexAdapter := codexresponses.NewAdapter(client, accountProxyClients.ClientFor, codexVersion)
+	codexModelLister := codexresponses.NewModelLister(client, accountProxyClients.ClientFor, codexVersion)
 
 	openAIRegistry, err := openai.NewRegistry(
 		openai.Registration{
@@ -133,6 +155,13 @@ func upstreamHTTPClient(base *http.Client) *http.Client {
 		transport.MaxIdleConnsPerHost = upstreamMaxIdleConnsPerHost
 		transport.MaxConnsPerHost = upstreamMaxConnsPerHost
 		transport.ForceAttemptHTTP2 = true
+		// HTTP/2 连接健康探测（2026-09-05 e2e 实测）：上游/中间设备静默断掉池里的 h2 连接后，
+		// 下一次复用它的 POST 会在写完请求后直接收到 EOF；POST 体不可重放，Go 不会自动重试，
+		// 客户端只能看到一次 502。空闲 30s 无帧就发 PING、15s 不回就关连接，让下一次请求重新拨号。
+		transport.HTTP2 = &http.HTTP2Config{
+			SendPingTimeout: upstreamH2PingIdle,
+			PingTimeout:     upstreamH2PingTimeout,
+		}
 		client.Transport = transport
 	}
 	client.CheckRedirect = func(*http.Request, []*http.Request) error {

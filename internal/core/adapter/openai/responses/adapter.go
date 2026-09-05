@@ -273,7 +273,8 @@ func responsesUnreliableUsageError(meta adapter.UpstreamMetadata, detail string)
 
 // newUpstreamRequest 构造打到 <base><responsesPath> 的上游 HTTP 请求。
 //
-// stream=true 时附 Accept: text/event-stream。请求体直传 req.Body（service 已置 model/stream）。
+// stream=true 时附 Accept: text/event-stream。请求体直传 req.Body（service 已置 model/stream）；
+// wire 需要向上游表达会话身份时（Codex）在此经 bindSession 改写请求体。
 func (a *Adapter) newUpstreamRequest(ctx context.Context, ch channel.Runtime, req Request, stream bool) (*http.Request, error) {
 	if len(req.Body) == 0 {
 		return nil, failure.New(
@@ -282,6 +283,10 @@ func (a *Adapter) newUpstreamRequest(ctx context.Context, ch channel.Runtime, re
 		)
 	}
 	if err := a.guardRequest(req); err != nil {
+		return nil, err
+	}
+	req, err := a.bindSession(ctx, ch, req)
+	if err != nil {
 		return nil, err
 	}
 

@@ -2,8 +2,8 @@
 //
 // 它不是新的协议实现：Codex 后端说的就是 Responses 协议，事件流、usage、终态语义与官方
 // /v1/responses 一致（wire 证据：sandbox/codex/wire/samples/）。因此本包只装配 base
-// responses adapter 的 Wire 钩子——路径、账号请求头、出站守卫、按账号代理、用量头解析——
-// 协议解析、SSE 循环、超时与错误分类全部复用 base，一处不改。
+// responses adapter 的 Wire 钩子——路径、账号请求头、会话亲和身份、出站守卫、按账号代理、
+// 用量头解析——协议解析、SSE 循环、超时与错误分类全部复用 base，一处不改。
 //
 // 账号维度经 channel.Runtime 注入（Runtime.APIKey = 账号 access token、Runtime.Account），
 // adapter 对号池无感知。
@@ -11,7 +11,6 @@ package codexresponses
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -20,6 +19,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	openairesponses "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/responses"
 	"github.com/ThankCat/unio-gateway/internal/core/channel"
+	"github.com/ThankCat/unio-gateway/internal/core/codexidentity"
 	"github.com/ThankCat/unio-gateway/internal/core/servicetier"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
@@ -30,26 +30,20 @@ const (
 	compactPath   = "/backend-api/codex/responses/compact"
 	// modelsPath 是模型清单端点（发现流程数据源，带 client_version 查询参数）。
 	modelsPath = "/backend-api/codex/models"
-
-	// clientVersion 是我们对上游声明的 Codex 客户端版本。按账号收敛的设备指纹（边界 26）：
-	// 同一账号的全部出站（导入换码、令牌刷新、正式请求）使用同一组 originator/UA/version，
-	// 不做随机化 enrichment（边界 30 明确不做指纹伪装）。
-	clientVersion = "0.152.1"
-	originator    = "codex_cli_rs"
 )
-
-// userAgent 是出站 User-Agent（与 originator/clientVersion 同源，保持指纹一致性）。
-var userAgent = fmt.Sprintf("codex_cli_rs/%s (Mac OS 15.2.0; arm64) unio", clientVersion)
 
 // NewAdapter 创建 Codex 订阅 wire 的 Responses adapter。
 //
 // clientFor 按代理 URL 解析 HTTP client（bootstrap 注入 proxyclient.Resolver），
 // 让每个账号从自己绑定的出口出站；nil 表示全部直连。
-func NewAdapter(client *http.Client, clientFor func(proxyURL string) *http.Client) *openairesponses.Adapter {
+// version 提供当前生效的客户端版本（Admin 覆写 → 自动同步 → 基线，见 codexidentity），nil 用基线：
+// 出站身份三个头由 codexidentity 同源渲染，全部账号使用同一组客户端身份（边界 26 的统一身份，
+// 不做随机化伪装）。
+func NewAdapter(client *http.Client, clientFor func(proxyURL string) *http.Client, version codexidentity.VersionSource) *openairesponses.Adapter {
 	wire := openairesponses.Wire{
 		ResponsesPath:         responsesPath,
 		CompactPath:           compactPath,
-		Decorate:              decorateCodexRequest,
+		Decorate:              codexDecorator(version),
 		GuardRequest:          guardCodexRequest,
 		HeaderFacts:           applyCodexHeaderFacts,
 		RetryAfterFromHeaders: codexRetryAfter,
@@ -58,7 +52,10 @@ func NewAdapter(client *http.Client, clientFor func(proxyURL string) *http.Clien
 		// 真机实测契约（2026-09-03）：后端只收流式 + 结构化 input；出站前统一规范化，
 		// 非流式入站由 base adapter 流式聚合还原（openai chat 桥接与 SDK 直连自动受益）。
 		NormalizeRequest: normalizeCodexRequest,
-		ForceStreaming:   true,
+		// 会话亲和：按客户 × 账号 × 会话键派生上游会话身份，写入 prompt_cache_key 与亲和头
+		// （见 session_affinity.go）。
+		BindSession:    bindCodexSession,
+		ForceStreaming: true,
 	}
 	if clientFor != nil {
 		wire.ClientFor = func(ch channel.Runtime) *http.Client {
@@ -73,20 +70,23 @@ func NewAdapter(client *http.Client, clientFor func(proxyURL string) *http.Clien
 	return openairesponses.NewAdapterWithWire(client, wire)
 }
 
-// decorateCodexRequest 追加 Codex 订阅后端的账号身份与设备指纹头。
+// codexDecorator 构造 Codex 订阅后端的请求头装饰器：账号身份、客户端身份（codexidentity 同源
+// 渲染 originator / User-Agent / version）与会话亲和头。
 //
 // Authorization 已由 base 用 Runtime.APIKey（= 账号 access token）设置。
 // 防御性剥离两类头：入站鉴权头不会到这里（adapter 全新构造请求），但客户可能经
 // client_metadata 以外的途径回带 x-codex-turn-state——那是按账号加密的回合状态，
 // 跨账号回放会串号，这里保证它绝不出站。
-func decorateCodexRequest(httpReq *http.Request, ch channel.Runtime) {
-	httpReq.Header.Del("x-codex-turn-state")
-	if ch.Account.UpstreamAccountID != "" {
-		httpReq.Header.Set("chatgpt-account-id", ch.Account.UpstreamAccountID)
+// 会话亲和头与 BindSession 写入 body 的 prompt_cache_key 同源派生（httpReq 的 ctx 即出站 ctx）。
+func codexDecorator(version codexidentity.VersionSource) func(httpReq *http.Request, ch channel.Runtime) {
+	return func(httpReq *http.Request, ch channel.Runtime) {
+		httpReq.Header.Del("x-codex-turn-state")
+		if ch.Account.UpstreamAccountID != "" {
+			httpReq.Header.Set("chatgpt-account-id", ch.Account.UpstreamAccountID)
+		}
+		codexidentity.Resolve(version).ApplyInferenceHeaders(httpReq.Header)
+		applySessionAffinityHeaders(httpReq, ch, upstreamSessionID(httpReq.Context(), ch))
 	}
-	httpReq.Header.Set("originator", originator)
-	httpReq.Header.Set("User-Agent", userAgent)
-	httpReq.Header.Set("version", clientVersion)
 }
 
 // guardCodexRequest 拒绝带 previous_response_id 的请求（边界 25）。

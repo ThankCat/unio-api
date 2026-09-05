@@ -196,10 +196,14 @@ func anthropicPartialOutputTokenCounter(_ string, text string) int64 {
 }
 
 func messagesStreamChunkMeta(ev messagesadapter.MessageStreamEvent) lifecycle.StreamChunkMeta {
-	// 首字判定与可见文本同源（见 adapter 侧 FirstTokenPayload 的说明）。
+	// Anthropic 没有 Responses 那种「只有结构性事件」的思考阶段（thinking delta 本身就是可见内容），
+	// 因此进展、首字与可见内容三者同源于 FirstTokenPayload；TTFT 口径设置不改变 Anthropic 的行为。
 	firstTokenPayload := messagesadapter.FirstTokenPayload(ev)
+	visible := firstTokenPayload != ""
 	meta := lifecycle.StreamChunkMeta{
-		FirstTokenEligible: firstTokenPayload != "",
+		Progress:           visible,
+		FirstTokenEligible: visible,
+		VisibleContent:     visible,
 		VisibleText:        firstTokenPayload,
 		ProtocolEventType:  ev.Type,
 		TokenKind:          messagesTokenKind(ev),

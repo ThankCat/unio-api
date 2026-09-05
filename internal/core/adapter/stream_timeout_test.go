@@ -32,22 +32,45 @@ func TestStreamTimeoutDoesNotStartBeforeTransport(t *testing.T) {
 	}
 }
 
-func TestStreamIdleTimeoutDefaultsWhenUnset(t *testing.T) {
-	t.Cleanup(func() { SetStreamIdleTimeout(0) })
-
-	SetStreamIdleTimeout(0)
-	if got := StreamIdleTimeout(); got != DefaultStreamIdleTimeout {
-		t.Fatalf("expected default %v, got %v", DefaultStreamIdleTimeout, got)
-	}
+// TestStreamIdleTimeoutSemantics 冻结 idle 配置语义（对齐 Sub2API stream_data_interval_timeout）：
+// 未配置回默认 180s；0 = 显式关闭；负数视为未配置。
+func TestStreamIdleTimeoutSemantics(t *testing.T) {
+	t.Cleanup(func() { SetStreamIdleTimeout(-1) })
 
 	SetStreamIdleTimeout(-time.Second)
 	if got := StreamIdleTimeout(); got != DefaultStreamIdleTimeout {
-		t.Fatalf("expected default %v for a negative timeout, got %v", DefaultStreamIdleTimeout, got)
+		t.Fatalf("expected default %v for a negative (unset) timeout, got %v", DefaultStreamIdleTimeout, got)
+	}
+	if DefaultStreamIdleTimeout != 180*time.Second {
+		t.Fatalf("default idle must match Sub2API's 180s, got %v", DefaultStreamIdleTimeout)
+	}
+
+	SetStreamIdleTimeout(0)
+	if got := StreamIdleTimeout(); got != 0 {
+		t.Fatalf("0 must mean disabled, got %v", got)
 	}
 
 	SetStreamIdleTimeout(42 * time.Second)
 	if got := StreamIdleTimeout(); got != 42*time.Second {
 		t.Fatalf("expected the configured 42s, got %v", got)
+	}
+}
+
+// TestTTFTModeSemantics 冻结 TTFT 口径：默认 semantic（进展即首字），visible 只认可见内容，非法值回默认。
+func TestTTFTModeSemantics(t *testing.T) {
+	t.Cleanup(func() { SetTTFTMode(DefaultTTFTMode) })
+
+	SetTTFTMode("garbage")
+	if got := CurrentTTFTMode(); got != TTFTModeSemantic {
+		t.Fatalf("invalid mode must fall back to semantic, got %q", got)
+	}
+	if !TTFTEligible(true, false) || !TTFTEligible(false, true) || TTFTEligible(false, false) {
+		t.Fatal("semantic mode must accept progress or visible content")
+	}
+
+	SetTTFTMode(TTFTModeVisible)
+	if TTFTEligible(true, false) || !TTFTEligible(true, true) || !TTFTEligible(false, true) {
+		t.Fatal("visible mode must only accept visible content")
 	}
 }
 
@@ -181,33 +204,64 @@ func TestHeartbeatsDoNotStopFirstTokenTiming(t *testing.T) {
 	}
 }
 
-// TestIdleWatchdogStartsOnlyAfterFirstEvent 覆盖 §19.4「首事件后停止活动 → stream_idle 超时」。
-func TestIdleWatchdogStartsOnlyAfterFirstEvent(t *testing.T) {
+// TestIdleWatchdogStartsAtHeaders 冻结数据间隔看门狗从响应头到达起生效（对齐 Sub2API）：
+// 首字预算关闭时，「秒回 200 然后一个字节都不来」的连接由 idle 兜底而不是永远挂着。
+func TestIdleWatchdogStartsAtHeaders(t *testing.T) {
 	ctx, h := startedStreamTimeoutContext(context.Background(), StreamTimeoutConfig{
 		ResponseHeader: 5 * time.Second,
-		FirstToken:     5 * time.Second,
+		FirstToken:     0,
 		Idle:           30 * time.Millisecond,
 	})
 	defer h.Cancel()
 
-	h.HeadersReceived()
-	// 首个有效生成 Token 之前 idle 不启动：否则一个「秒回 200 然后静默」的上游会被误判为 idle 而非首字超时。
-	time.Sleep(90 * time.Millisecond)
+	time.Sleep(60 * time.Millisecond)
 	if err := ctx.Err(); err != nil {
-		t.Fatalf("idle watchdog fired before the first valid event: %v", context.Cause(ctx))
+		t.Fatalf("idle watchdog must not run before headers: %v", context.Cause(ctx))
 	}
-
-	h.FirstToken()
+	h.HeadersReceived()
 	select {
 	case <-ctx.Done():
 	case <-time.After(2 * time.Second):
-		t.Fatal("idle watchdog did not fire after the first event")
+		t.Fatal("idle watchdog did not fire after headers with no data")
 	}
 	if !errors.Is(context.Cause(ctx), ErrStreamIdleTimeout) {
 		t.Fatalf("expected cause ErrStreamIdleTimeout, got %v", context.Cause(ctx))
 	}
 	if got := h.State.TimeoutPhase(); got != TimeoutPhaseStreamIdle {
 		t.Fatalf("timeout phase = %q, want %q", got, TimeoutPhaseStreamIdle)
+	}
+}
+
+// TestProgressStopsFirstTokenTimerWithoutVisibleToken 冻结「进展解除首字预算」：reasoning 阶段只有
+// 结构性事件、没有可见内容时，首字预算不得再掐断流；之后由 idle 看门狗守护。
+func TestProgressStopsFirstTokenTimerWithoutVisibleToken(t *testing.T) {
+	ctx, h := startedStreamTimeoutContext(context.Background(), StreamTimeoutConfig{
+		ResponseHeader: 5 * time.Second,
+		FirstToken:     40 * time.Millisecond,
+		Idle:           5 * time.Second,
+	})
+	defer h.Cancel()
+
+	h.HeadersReceived()
+	h.Progress()
+	time.Sleep(120 * time.Millisecond)
+	if err := ctx.Err(); err != nil {
+		t.Fatalf("first token timer fired after progress: %v", context.Cause(ctx))
+	}
+	if got := h.State.TimeoutPhase(); got != "" {
+		t.Fatalf("no timeout phase expected after progress, got %q", got)
+	}
+}
+
+// TestZeroBudgetsMeanUnlimited 冻结「0 = 不限制」：三项预算全 0 时流永不因超时取消。
+func TestZeroBudgetsMeanUnlimited(t *testing.T) {
+	ctx, h := startedStreamTimeoutContext(context.Background(), StreamTimeoutConfig{})
+	defer h.Cancel()
+
+	h.HeadersReceived()
+	time.Sleep(60 * time.Millisecond)
+	if err := ctx.Err(); err != nil {
+		t.Fatalf("zero budgets must never cancel the stream: %v", context.Cause(ctx))
 	}
 }
 

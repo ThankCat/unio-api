@@ -37,7 +37,7 @@ func (s *fakeChatRouteStore) FindModelCandidates(ctx context.Context, arg sqlc.F
 		rows[i].UncachedInputCost = pgtype.Numeric{Int: big.NewInt(0), Valid: true}
 		rows[i].OutputCost = pgtype.Numeric{Int: big.NewInt(0), Valid: true}
 		// 倍率必须是有效值，否则候选会因售价无法解析被整条排除。
-		rows[i].SalePriceRatio = pgtype.Numeric{Int: big.NewInt(1), Valid: true}
+		rows[i].SaleDiscount = pgtype.Numeric{Int: big.NewInt(1), Valid: true}
 	}
 	return rows, nil
 }

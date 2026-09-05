@@ -113,6 +113,11 @@ func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.Re
 		Source:     stickyHint.Source,
 		Candidates: plan.Candidates,
 	})
+	// 同一会话键随 ctx 下发给出站 wire：号池 wire 据此派生上游会话身份，保住 prompt cache 亲和。
+	ctx = sessionhint.WithUpstreamAffinity(ctx, sessionhint.UpstreamAffinity{
+		SessionKey: stickyHint.Key,
+		APIKeyID:   principal.APIKeyID,
+	})
 
 	candidatePlan, err := s.prepareResponsesCandidates(ctx, req, plan.Candidates, true, true, stickySession.BoundChannelID())
 	if err != nil {

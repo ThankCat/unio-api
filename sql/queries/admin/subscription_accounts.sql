@@ -25,7 +25,10 @@ SELECT
     (a.credentials ->> 'email') AS email,
     a.proxy_id,
     apx.name AS proxy_name,
-    apx.status AS proxy_status
+    apx.status AS proxy_status,
+    a.fingerprint_mode,
+    a.response_timeout_ms,
+    a.first_token_timeout_ms
 FROM subscription_accounts a
 LEFT JOIN proxies apx ON apx.id = a.proxy_id
 WHERE a.channel_id = $1
@@ -55,10 +58,11 @@ INSERT INTO subscription_accounts (
 RETURNING *;
 
 -- name: AdminUpdateSubscriptionAccountConfig :one
--- AdminUpdateSubscriptionAccountConfig 修改调度参数（并发、优先级、代理、备注名）与订阅到期时间。
+-- AdminUpdateSubscriptionAccountConfig 修改调度参数（并发、优先级、代理、备注名）、订阅到期时间与账号级超时覆写。
 -- 调度参数改变调度行为，故提升 config_revision；调用方须在同事务提升渠道 capacity_revision，
 -- 让运行态围栏立即感知（配置热更新传播）。subscription_expires_at 是运营录入的到期预警事实：
 -- 上游不提供机读到期时间，唯一写入路径就是这里（缺省 NULL 表示清除/未知）。
+-- 超时两列：NULL 继承渠道、0 不限制、正数覆写（与渠道行同语义）。
 UPDATE subscription_accounts
 SET display_name = $2,
     proxy_url = $3,
@@ -66,6 +70,20 @@ SET display_name = $2,
     concurrency_limit = $5,
     priority = $6,
     subscription_expires_at = $7,
+    response_timeout_ms = $8,
+    first_token_timeout_ms = $9,
+    config_revision = config_revision + 1,
+    updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: AdminSetSubscriptionAccountFingerprint :one
+-- AdminSetSubscriptionAccountFingerprint 切换账号指纹收敛档位。种子只在首次需要时生成（已有则保留，
+-- 切回 off 也不清空），保证切回收敛时设备身份不变。收敛档位改变出站身份，提升 config_revision 让
+-- 运行态围栏与请求路径的账号快照失效重取。
+UPDATE subscription_accounts
+SET fingerprint_mode = $2,
+    fingerprint_seed = COALESCE(fingerprint_seed, sqlc.narg('seed')::uuid),
     config_revision = config_revision + 1,
     updated_at = now()
 WHERE id = $1
@@ -195,17 +213,31 @@ WHERE r.final_account_id IN (SELECT sa.id FROM subscription_accounts sa WHERE sa
   AND le.created_at > now() - interval '24 hours'
 GROUP BY r.final_account_id, le.currency;
 
+-- name: AdminChannelAccountsAttempts24h :many
+-- AdminChannelAccountsAttempts24h 按账号聚合近 24 小时的 attempt 成功率事实，口径与渠道运维表完全一致
+-- （分母 = 成功 + 上游归责失败；客户取消、平台侧故障不计入）。账号归因来自 attempt 级 account_id
+-- （创建即写入），失败也能归到号——request 级 final_account_id 只在成功路径写入，不能用来算成功率。
+SELECT
+    a.account_id,
+    (count(*) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream'))::bigint AS attempt_total,
+    (count(*) FILTER (WHERE a.status = 'succeeded'))::bigint AS attempt_succeeded
+FROM request_attempts a
+WHERE a.account_id IN (SELECT sa.id FROM subscription_accounts sa WHERE sa.channel_id = sqlc.arg(channel_id))
+  AND a.created_at > now() - interval '24 hours'
+GROUP BY a.account_id;
+
 -- name: AdminChannelAccountsLastFailure24h :many
--- AdminChannelAccountsLastFailure24h 每账号近 24 小时最近一次失败（时间 + 错误码），tooltip 展示。
-SELECT DISTINCT ON (r.final_account_id)
-    r.final_account_id AS account_id,
-    r.created_at AS failed_at,
-    COALESCE(r.error_code, '') AS error_code
-FROM request_records r
-WHERE r.final_account_id IN (SELECT sa.id FROM subscription_accounts sa WHERE sa.channel_id = sqlc.arg(channel_id))
-  AND r.status = 'failed'
-  AND r.created_at > now() - interval '24 hours'
-ORDER BY r.final_account_id, r.created_at DESC;
+-- AdminChannelAccountsLastFailure24h 每账号近 24 小时最近一次失败 attempt（时间 + 错误码），tooltip 展示。
+-- 按 attempt 级 account_id 归因：请求级 final_account_id 不写失败，永远查不到失败记录。
+SELECT DISTINCT ON (a.account_id)
+    a.account_id,
+    a.created_at AS failed_at,
+    COALESCE(a.error_code, '') AS error_code
+FROM request_attempts a
+WHERE a.account_id IN (SELECT sa.id FROM subscription_accounts sa WHERE sa.channel_id = sqlc.arg(channel_id))
+  AND a.status = 'failed'
+  AND a.created_at > now() - interval '24 hours'
+ORDER BY a.account_id, a.created_at DESC;
 
 -- name: AdminChannelAccountsLifetimeStats :many
 -- AdminChannelAccountsLifetimeStats 读取渠道下各账号的生命周期累计（「用量」列）。

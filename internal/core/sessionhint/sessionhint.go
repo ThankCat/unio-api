@@ -4,6 +4,10 @@
 // HTTP handler 从请求头捕获会话 ID（OpenAI 族：session-id；Anthropic 族：
 // x-claude-code-session-id）写入 ctx；协议 service 按各自协议的提取顺序消费
 // （body 字段优先，头部回退）。只传递不解释：这里不做任何格式校验，是否可用由提取器判定。
+//
+// 第二段传递方向是 service → adapter：service 解析出 Sticky 会话键后，把它与客户身份一起
+// 作为 UpstreamAffinity 写入 ctx，供需要向上游声明会话身份的 wire（Codex 订阅后端）派生
+// 缓存亲和标识。
 package sessionhint
 
 import (
@@ -30,6 +34,33 @@ func WithClientSessionID(ctx context.Context, id string) context.Context {
 func ClientSessionID(ctx context.Context) string {
 	id, _ := ctx.Value(ctxKey{}).(string)
 	return id
+}
+
+type affinityCtxKey struct{}
+
+// UpstreamAffinity 是 service 交给出站 wire 的会话亲和事实。
+//
+// SessionKey 与 Sticky 同源（显式信号或内容派生哈希），APIKeyID 是发起请求的客户 API Key。
+// 消费方（Codex wire）据此派生按客户与账号隔离的稳定上游会话标识；客户原始会话键本身绝不
+// 直接出站——号池多客户共号，原样透传会让上游把不同客户的请求关联成同一会话。
+type UpstreamAffinity struct {
+	SessionKey string
+	APIKeyID   int64
+}
+
+// WithUpstreamAffinity 把会话亲和事实写入 ctx；空会话键不写（本请求不向上游表达会话身份）。
+func WithUpstreamAffinity(ctx context.Context, affinity UpstreamAffinity) context.Context {
+	affinity.SessionKey = strings.TrimSpace(affinity.SessionKey)
+	if affinity.SessionKey == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, affinityCtxKey{}, affinity)
+}
+
+// UpstreamAffinityFromContext 读取 service 写入的会话亲和事实；未写入返回零值。
+func UpstreamAffinityFromContext(ctx context.Context) UpstreamAffinity {
+	affinity, _ := ctx.Value(affinityCtxKey{}).(UpstreamAffinity)
+	return affinity
 }
 
 // maxSessionKeyLength 是会话键的保守长度上限：会话键是客户端可控输入，超长直接视为无信号

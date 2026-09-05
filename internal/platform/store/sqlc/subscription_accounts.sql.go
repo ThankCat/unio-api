@@ -44,16 +44,56 @@ func (q *Queries) AddAccountLifetimeStats(ctx context.Context, arg AddAccountLif
 	return err
 }
 
+const adminChannelAccountsAttempts24h = `-- name: AdminChannelAccountsAttempts24h :many
+SELECT
+    a.account_id,
+    (count(*) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream'))::bigint AS attempt_total,
+    (count(*) FILTER (WHERE a.status = 'succeeded'))::bigint AS attempt_succeeded
+FROM request_attempts a
+WHERE a.account_id IN (SELECT sa.id FROM subscription_accounts sa WHERE sa.channel_id = $1)
+  AND a.created_at > now() - interval '24 hours'
+GROUP BY a.account_id
+`
+
+type AdminChannelAccountsAttempts24hRow struct {
+	AccountID        pgtype.Int8
+	AttemptTotal     int64
+	AttemptSucceeded int64
+}
+
+// AdminChannelAccountsAttempts24h 按账号聚合近 24 小时的 attempt 成功率事实，口径与渠道运维表完全一致
+// （分母 = 成功 + 上游归责失败；客户取消、平台侧故障不计入）。账号归因来自 attempt 级 account_id
+// （创建即写入），失败也能归到号——request 级 final_account_id 只在成功路径写入，不能用来算成功率。
+func (q *Queries) AdminChannelAccountsAttempts24h(ctx context.Context, channelID int64) ([]AdminChannelAccountsAttempts24hRow, error) {
+	rows, err := q.db.Query(ctx, adminChannelAccountsAttempts24h, channelID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AdminChannelAccountsAttempts24hRow
+	for rows.Next() {
+		var i AdminChannelAccountsAttempts24hRow
+		if err := rows.Scan(&i.AccountID, &i.AttemptTotal, &i.AttemptSucceeded); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const adminChannelAccountsLastFailure24h = `-- name: AdminChannelAccountsLastFailure24h :many
-SELECT DISTINCT ON (r.final_account_id)
-    r.final_account_id AS account_id,
-    r.created_at AS failed_at,
-    COALESCE(r.error_code, '') AS error_code
-FROM request_records r
-WHERE r.final_account_id IN (SELECT sa.id FROM subscription_accounts sa WHERE sa.channel_id = $1)
-  AND r.status = 'failed'
-  AND r.created_at > now() - interval '24 hours'
-ORDER BY r.final_account_id, r.created_at DESC
+SELECT DISTINCT ON (a.account_id)
+    a.account_id,
+    a.created_at AS failed_at,
+    COALESCE(a.error_code, '') AS error_code
+FROM request_attempts a
+WHERE a.account_id IN (SELECT sa.id FROM subscription_accounts sa WHERE sa.channel_id = $1)
+  AND a.status = 'failed'
+  AND a.created_at > now() - interval '24 hours'
+ORDER BY a.account_id, a.created_at DESC
 `
 
 type AdminChannelAccountsLastFailure24hRow struct {
@@ -62,7 +102,8 @@ type AdminChannelAccountsLastFailure24hRow struct {
 	ErrorCode string
 }
 
-// AdminChannelAccountsLastFailure24h 每账号近 24 小时最近一次失败（时间 + 错误码），tooltip 展示。
+// AdminChannelAccountsLastFailure24h 每账号近 24 小时最近一次失败 attempt（时间 + 错误码），tooltip 展示。
+// 按 attempt 级 account_id 归因：请求级 final_account_id 不写失败，永远查不到失败记录。
 func (q *Queries) AdminChannelAccountsLastFailure24h(ctx context.Context, channelID int64) ([]AdminChannelAccountsLastFailure24hRow, error) {
 	rows, err := q.db.Query(ctx, adminChannelAccountsLastFailure24h, channelID)
 	if err != nil {
@@ -279,7 +320,7 @@ INSERT INTO subscription_accounts (
     $6, $7, $8, $9, $10, $11,
     'disabled', $12
 )
-RETURNING id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id
+RETURNING id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id, fingerprint_mode, fingerprint_seed, response_timeout_ms, first_token_timeout_ms
 `
 
 type AdminCreateSubscriptionAccountParams struct {
@@ -336,6 +377,10 @@ func (q *Queries) AdminCreateSubscriptionAccount(ctx context.Context, arg AdminC
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ProxyID,
+		&i.FingerprintMode,
+		&i.FingerprintSeed,
+		&i.ResponseTimeoutMs,
+		&i.FirstTokenTimeoutMs,
 	)
 	return i, err
 }
@@ -407,7 +452,7 @@ func (q *Queries) AdminDeleteSubscriptionAccountCascade(ctx context.Context, id 
 }
 
 const adminGetSubscriptionAccount = `-- name: AdminGetSubscriptionAccount :one
-SELECT id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id
+SELECT id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id, fingerprint_mode, fingerprint_seed, response_timeout_ms, first_token_timeout_ms
 FROM subscription_accounts
 WHERE id = $1
 `
@@ -437,6 +482,10 @@ func (q *Queries) AdminGetSubscriptionAccount(ctx context.Context, id int64) (Su
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ProxyID,
+		&i.FingerprintMode,
+		&i.FingerprintSeed,
+		&i.ResponseTimeoutMs,
+		&i.FirstTokenTimeoutMs,
 	)
 	return i, err
 }
@@ -513,7 +562,10 @@ SELECT
     (a.credentials ->> 'email') AS email,
     a.proxy_id,
     apx.name AS proxy_name,
-    apx.status AS proxy_status
+    apx.status AS proxy_status,
+    a.fingerprint_mode,
+    a.response_timeout_ms,
+    a.first_token_timeout_ms
 FROM subscription_accounts a
 LEFT JOIN proxies apx ON apx.id = a.proxy_id
 WHERE a.channel_id = $1
@@ -551,6 +603,9 @@ type AdminListSubscriptionAccountsRow struct {
 	ProxyID               pgtype.Int8
 	ProxyName             pgtype.Text
 	ProxyStatus           pgtype.Text
+	FingerprintMode       string
+	ResponseTimeoutMs     pgtype.Int4
+	FirstTokenTimeoutMs   pgtype.Int4
 }
 
 // AdminListSubscriptionAccounts 列出渠道下全部账号（含已停用与归档），供渠道详情的账号页签。
@@ -591,6 +646,9 @@ func (q *Queries) AdminListSubscriptionAccounts(ctx context.Context, arg AdminLi
 			&i.ProxyID,
 			&i.ProxyName,
 			&i.ProxyStatus,
+			&i.FingerprintMode,
+			&i.ResponseTimeoutMs,
+			&i.FirstTokenTimeoutMs,
 		); err != nil {
 			return nil, err
 		}
@@ -667,7 +725,7 @@ SET credentials = $3,
     updated_at = now()
 WHERE platform = $1
   AND upstream_account_id = $2
-RETURNING id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id
+RETURNING id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id, fingerprint_mode, fingerprint_seed, response_timeout_ms, first_token_timeout_ms
 `
 
 type AdminReauthorizeSubscriptionAccountParams struct {
@@ -710,6 +768,61 @@ func (q *Queries) AdminReauthorizeSubscriptionAccount(ctx context.Context, arg A
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ProxyID,
+		&i.FingerprintMode,
+		&i.FingerprintSeed,
+		&i.ResponseTimeoutMs,
+		&i.FirstTokenTimeoutMs,
+	)
+	return i, err
+}
+
+const adminSetSubscriptionAccountFingerprint = `-- name: AdminSetSubscriptionAccountFingerprint :one
+UPDATE subscription_accounts
+SET fingerprint_mode = $2,
+    fingerprint_seed = COALESCE(fingerprint_seed, $3::uuid),
+    config_revision = config_revision + 1,
+    updated_at = now()
+WHERE id = $1
+RETURNING id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id, fingerprint_mode, fingerprint_seed, response_timeout_ms, first_token_timeout_ms
+`
+
+type AdminSetSubscriptionAccountFingerprintParams struct {
+	ID              int64
+	FingerprintMode string
+	Seed            pgtype.UUID
+}
+
+// AdminSetSubscriptionAccountFingerprint 切换账号指纹收敛档位。种子只在首次需要时生成（已有则保留，
+// 切回 off 也不清空），保证切回收敛时设备身份不变。收敛档位改变出站身份，提升 config_revision 让
+// 运行态围栏与请求路径的账号快照失效重取。
+func (q *Queries) AdminSetSubscriptionAccountFingerprint(ctx context.Context, arg AdminSetSubscriptionAccountFingerprintParams) (SubscriptionAccount, error) {
+	row := q.db.QueryRow(ctx, adminSetSubscriptionAccountFingerprint, arg.ID, arg.FingerprintMode, arg.Seed)
+	var i SubscriptionAccount
+	err := row.Scan(
+		&i.ID,
+		&i.ChannelID,
+		&i.Platform,
+		&i.CredentialType,
+		&i.UpstreamAccountID,
+		&i.DisplayName,
+		&i.PlanType,
+		&i.Credentials,
+		&i.ProxyUrl,
+		&i.ConcurrencyLimit,
+		&i.Priority,
+		&i.Status,
+		&i.DisabledReason,
+		&i.SubscriptionExpiresAt,
+		&i.UsageSnapshot,
+		&i.LastSuccessAt,
+		&i.ConfigRevision,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ProxyID,
+		&i.FingerprintMode,
+		&i.FingerprintSeed,
+		&i.ResponseTimeoutMs,
+		&i.FirstTokenTimeoutMs,
 	)
 	return i, err
 }
@@ -721,7 +834,7 @@ SET status = $2,
     config_revision = config_revision + 1,
     updated_at = now()
 WHERE id = $1
-RETURNING id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id
+RETURNING id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id, fingerprint_mode, fingerprint_seed, response_timeout_ms, first_token_timeout_ms
 `
 
 type AdminSetSubscriptionAccountStatusParams struct {
@@ -756,6 +869,10 @@ func (q *Queries) AdminSetSubscriptionAccountStatus(ctx context.Context, arg Adm
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ProxyID,
+		&i.FingerprintMode,
+		&i.FingerprintSeed,
+		&i.ResponseTimeoutMs,
+		&i.FirstTokenTimeoutMs,
 	)
 	return i, err
 }
@@ -768,10 +885,12 @@ SET display_name = $2,
     concurrency_limit = $5,
     priority = $6,
     subscription_expires_at = $7,
+    response_timeout_ms = $8,
+    first_token_timeout_ms = $9,
     config_revision = config_revision + 1,
     updated_at = now()
 WHERE id = $1
-RETURNING id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id
+RETURNING id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id, fingerprint_mode, fingerprint_seed, response_timeout_ms, first_token_timeout_ms
 `
 
 type AdminUpdateSubscriptionAccountConfigParams struct {
@@ -782,12 +901,15 @@ type AdminUpdateSubscriptionAccountConfigParams struct {
 	ConcurrencyLimit      pgtype.Int4
 	Priority              int32
 	SubscriptionExpiresAt pgtype.Timestamptz
+	ResponseTimeoutMs     pgtype.Int4
+	FirstTokenTimeoutMs   pgtype.Int4
 }
 
-// AdminUpdateSubscriptionAccountConfig 修改调度参数（并发、优先级、代理、备注名）与订阅到期时间。
+// AdminUpdateSubscriptionAccountConfig 修改调度参数（并发、优先级、代理、备注名）、订阅到期时间与账号级超时覆写。
 // 调度参数改变调度行为，故提升 config_revision；调用方须在同事务提升渠道 capacity_revision，
 // 让运行态围栏立即感知（配置热更新传播）。subscription_expires_at 是运营录入的到期预警事实：
 // 上游不提供机读到期时间，唯一写入路径就是这里（缺省 NULL 表示清除/未知）。
+// 超时两列：NULL 继承渠道、0 不限制、正数覆写（与渠道行同语义）。
 func (q *Queries) AdminUpdateSubscriptionAccountConfig(ctx context.Context, arg AdminUpdateSubscriptionAccountConfigParams) (SubscriptionAccount, error) {
 	row := q.db.QueryRow(ctx, adminUpdateSubscriptionAccountConfig,
 		arg.ID,
@@ -797,6 +919,8 @@ func (q *Queries) AdminUpdateSubscriptionAccountConfig(ctx context.Context, arg 
 		arg.ConcurrencyLimit,
 		arg.Priority,
 		arg.SubscriptionExpiresAt,
+		arg.ResponseTimeoutMs,
+		arg.FirstTokenTimeoutMs,
 	)
 	var i SubscriptionAccount
 	err := row.Scan(
@@ -820,6 +944,10 @@ func (q *Queries) AdminUpdateSubscriptionAccountConfig(ctx context.Context, arg 
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ProxyID,
+		&i.FingerprintMode,
+		&i.FingerprintSeed,
+		&i.ResponseTimeoutMs,
+		&i.FirstTokenTimeoutMs,
 	)
 	return i, err
 }
@@ -885,6 +1013,10 @@ SELECT
     a.credentials,
     a.proxy_url,
     a.status,
+    a.fingerprint_mode,
+    a.fingerprint_seed,
+    a.response_timeout_ms,
+    a.first_token_timeout_ms,
     apx.url AS proxy_entity_url
 FROM subscription_accounts a
 LEFT JOIN proxies apx ON apx.id = a.proxy_id AND apx.status = 'enabled'
@@ -892,19 +1024,23 @@ WHERE a.id = $1
 `
 
 type GetAccountOutboundCredentialRow struct {
-	ID                int64
-	ChannelID         int64
-	Platform          string
-	CredentialType    string
-	UpstreamAccountID string
-	Credentials       []byte
-	ProxyUrl          pgtype.Text
-	Status            string
-	ProxyEntityUrl    pgtype.Text
+	ID                  int64
+	ChannelID           int64
+	Platform            string
+	CredentialType      string
+	UpstreamAccountID   string
+	Credentials         []byte
+	ProxyUrl            pgtype.Text
+	Status              string
+	FingerprintMode     string
+	FingerprintSeed     pgtype.UUID
+	ResponseTimeoutMs   pgtype.Int4
+	FirstTokenTimeoutMs pgtype.Int4
+	ProxyEntityUrl      pgtype.Text
 }
 
-// GetAccountOutboundCredential 取指定账号的出站凭据与代理，供 transport 按 permit 固化的账号身份发请求。
-// 与 ListSchedulableAccountsByChannel 分开，避免把凭据带进每请求的候选快照。
+// GetAccountOutboundCredential 取指定账号的出站凭据、代理、指纹收敛档位与账号级超时覆写，
+// 供 transport 按 permit 固化的账号身份发请求。与 ListSchedulableAccountsByChannel 分开，避免把凭据带进每请求的候选快照。
 func (q *Queries) GetAccountOutboundCredential(ctx context.Context, id int64) (GetAccountOutboundCredentialRow, error) {
 	row := q.db.QueryRow(ctx, getAccountOutboundCredential, id)
 	var i GetAccountOutboundCredentialRow
@@ -917,6 +1053,10 @@ func (q *Queries) GetAccountOutboundCredential(ctx context.Context, id int64) (G
 		&i.Credentials,
 		&i.ProxyUrl,
 		&i.Status,
+		&i.FingerprintMode,
+		&i.FingerprintSeed,
+		&i.ResponseTimeoutMs,
+		&i.FirstTokenTimeoutMs,
 		&i.ProxyEntityUrl,
 	)
 	return i, err

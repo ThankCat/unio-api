@@ -234,7 +234,7 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 	}
 
 	// 响应头预算只约束「上游开始响应」，不约束流本体：长补全会合法地流式数分钟。
-	// 首字预算与它同起点（§11.2），首个有效生成 Token 之后才交给 idle 看门狗。
+	// 首字预算与它同起点（§11.2），由首个上游进展解除；idle 看门狗从响应头起守护数据间隔。
 	streamCtx, timeouts := adapter.StreamTimeoutContext(ctx, adapter.StreamTimeoutConfig{
 		ResponseHeader: ch.ResponseTimeout,
 		FirstToken:     ch.FirstTokenTimeout,
@@ -327,8 +327,12 @@ func (a *Adapter) StreamChatCompletions(ctx context.Context, ch channel.Runtime,
 		}
 
 		for _, chunk := range chunks {
-			if FirstTokenPayload(chunk) != "" {
-				timeouts.FirstToken()
+			progress := StreamProgress(chunk)
+			visible := FirstTokenPayload(chunk) != ""
+			if progress || visible {
+				timeouts.Progress()
+			}
+			if adapter.TTFTEligible(progress, visible) {
 				adapter.MarkFirstTokenEligible(streamCtx)
 			}
 			if chunk.ID != "" {

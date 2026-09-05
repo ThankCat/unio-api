@@ -18,6 +18,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
 	"github.com/ThankCat/unio-gateway/internal/core/servicetier"
+	"github.com/ThankCat/unio-gateway/internal/core/sessionhint"
 	coreusage "github.com/ThankCat/unio-gateway/internal/core/usage"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
@@ -510,6 +511,8 @@ type fakeChatAdapter struct {
 	streamOutcome *adapter.StreamOutcome
 	streamErr     error
 	ch            channel.Runtime
+	// gotAffinity 记录 ctx 携带的会话亲和事实（service → adapter 载体）。
+	gotAffinity sessionhint.UpstreamAffinity
 }
 
 // ChatCompletions 记录 gateway 传入的请求，并返回测试预设响应。
@@ -517,6 +520,7 @@ func (a *fakeChatAdapter) ChatCompletions(ctx context.Context, ch channel.Runtim
 	a.chatCalled++
 	a.chatReq = req
 	a.ch = ch
+	a.gotAffinity = sessionhint.UpstreamAffinityFromContext(ctx)
 	adapter.MarkTransportStarted(ctx)
 
 	return a.chatResp, a.chatErr
@@ -527,6 +531,7 @@ func (a *fakeChatAdapter) StreamChatCompletions(ctx context.Context, ch channel.
 	a.streamCalled++
 	a.streamReq = req
 	a.ch = ch
+	a.gotAffinity = sessionhint.UpstreamAffinityFromContext(ctx)
 	adapter.MarkTransportStarted(ctx)
 
 	if a.streamErr != nil && len(a.streamResp) == 0 {

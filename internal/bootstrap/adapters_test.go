@@ -14,7 +14,7 @@ import (
 )
 
 func TestNewAdapterRegistryRegistersDeepSeekDualProtocolCapabilities(t *testing.T) {
-	registry, err := NewAdapterRegistry(nil, nil)
+	registry, err := NewAdapterRegistry(nil, nil, nil)
 	if err != nil {
 		t.Fatalf("NewAdapterRegistry returned error: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestNewAdapterRegistryDoesNotReplayPOSTOnRedirect(t *testing.T) {
 			}))
 			defer server.Close()
 
-			registry, err := NewAdapterRegistry(http.DefaultClient, nil)
+			registry, err := NewAdapterRegistry(http.DefaultClient, nil, nil)
 			if err != nil {
 				t.Fatalf("NewAdapterRegistry returned error: %v", err)
 			}

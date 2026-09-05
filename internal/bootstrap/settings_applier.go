@@ -11,6 +11,7 @@ import (
 
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
 	"github.com/ThankCat/unio-gateway/internal/platform/logging"
 	"github.com/ThankCat/unio-gateway/internal/service/appsettings"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
@@ -114,10 +115,22 @@ func (a *settingsApplier) applyOnce(ctx context.Context) {
 		}
 	}
 
-	if d, err := appsettings.DecodePositiveMsSetting(a.store.Raw(ctx, appsettings.GatewayStreamIdleTimeoutKey)); err == nil {
+	if d, err := appsettings.DecodeNonNegativeMsSetting(a.store.Raw(ctx, appsettings.GatewayStreamIdleTimeoutKey)); err == nil {
 		adapter.SetStreamIdleTimeout(d)
 	} else {
 		a.warnDecode(ctx, appsettings.GatewayStreamIdleTimeoutKey, err)
+	}
+
+	if d, err := appsettings.DecodeNonNegativeMsSetting(a.store.Raw(ctx, appsettings.GatewayStreamKeepaliveIntervalKey)); err == nil {
+		httpx.SetSSEKeepaliveInterval(d)
+	} else {
+		a.warnDecode(ctx, appsettings.GatewayStreamKeepaliveIntervalKey, err)
+	}
+
+	if mode, err := appsettings.DecodeOpenAITTFTMode(a.store.Raw(ctx, appsettings.GatewayOpenAITTFTModeKey)); err == nil {
+		adapter.SetTTFTMode(adapter.TTFTMode(mode))
+	} else {
+		a.warnDecode(ctx, appsettings.GatewayOpenAITTFTModeKey, err)
 	}
 
 	if a.channel429 != nil {
@@ -145,13 +158,13 @@ func (a *settingsApplier) applyOnce(ctx context.Context) {
 		a.warnDecode(ctx, appsettings.GatewayCredential401ThresholdKey, err)
 	}
 
-	if d, err := appsettings.DecodePositiveMsSetting(a.store.Raw(ctx, appsettings.GatewayDefaultResponseTimeoutKey)); err == nil {
+	if d, err := appsettings.DecodeNonNegativeMsSetting(a.store.Raw(ctx, appsettings.GatewayDefaultResponseTimeoutKey)); err == nil {
 		a.router.SetDefaultResponseTimeout(d)
 	} else {
 		a.warnDecode(ctx, appsettings.GatewayDefaultResponseTimeoutKey, err)
 	}
 
-	if d, err := appsettings.DecodePositiveMsSetting(a.store.Raw(ctx, appsettings.GatewayDefaultFirstTokenTimeoutKey)); err == nil {
+	if d, err := appsettings.DecodeNonNegativeMsSetting(a.store.Raw(ctx, appsettings.GatewayDefaultFirstTokenTimeoutKey)); err == nil {
 		a.router.SetDefaultFirstTokenTimeout(d)
 	} else {
 		a.warnDecode(ctx, appsettings.GatewayDefaultFirstTokenTimeoutKey, err)

@@ -232,12 +232,17 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 	// 非准入类 gateway 热路径配置：启动期从配置中枢取初值构造消费方，之后由
 	// settingsApplier 周期推送热更新。breaker、admission 与 balanced 参数只读 Redis committed control。
 	adapter.SetStreamIdleTimeout(appsettings.GatewayStreamIdleTimeout(ctx, settingsStore))
+	adapter.SetTTFTMode(adapter.TTFTMode(appsettings.GatewayOpenAITTFTMode(ctx, settingsStore)))
+	httpx.SetSSEKeepaliveInterval(appsettings.GatewayStreamKeepaliveInterval(ctx, settingsStore))
 
 	chatRouter := NewChatRouter(queries, appsettings.GatewayDefaultResponseTimeout(ctx, settingsStore), deps.Logger, fx.NewService(queries, 0))
-	// 首字保护是独立预算（§11.3）：与响应超时同起点，但由自己的全局默认与渠道列决定。
+	// 首字超时是独立预算（§11.3）：与响应超时同起点、由首个上游进展解除；两项全局默认均为 0（不限制），
+	// 渠道行与号池账号逐层覆写。
 	chatRouter.SetDefaultFirstTokenTimeout(appsettings.GatewayDefaultFirstTokenTimeout(ctx, settingsStore))
 
-	adapterRegistry, err := NewAdapterRegistry(http.DefaultClient, deps.Logger)
+	// Codex 出站身份的版本来源：Admin 覆写 → worker 自动同步 → 基线，随 settings store 秒级生效。
+	codexVersion := codexVersionSource(settingsStore)
+	adapterRegistry, err := NewAdapterRegistry(http.DefaultClient, deps.Logger, codexVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -300,7 +305,7 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 	accountProxyClients := proxyclient.NewResolver(upstreamHTTPClient(nil))
 	accountOutbound := subscription.NewOutbound(
 		queries,
-		subscription.NewTokenClient(accountProxyClients.ClientFor),
+		subscription.NewTokenClient(accountProxyClients.ClientFor, codexVersion),
 		breakerStore,
 		deps.Redis,
 		deps.Logger,

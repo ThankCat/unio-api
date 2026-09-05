@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"context"
+	"time"
 
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	"github.com/ThankCat/unio-gateway/internal/core/channel"
@@ -17,6 +18,13 @@ type AccountOutbound struct {
 	UpstreamAccountID string
 	// ProxyURL 是账号绑定出口；空串直连。
 	ProxyURL string
+	// FingerprintMode / FingerprintSeed 是账号指纹收敛档位与系统种子（WP4），交给 wire 派生出站设备身份。
+	FingerprintMode channel.FingerprintMode
+	FingerprintSeed string
+	// ResponseTimeout / FirstTokenTimeout 是账号级超时覆写：nil 继承渠道（渠道再继承全局默认），
+	// 0 表示不限制，正数覆写——与渠道行 response_timeout_ms / first_token_timeout_ms 同语义。
+	ResponseTimeout   *time.Duration
+	FirstTokenTimeout *time.Duration
 }
 
 // AccountOutboundResolver 按 permit 固化的账号 ID 解析出站凭据。
@@ -68,6 +76,15 @@ func (l *RequestLifecycle) applyAccountOutbound(
 		ID:                accountID,
 		UpstreamAccountID: outbound.UpstreamAccountID,
 		ProxyURL:          outbound.ProxyURL,
+		FingerprintMode:   outbound.FingerprintMode,
+		FingerprintSeed:   outbound.FingerprintSeed,
+	}
+	// 账号级超时是三层继承的最后一层：账号显式配置（含 0=不限制）覆盖渠道/全局解析出的值。
+	if outbound.ResponseTimeout != nil {
+		candidate.Channel.ResponseTimeout = *outbound.ResponseTimeout
+	}
+	if outbound.FirstTokenTimeout != nil {
+		candidate.Channel.FirstTokenTimeout = *outbound.FirstTokenTimeout
 	}
 	return candidate, nil
 }

@@ -1311,9 +1311,10 @@ func validateStatus(status string) error {
 	}
 }
 
+// validateTimeout 校验渠道级超时：未设置（nil）继承全局默认，显式 0 表示不限制，正数覆写；负数非法。
 func validateTimeout(field string, ms *int32) error {
-	if ms != nil && *ms <= 0 {
-		return invalidArgument(field, field+" must be > 0 when set")
+	if ms != nil && *ms < 0 {
+		return invalidArgument(field, field+" must be >= 0 when set (0 = unlimited)")
 	}
 	return nil
 }

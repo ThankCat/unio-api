@@ -55,7 +55,7 @@ func TestBuildInventoryMatchCases(t *testing.T) {
 }
 
 func TestInventoryItemPendingKeepsStatusesIndependent(t *testing.T) {
-	success := &InventoryVerification{Status: "succeeded", Current: true}
+	success := &InventoryVerification{Status: "succeeded"}
 	tests := []struct {
 		name string
 		item InventoryItem
@@ -76,9 +76,17 @@ func TestInventoryItemPendingKeepsStatusesIndependent(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "verification stale",
+			// 2026-09-05：验证结果不随配置修订过期，一次成功长期有效（重验时机由运营决定）。
+			name: "succeeded verification never expires",
 			item: InventoryItem{DiscoveryState: "discovered", Bindings: []InventoryBinding{
 				{Status: "enabled", Verification: &InventoryVerification{Status: "succeeded"}},
+			}},
+			want: false,
+		},
+		{
+			name: "failed verification remains pending",
+			item: InventoryItem{DiscoveryState: "discovered", Bindings: []InventoryBinding{
+				{Status: "enabled", Verification: &InventoryVerification{Status: "failed"}},
 			}},
 			want: true,
 		},

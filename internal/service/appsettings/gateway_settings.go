@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
+
+	"github.com/ThankCat/unio-gateway/internal/core/codexidentity"
 )
 
 // 本文件登记 gateway 热路径运行时配置。breaker、rate/concurrency defaults 与
@@ -33,6 +36,16 @@ const (
 	GatewayAccountUsagePauseThresholdKey = "gateway.account_usage_pause_threshold_percent"
 	// GatewayAccountPoolPreferSoonestResetKey 是池内 use-it-or-lose-it 排序开关。
 	GatewayAccountPoolPreferSoonestResetKey = "gateway.account_pool_prefer_soonest_reset"
+	// GatewayCodexClientVersionKey 是 Admin 覆写的 Codex 客户端版本号（空串 = 不覆写，跟随自动同步）。
+	GatewayCodexClientVersionKey = "gateway.codex_client_version"
+	// GatewayCodexClientVersionAutoSyncKey 控制是否采用 worker 自动同步到的官方最新稳定版。
+	GatewayCodexClientVersionAutoSyncKey = "gateway.codex_client_version_auto_sync"
+	// GatewayCodexClientVersionSyncedKey 是 worker 独占写入的官方最新稳定版快照（Admin 只读展示）。
+	GatewayCodexClientVersionSyncedKey = "gateway.codex_client_version_synced"
+	// GatewayStreamKeepaliveIntervalKey 是向客户端写 SSE 注释保活帧的间隔（0 = 关闭）。
+	GatewayStreamKeepaliveIntervalKey = "gateway.stream_keepalive_interval_ms"
+	// GatewayOpenAITTFTModeKey 是 TTFT 统计口径：semantic（首个进展）/ visible（首个可见内容）。
+	GatewayOpenAITTFTModeKey = "gateway.openai_ttft_mode"
 )
 
 func msToDuration(ms int64) time.Duration {
@@ -353,18 +366,26 @@ func GatewayChannelCooldown(ctx context.Context, store *SettingsStore) ChannelCo
 	return s
 }
 
-// ---- 标量项:流式 idle 超时 / 凭据 401 阈值 / 默认渠道超时 ----
+// ---- 标量项:上游超时 / 保活 / TTFT 口径 / 凭据 401 阈值 ----
+//
+// 上游超时只有两项：响应超时与首字预算。两项都按「全局默认 → 渠道行 → 号池账号」三层继承，每层 NULL 继承
+// 上一层、显式 0 表示不限制、正数覆写；全局默认均为 0（2026-09-05 对齐 Sub2API，不按协议族分叉）。
+// 首字预算由「上游进展」解除，reasoning 长思考不再被掐断；永不结束的流由上游数据间隔看门狗兜底：
+//   - 上游数据间隔（idle）：从响应头起生效、任何上游数据重置，默认 180s，0 = 关闭；
+//   - 下游保活注释帧：默认 10s，0 = 关闭；
+//   - TTFT 口径：默认 semantic（首个进展），可切 visible（首个可见内容）。
 
-// DefaultStreamIdleTimeoutSetting 与原 GATEWAY_STREAM_IDLE_TIMEOUT env 默认一致。
-const DefaultStreamIdleTimeoutSetting = 10 * time.Minute
+// DefaultStreamIdleTimeoutSetting 与 Sub2API stream_data_interval_timeout 默认一致。
+const DefaultStreamIdleTimeoutSetting = 180 * time.Second
 
-// DefaultResponseTimeoutSetting 渠道未单独设置 response_timeout_ms 时的系统默认上游响应超时（§11.3）。
-const DefaultResponseTimeoutSetting = 200 * time.Second
+// DefaultResponseTimeoutSetting 是系统默认响应超时：0 = 不限制。
+const DefaultResponseTimeoutSetting = 0 * time.Second
 
-// DefaultFirstTokenTimeoutSetting 渠道未单独设置 first_token_timeout_ms 时的系统默认首字超时（§11.3）。
-// 这是本次改造唯一新增的保护；现有 200s 完整响应与 10min 流式 idle 默认值保持不变，
-// 避免迁移时意外缩短合法长请求。
-const DefaultFirstTokenTimeoutSetting = 60 * time.Second
+// DefaultFirstTokenTimeoutSetting 是系统默认首字预算：0 = 不限制（Sub2API 默认）。
+const DefaultFirstTokenTimeoutSetting = 0 * time.Second
+
+// DefaultStreamKeepaliveIntervalSetting 与 Sub2API stream_keepalive_interval 默认一致。
+const DefaultStreamKeepaliveIntervalSetting = 10 * time.Second
 
 // DefaultCredential401Threshold 与原 GATEWAY_CHANNEL_CREDENTIAL_401_THRESHOLD env 默认一致。
 const DefaultCredential401Threshold = 3
@@ -413,25 +434,94 @@ func streamIdleTimeoutDefinition() Definition {
 	return Definition{
 		Key:      GatewayStreamIdleTimeoutKey,
 		Category: "gateway",
-		Label:    "流式 idle 超时",
-		Description: "流式上游「相邻两次流活动之间」的最大静默时长看门狗,兜底半开/挂死连接。单位毫秒。" +
-			"必须显著大于上游合法的最长静默阶段(如慢速图像生成),否则会误杀正常长任务流。",
+		Label:    "流式上游数据间隔超时",
+		Description: "流式上游从响应头到达起,相邻两次数据(协议事件、SSE 注释/空行)之间的最大静默时长,兜底半开/挂死连接。" +
+			"单位毫秒,0=关闭。模型思考期间上游会持续推 reasoning 事件,不会被它误杀;" +
+			"它不影响首字预算(心跳能重置它,但不能解除首字计时)。默认 180000(与 Sub2API 一致)。",
 		HotReload: true,
 		Default:   encodeMsSetting(DefaultStreamIdleTimeoutSetting),
 		Validate: func(raw json.RawMessage) error {
-			_, err := DecodePositiveMsSetting(raw)
+			_, err := DecodeNonNegativeMsSetting(raw)
 			return err
 		},
 	}
 }
 
-// GatewayStreamIdleTimeout 读取当前生效的流式 idle 超时(解码失败回默认)。
+// GatewayStreamIdleTimeout 读取当前生效的流式数据间隔超时(解码失败回默认;0 = 关闭)。
 func GatewayStreamIdleTimeout(ctx context.Context, store *SettingsStore) time.Duration {
-	d, err := DecodePositiveMsSetting(store.Raw(ctx, GatewayStreamIdleTimeoutKey))
+	d, err := DecodeNonNegativeMsSetting(store.Raw(ctx, GatewayStreamIdleTimeoutKey))
 	if err != nil {
 		return DefaultStreamIdleTimeoutSetting
 	}
 	return d
+}
+
+func streamKeepaliveIntervalDefinition() Definition {
+	return Definition{
+		Key:      GatewayStreamKeepaliveIntervalKey,
+		Category: "gateway",
+		Label:    "流式下游保活间隔",
+		Description: "向客户端写 SSE 注释帧(\": \\n\\n\")的间隔:超过该时长没有任何下游写出就补一帧,防止代理/客户端空闲断开。" +
+			"首字之前也发;保活帧不算客户端已收到输出,不影响首字前换渠道。单位毫秒,0=关闭。默认 10000(与 Sub2API 一致)。",
+		HotReload: true,
+		Default:   encodeMsSetting(DefaultStreamKeepaliveIntervalSetting),
+		Validate: func(raw json.RawMessage) error {
+			_, err := DecodeNonNegativeMsSetting(raw)
+			return err
+		},
+	}
+}
+
+// GatewayStreamKeepaliveInterval 读取当前生效的下游保活间隔(解码失败回默认;0 = 关闭)。
+func GatewayStreamKeepaliveInterval(ctx context.Context, store *SettingsStore) time.Duration {
+	d, err := DecodeNonNegativeMsSetting(store.Raw(ctx, GatewayStreamKeepaliveIntervalKey))
+	if err != nil {
+		return DefaultStreamKeepaliveIntervalSetting
+	}
+	return d
+}
+
+// DefaultOpenAITTFTMode 与 Sub2API openai_ttft_mode 默认一致。
+const DefaultOpenAITTFTMode = "semantic"
+
+// DecodeOpenAITTFTMode 解码 TTFT 口径,只接受 semantic / visible。
+func DecodeOpenAITTFTMode(raw []byte) (string, error) {
+	var mode string
+	if err := json.Unmarshal(raw, &mode); err != nil {
+		return "", fmt.Errorf("value must be a JSON string: %w", err)
+	}
+	switch strings.TrimSpace(mode) {
+	case "semantic", "visible":
+		return strings.TrimSpace(mode), nil
+	default:
+		return "", errors.New("ttft mode must be one of: semantic, visible")
+	}
+}
+
+func openAITTFTModeDefinition() Definition {
+	return Definition{
+		Key:      GatewayOpenAITTFTModeKey,
+		Category: "gateway",
+		Label:    "TTFT 统计口径",
+		Description: "首字(TTFT)记在哪个事件上:semantic=跳过协议前导后的首个结构性事件(reasoning 模型思考阶段的 " +
+			"reasoning item 即算,反映\"模型开始工作\");visible=首个携带客户可用内容(文本/推理摘要/工具参数)的事件。" +
+			"只影响上游 TTFT 样本、渠道评分与 Gateway TTFT,不影响计费(结算只看是否已交付可见内容)。默认 semantic(与 Sub2API 一致)。",
+		HotReload: true,
+		Default:   json.RawMessage(`"` + DefaultOpenAITTFTMode + `"`),
+		Validate: func(raw json.RawMessage) error {
+			_, err := DecodeOpenAITTFTMode(raw)
+			return err
+		},
+	}
+}
+
+// GatewayOpenAITTFTMode 读取当前生效的 TTFT 口径(解码失败回默认 semantic)。
+func GatewayOpenAITTFTMode(ctx context.Context, store *SettingsStore) string {
+	mode, err := DecodeOpenAITTFTMode(store.Raw(ctx, GatewayOpenAITTFTModeKey))
+	if err != nil {
+		return DefaultOpenAITTFTMode
+	}
+	return mode
 }
 
 func credential401ThresholdDefinition() Definition {
@@ -828,22 +918,22 @@ func defaultResponseTimeoutDefinition() Definition {
 		Key:      GatewayDefaultResponseTimeoutKey,
 		Category: "gateway",
 		Label:    "默认响应超时",
-		Description: "渠道未配置 response_timeout_ms 时的兜底超时(单位毫秒)。" +
+		Description: "渠道与账号都未配置 response_timeout_ms 时的全局默认(单位毫秒),0=不限制。" +
 			"非流式覆盖连接、响应头、完整响应体与解析;流式只覆盖「拿到上游响应头」。" +
-			"渠道行上的正数 response_timeout_ms 优先;0 或负数不表示无限,一律按继承处理。" +
-			"不影响「渠道巡检」探测超时(admin_backend.channel_test.probe_timeout_ms)——检测专用、独立配置。",
+			"三层继承:全局默认 → 渠道行 → 号池账号,每层留空继承上一层、显式 0 不限制、正数覆写。" +
+			"不影响「渠道巡检」探测超时(admin_backend.channel_test.probe_timeout_ms)——检测专用、独立配置。默认 0。",
 		HotReload: true,
 		Default:   encodeMsSetting(DefaultResponseTimeoutSetting),
 		Validate: func(raw json.RawMessage) error {
-			_, err := DecodePositiveMsSetting(raw)
+			_, err := DecodeNonNegativeMsSetting(raw)
 			return err
 		},
 	}
 }
 
-// GatewayDefaultResponseTimeout 读取当前生效的默认响应超时(解码失败回默认)。
+// GatewayDefaultResponseTimeout 读取当前生效的默认响应超时(解码失败回默认;0 = 不限制)。
 func GatewayDefaultResponseTimeout(ctx context.Context, store *SettingsStore) time.Duration {
-	d, err := DecodePositiveMsSetting(store.Raw(ctx, GatewayDefaultResponseTimeoutKey))
+	d, err := DecodeNonNegativeMsSetting(store.Raw(ctx, GatewayDefaultResponseTimeoutKey))
 	if err != nil {
 		return DefaultResponseTimeoutSetting
 	}
@@ -855,27 +945,156 @@ func defaultFirstTokenTimeoutDefinition() Definition {
 		Key:      GatewayDefaultFirstTokenTimeoutKey,
 		Category: "gateway",
 		Label:    "默认首字超时",
-		Description: "流式请求从发起上游调用到「首个有效生成 Token」的最大等待(单位毫秒)。" +
-			"它与响应超时同一起点,不是拿到响应头之后再重新计时;HTTP 响应头、SSE 空行、注释和" +
-			"纯心跳都不停止首字计时。渠道行上的正数 first_token_timeout_ms 优先;非流式不使用本项。",
+		Description: "流式请求从发起上游调用到「首个上游进展」的最大等待(单位毫秒),0=不限制。" +
+			"进展指跳过协议前导(response.created/in_progress)后的首个结构性事件,reasoning 模型思考阶段的 " +
+			"reasoning item 事件即算,因此长思考不会被本项掐断;进展之后由「流式上游数据间隔超时」守护。" +
+			"它与响应超时同一起点;HTTP 响应头、SSE 空行、注释和纯心跳都不解除首字计时。" +
+			"三层继承:全局默认 → 渠道行 → 号池账号,每层留空继承上一层、显式 0 不限制、正数覆写;非流式不使用本项。默认 0。",
 		HotReload: true,
 		Default:   encodeMsSetting(DefaultFirstTokenTimeoutSetting),
 		Validate: func(raw json.RawMessage) error {
-			_, err := DecodePositiveMsSetting(raw)
+			_, err := DecodeNonNegativeMsSetting(raw)
 			return err
 		},
 	}
 }
 
-// GatewayDefaultFirstTokenTimeout 读取当前生效的默认首字超时(解码失败回默认)。
+// GatewayDefaultFirstTokenTimeout 读取当前生效的默认首字超时(解码失败回默认;0 = 不限制)。
 func GatewayDefaultFirstTokenTimeout(ctx context.Context, store *SettingsStore) time.Duration {
-	d, err := DecodePositiveMsSetting(store.Raw(ctx, GatewayDefaultFirstTokenTimeoutKey))
+	d, err := DecodeNonNegativeMsSetting(store.Raw(ctx, GatewayDefaultFirstTokenTimeoutKey))
 	if err != nil {
 		return DefaultFirstTokenTimeoutSetting
 	}
 	return d
 }
 
-// 售价倍率不再是全局设置：它随每条 model_prices 行走（sale_price_ratio），
+// ---- Codex 客户端身份版本（号池出站身份，对齐 Sub2API 的版本跟随） ----
+//
+// 上游 /backend-api/codex 在容量紧张时按客户端身份分优先级降载，陈旧版本先被丢弃，所以出站声明的
+// 版本必须跟着官方发布走。生效优先级：Admin 覆写 → worker 自动同步值（开启时）→ 编译期基线；
+// 任一值低于基线回落基线。三个头（originator / User-Agent / version）由 codexidentity 同源渲染。
+
+// CodexClientVersionSynced 是 worker 写入的官方最新稳定版快照。
+type CodexClientVersionSynced struct {
+	Version  string    `json:"version"`
+	SyncedAt time.Time `json:"synced_at"`
+	Source   string    `json:"source"`
+}
+
+// DecodeCodexClientVersionOverride 解码 Admin 覆写的版本号：空串合法（不覆写），否则必须是官方形态。
+func DecodeCodexClientVersionOverride(raw []byte) (string, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || trimmed[0] != '"' {
+		return "", errors.New("value must be a JSON string")
+	}
+	var v string
+	if err := json.Unmarshal(trimmed, &v); err != nil {
+		return "", fmt.Errorf("value must be a JSON string: %w", err)
+	}
+	if strings.TrimSpace(v) == "" {
+		return "", nil
+	}
+	normalized := codexidentity.NormalizeVersion(v)
+	if normalized == "" {
+		return "", errors.New("version must look like 0.152.1 or 0.153.0-alpha.5")
+	}
+	return normalized, nil
+}
+
+// DecodeCodexClientVersionSynced 解码自动同步快照；null 表示尚未同步过。
+func DecodeCodexClientVersionSynced(raw []byte) (CodexClientVersionSynced, error) {
+	if len(bytes.TrimSpace(raw)) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return CodexClientVersionSynced{}, nil
+	}
+	var doc CodexClientVersionSynced
+	if err := strictUnmarshal(raw, &doc); err != nil {
+		return CodexClientVersionSynced{}, err
+	}
+	if doc.Version != "" && codexidentity.NormalizeVersion(doc.Version) == "" {
+		return CodexClientVersionSynced{}, errors.New("synced version must look like 0.152.1")
+	}
+	return doc, nil
+}
+
+// EncodeCodexClientVersionSynced 编码自动同步快照（worker 写入用）。
+func EncodeCodexClientVersionSynced(s CodexClientVersionSynced) json.RawMessage {
+	raw, err := json.Marshal(s)
+	if err != nil {
+		panic(fmt.Sprintf("appsettings: encode codex client version synced: %v", err))
+	}
+	return raw
+}
+
+func codexClientVersionDefinition() Definition {
+	return Definition{
+		Key:      GatewayCodexClientVersionKey,
+		Category: "gateway",
+		Label:    "Codex 客户端版本覆写",
+		Description: "号池出站向 Codex 后端声明的客户端版本（写进 User-Agent、version 头与模型清单查询参数）。" +
+			"留空 = 跟随自动同步的官方最新稳定版；填写后固定为该版本。上游会优先降载陈旧版本，" +
+			"低于基线 " + codexidentity.BaselineVersion + " 的值一律按基线出站。形态如 0.152.1 或 0.153.0-alpha.5。",
+		HotReload: true,
+		Default:   json.RawMessage(`""`),
+		Validate: func(raw json.RawMessage) error {
+			_, err := DecodeCodexClientVersionOverride(raw)
+			return err
+		},
+	}
+}
+
+func codexClientVersionAutoSyncDefinition() Definition {
+	return Definition{
+		Key:      GatewayCodexClientVersionAutoSyncKey,
+		Category: "gateway",
+		Label:    "Codex 客户端版本自动同步",
+		Description: "开启后 worker 每 6 小时从 GitHub openai/codex 的最新正式发布同步版本号（预发布不算），" +
+			"未填覆写时即以同步值出站，不必为跟版本而发版。关闭后只用覆写值，覆写也为空时用基线。",
+		HotReload: true,
+		Default:   json.RawMessage("true"),
+		Validate: func(raw json.RawMessage) error {
+			var v bool
+			return json.Unmarshal(raw, &v)
+		},
+	}
+}
+
+func codexClientVersionSyncedDefinition() Definition {
+	return Definition{
+		Key:      GatewayCodexClientVersionSyncedKey,
+		Category: "gateway",
+		Label:    "Codex 客户端版本（自动同步值）",
+		Description: "worker 最近一次从 GitHub openai/codex 同步到的官方最新稳定版及时间，只读。" +
+			"null 表示尚未同步成功过。",
+		HotReload: true,
+		ReadOnly:  true,
+		Default:   json.RawMessage("null"),
+		Validate: func(raw json.RawMessage) error {
+			_, err := DecodeCodexClientVersionSynced(raw)
+			return err
+		},
+	}
+}
+
+// GatewayCodexClientVersion 返回当前生效的 Codex 客户端版本（覆写 → 同步值 → 基线，施加下限）。
+// 解码失败的项按缺省处理，保证任何时候都能得到一个合法版本。
+func GatewayCodexClientVersion(ctx context.Context, store *SettingsStore) string {
+	override, err := DecodeCodexClientVersionOverride(store.Raw(ctx, GatewayCodexClientVersionKey))
+	if err != nil {
+		override = ""
+	}
+	autoSync := true
+	if raw := store.Raw(ctx, GatewayCodexClientVersionAutoSyncKey); len(raw) > 0 {
+		if err := json.Unmarshal(raw, &autoSync); err != nil {
+			autoSync = true
+		}
+	}
+	synced, err := DecodeCodexClientVersionSynced(store.Raw(ctx, GatewayCodexClientVersionSyncedKey))
+	if err != nil {
+		synced = CodexClientVersionSynced{}
+	}
+	return codexidentity.EffectiveVersion(override, autoSync, synced.Version)
+}
+
+// 售价折扣不再是全局设置：它随每条 model_prices 行走（sale_discount），
 // 与同行的绝对售价共同决定该模型的客户售价。设置项、解码器与 Router 侧的热改入口
 // 一并删除，定价的唯一来源是价格行本身。

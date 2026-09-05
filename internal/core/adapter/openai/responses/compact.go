@@ -56,6 +56,10 @@ func (a *Adapter) CompactResponse(ctx context.Context, ch channel.Runtime, req R
 	if err := a.guardRequest(req); err != nil {
 		return nil, err
 	}
+	req, err := a.bindSession(ctx, ch, req)
+	if err != nil {
+		return nil, err
+	}
 	url, err := adapter.BuildUpstreamURL(ch.Origin, a.compactPath())
 	if err != nil {
 		return nil, err

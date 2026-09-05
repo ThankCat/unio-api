@@ -85,6 +85,9 @@ func (h *messagesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			_ = writeAnthropicError(w, http.StatusInternalServerError, "api_error", "streaming unsupported", requestIDFromContext(r))
 			return
 		}
+		// 下游保活（gateway.stream_keepalive_interval_ms，对齐 Sub2API）：空闲期补 SSE 注释帧。
+		stopKeepalive := sw.RunKeepalive(httpx.SSEKeepaliveInterval())
+		defer stopKeepalive()
 
 		err = h.service.StreamMessage(r.Context(), req, func(frame StreamFrame) error {
 			return sw.WriteEvent(httpx.SSEEvent{

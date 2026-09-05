@@ -322,23 +322,29 @@ func TestScalarSettingsDecode(t *testing.T) {
 
 // TestMsScalarDefaults 验证毫秒标量默认值的编码是纯整数。
 func TestMsScalarDefaults(t *testing.T) {
-	if got := string(encodeMsSetting(DefaultStreamIdleTimeoutSetting)); got != "600000" {
-		t.Fatalf("stream idle default = %s, want 600000", got)
+	if got := string(encodeMsSetting(DefaultStreamIdleTimeoutSetting)); got != "180000" {
+		t.Fatalf("stream idle default = %s, want 180000", got)
 	}
-	if got := string(encodeMsSetting(DefaultResponseTimeoutSetting)); got != "200000" {
-		t.Fatalf("channel timeout default = %s, want 200000", got)
+	if got := string(encodeMsSetting(DefaultResponseTimeoutSetting)); got != "0" {
+		t.Fatalf("response timeout default = %s, want 0 (unlimited)", got)
 	}
 }
 
-// TestTimeoutAndCapacityWaitDefaultsAreFrozen 冻结 §11.3/§9.4 的最终默认值。
-// 本次改造只新增 60s 首字保护；200s 响应默认与 10min 流式 idle 默认必须保持不变，
-// 否则迁移会意外缩短合法长请求。
+// TestTimeoutAndCapacityWaitDefaultsAreFrozen 冻结 §11.3/§9.4 的最终默认值（2026-09-05 对齐 Sub2API）：
+// 响应超时与首字超时默认 0（不限制），只有这两项上游超时；上游数据间隔 180s；下游保活 10s；TTFT 口径 semantic。
 func TestTimeoutAndCapacityWaitDefaultsAreFrozen(t *testing.T) {
 	reg := DefaultRegistry()
+	for _, removed := range []string{"gateway.openai_response_header_timeout_ms", "gateway.default_first_token_timeout_high_effort_ms"} {
+		if _, ok := reg.Get(removed); ok {
+			t.Fatalf("%q must not exist: timeouts are not split by protocol family or reasoning effort", removed)
+		}
+	}
 	for key, want := range map[string]string{
-		GatewayDefaultResponseTimeoutKey:   "200000",
-		GatewayDefaultFirstTokenTimeoutKey: "60000",
-		GatewayStreamIdleTimeoutKey:        "600000",
+		GatewayDefaultResponseTimeoutKey:   "0",
+		GatewayDefaultFirstTokenTimeoutKey: "0",
+		GatewayStreamIdleTimeoutKey:        "180000",
+		GatewayStreamKeepaliveIntervalKey:  "10000",
+		GatewayOpenAITTFTModeKey:           `"semantic"`,
 		GatewayCapacityWaitTimeoutKey:      "1000",
 	} {
 		def, ok := reg.Get(key)
@@ -368,21 +374,43 @@ func TestCapacityWaitAcceptsZeroButRejectsNegative(t *testing.T) {
 	}
 }
 
-// TestTimeoutDefaultsRejectNonPositive 冻结 §11.3：0/负数不表示「无限」，必须被拒绝。
-func TestTimeoutDefaultsRejectNonPositive(t *testing.T) {
+// TestTimeoutSettingsZeroSemantics 冻结 2026-09-05 的取值语义：
+// 响应超时、首字超时、idle 与保活都接受 0（不限制/关闭）、拒绝负数。
+func TestTimeoutSettingsZeroSemantics(t *testing.T) {
+	reg := DefaultRegistry()
 	for _, key := range []string{
 		GatewayDefaultResponseTimeoutKey,
 		GatewayDefaultFirstTokenTimeoutKey,
 		GatewayStreamIdleTimeoutKey,
+		GatewayStreamKeepaliveIntervalKey,
 	} {
-		def, ok := DefaultRegistry().Get(key)
+		def, ok := reg.Get(key)
 		if !ok {
 			t.Fatalf("key %q is not registered", key)
 		}
-		for _, raw := range []string{`0`, `-1`} {
-			if err := def.Validate([]byte(raw)); err == nil {
-				t.Errorf("key %q accepted %s; 0/negative must never disable the protection", key, raw)
-			}
+		if err := def.Validate([]byte(`0`)); err != nil {
+			t.Errorf("key %q must accept 0 (unlimited/off): %v", key, err)
+		}
+		if err := def.Validate([]byte(`-1`)); err == nil {
+			t.Errorf("key %q must reject negative values", key)
+		}
+	}
+}
+
+// TestOpenAITTFTModeValidation 冻结 TTFT 口径只接受 semantic / visible。
+func TestOpenAITTFTModeValidation(t *testing.T) {
+	def, ok := DefaultRegistry().Get(GatewayOpenAITTFTModeKey)
+	if !ok {
+		t.Fatal("ttft mode key is not registered")
+	}
+	for _, raw := range []string{`"semantic"`, `"visible"`} {
+		if err := def.Validate([]byte(raw)); err != nil {
+			t.Errorf("%s must be accepted: %v", raw, err)
+		}
+	}
+	for _, raw := range []string{`"fast"`, `""`, `1`, `null`} {
+		if err := def.Validate([]byte(raw)); err == nil {
+			t.Errorf("%s must be rejected", raw)
 		}
 	}
 }

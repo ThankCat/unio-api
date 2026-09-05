@@ -20,13 +20,9 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 )
 
-// defaultResponseTimeoutFallback / defaultFirstTokenTimeoutFallback 是 settings 尚未推送时的内置兜底。
-// 它们只在装配阶段短暂生效；真实默认来自 gateway.default_response_timeout_ms /
-// gateway.default_first_token_timeout_ms（§11.3）。
-const (
-	defaultResponseTimeoutFallback   = 200 * time.Second
-	defaultFirstTokenTimeoutFallback = 60 * time.Second
-)
+// 响应超时与首字预算没有内置兜底常量：全局默认本身就是 0（不限制，2026-09-05 对齐 Sub2API），
+// 真实值来自 gateway.default_response_timeout_ms / gateway.default_first_token_timeout_ms（§11.3），
+// settings 推送前按 0 处理。渠道行与号池账号可逐层覆写（NULL 继承、0 不限制、正数覆写）。
 
 const (
 	// ProtocolOpenAI 是 OpenAI Chat Completions ingress 协议族标识。
@@ -108,9 +104,9 @@ type ChatRouteCandidate struct {
 
 	// ModelPriceID 是计算 SalePrice 所用的模型基准售价行 ID（model_prices.id，供结算审计/快照）。
 	ModelPriceID int64
-	// PriceRatio 是计算 SalePrice 所用的模型售价倍率（供结算审计/快照）；绝对售价路径下为空。
+	// SaleDiscount 是计算 SalePrice 所用的模型售价折扣（供结算审计/快照）；绝对售价路径下为空。
 	// 模型配了绝对售价时为空：那条路径下售价直接取自模型，没有倍率参与。
-	PriceRatio pgtype.Numeric
+	SaleDiscount pgtype.Numeric
 	// SalePrice 是客户最终售价向量 = 模型基准价 × 线路倍率（DEC-026）；同一请求所有候选共享同一售价，
 	// 供保守预授权上界与结算扣费，不随命中哪条渠道变化。
 	// 注意：此处为短上下文牌价；长上下文阶梯在授权/结算时按 LongContextPolicy + 输入合计再缩放。
@@ -268,28 +264,21 @@ func NewRouter(store Store, defaultResponseTimeout time.Duration, opts ...Option
 		logger: zap.NewNop(),
 	}
 	r.SetDefaultResponseTimeout(defaultResponseTimeout)
-	r.SetDefaultFirstTokenTimeout(defaultFirstTokenTimeoutFallback)
 	for _, opt := range opts {
 		opt(r)
 	}
 	return r
 }
 
-// SetDefaultResponseTimeout 原子替换全局默认响应超时（运行时热改入口）；<=0 兜底为内置默认。
-// 仅影响之后的候选构造；渠道行上的正数 response_timeout_ms 始终优先。
+// SetDefaultResponseTimeout 原子替换全局默认响应超时（运行时热改入口）；0 或负数均表示不限制。
+// 仅影响之后的候选构造；渠道行与号池账号上显式的 response_timeout_ms 逐层优先（0 = 不限制）。
 func (r *Router) SetDefaultResponseTimeout(d time.Duration) {
-	if d <= 0 {
-		d = defaultResponseTimeoutFallback
-	}
-	r.defaultResponseTimeoutNanos.Store(int64(d))
+	r.defaultResponseTimeoutNanos.Store(int64(max(d, 0)))
 }
 
-// SetDefaultFirstTokenTimeout 原子替换全局默认首字超时；<=0 兜底为内置默认。
+// SetDefaultFirstTokenTimeout 原子替换全局默认首字预算；0 或负数均表示不限制（Sub2API 语义）。
 func (r *Router) SetDefaultFirstTokenTimeout(d time.Duration) {
-	if d <= 0 {
-		d = defaultFirstTokenTimeoutFallback
-	}
-	r.defaultFirstTokenTimeoutNanos.Store(int64(d))
+	r.defaultFirstTokenTimeoutNanos.Store(int64(max(d, 0)))
 }
 
 func (r *Router) defaultResponseTimeout() time.Duration {
@@ -463,7 +452,7 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindModel
 		ReasoningOutputPrice:       row.ReasoningOutputPrice,
 		FormulaVersion:             billing.FormulaVersionV1,
 	}
-	ratio := row.SalePriceRatio
+	ratio := row.SaleDiscount
 	saleOverride := billing.SaleOverride{
 		UncachedInputPrice:         row.SaleUncachedInputPrice,
 		CacheReadInputPrice:        row.SaleCacheReadInputPrice,
@@ -538,14 +527,15 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindModel
 		}
 	}
 
-	// 超时只读新列（§11.3/§11.5）：NULL 继承全局默认，正数覆盖；0/负数不表示「无限」，
-	// 因此非正值一律按继承处理，绝不关闭保护。
+	// 超时（§11.3/§11.5，2026-09-05 对齐 Sub2API 语义）：渠道行 NULL 继承全局默认，显式 0 = 不限制，
+	// 正数覆写；负数视为未配置（按继承处理）。号池渠道在 permit 固化账号后还会按同样规则套一层账号覆写
+	// （lifecycle.applyAccountOutbound）。
 	responseTimeout := r.defaultResponseTimeout()
-	if row.ResponseTimeoutMs.Valid && row.ResponseTimeoutMs.Int32 > 0 {
+	if row.ResponseTimeoutMs.Valid && row.ResponseTimeoutMs.Int32 >= 0 {
 		responseTimeout = time.Duration(row.ResponseTimeoutMs.Int32) * time.Millisecond
 	}
 	firstTokenTimeout := r.defaultFirstTokenTimeout()
-	if row.FirstTokenTimeoutMs.Valid && row.FirstTokenTimeoutMs.Int32 > 0 {
+	if row.FirstTokenTimeoutMs.Valid && row.FirstTokenTimeoutMs.Int32 >= 0 {
 		firstTokenTimeout = time.Duration(row.FirstTokenTimeoutMs.Int32) * time.Millisecond
 	}
 
@@ -635,7 +625,7 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindModel
 		},
 		UpstreamModel:                 row.UpstreamModel,
 		ModelPriceID:                  row.ModelPriceID,
-		PriceRatio:                    appliedRatio,
+		SaleDiscount:                    appliedRatio,
 		SalePrice:                     salePrice,
 		FastModelPriceServiceTierID:   fastModelPriceServiceTierID,
 		FastSalePrice:                 fastSalePrice,

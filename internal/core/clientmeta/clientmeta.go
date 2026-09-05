@@ -1,8 +1,11 @@
-// Package clientmeta 在 ingress 与 lifecycle 之间传递客户端声明的会话轮次标识。
+// Package clientmeta 在 ingress 与 lifecycle / adapter 之间传递客户端声明的会话轮次标识。
 //
-// 这些标识只用于本地请求审计（把一次客户端会话内的多个请求串联起来排查），不参与路由、
-// 计费或准入，也不转发上游。抓包实测 Codex CLI v0.147 通过 x-codex-turn-metadata 请求头
+// 解析出的 ThreadID / TurnID / RequestKind 只用于本地请求审计（把一次客户端会话内的多个请求串联起来
+// 排查），不参与路由、计费或准入。抓包实测 Codex CLI v0.147 通过 x-codex-turn-metadata 请求头
 // 与 body 内 client_metadata 携带同一组值；本包只做传递与长度约束，不解释语义。
+//
+// 2026-09-05 起另外原样捕获 x-codex-turn-metadata 与 x-codex-window-id 两个头的原文：Codex wire 会把其中的
+// 设备/会话标识按账号命名空间改写后转发上游（官方客户端与 Sub2API 都发这两个头）；原文不出站。
 package clientmeta
 
 import (
@@ -17,6 +20,10 @@ type ctxKey struct{}
 // 实测值为 UUID 量级，128 足够宽松。
 const maxFieldLength = 128
 
+// maxHeaderLength 是原文捕获头的上限：turn-metadata 含 workspaces 路径等，实测约 1KB，8KB 足够宽松；
+// 超长视为畸形输入整体丢弃，不转发。
+const maxHeaderLength = 8 * 1024
+
 // Turn 是客户端声明的一次会话轮次标识。字段缺失时为空串。
 type Turn struct {
 	// ThreadID 跨轮稳定，标识一整段会话。
@@ -25,11 +32,17 @@ type Turn struct {
 	TurnID string
 	// RequestKind 是客户端声明的请求种类（如 turn / compact）。
 	RequestKind string
+
+	// TurnMetadataHeader 是 x-codex-turn-metadata 头原文（JSON 字符串），供 Codex wire 改写后转发；未发为空。
+	TurnMetadataHeader string
+	// WindowIDHeader 是 x-codex-window-id 头原文（<thread_id>:<window_number>），供 Codex wire 改写后转发。
+	WindowIDHeader string
 }
 
 // IsZero 表示本次请求没有任何可用的客户端轮次标识。
 func (t Turn) IsZero() bool {
-	return t.ThreadID == "" && t.TurnID == "" && t.RequestKind == ""
+	return t.ThreadID == "" && t.TurnID == "" && t.RequestKind == "" &&
+		t.TurnMetadataHeader == "" && t.WindowIDHeader == ""
 }
 
 // WithTurn 把轮次标识写入 ctx；全空时不写。
@@ -56,21 +69,34 @@ type codexTurnMetadata struct {
 // ParseCodexTurnMetadata 解析 Codex 的 x-codex-turn-metadata 头。
 //
 // 头值是一个 JSON 字符串；解析失败或字段超长时静默降级为空值——审计字段缺失可以接受，
-// 但不能让畸形的客户端输入影响请求主链路。
+// 但不能让畸形的客户端输入影响请求主链路。合法的 JSON 对象原文同时保留在 TurnMetadataHeader。
 func ParseCodexTurnMetadata(header string) Turn {
 	header = strings.TrimSpace(header)
-	if header == "" || !strings.HasPrefix(header, "{") {
+	if header == "" || !strings.HasPrefix(header, "{") || len(header) > maxHeaderLength {
 		return Turn{}
 	}
 	var meta codexTurnMetadata
 	if err := json.Unmarshal([]byte(header), &meta); err != nil {
 		return Turn{}
 	}
-	return Turn{
+	turn := Turn{
 		ThreadID:    normalizeField(meta.ThreadID),
 		TurnID:      normalizeField(meta.TurnID),
 		RequestKind: normalizeField(meta.RequestKind),
 	}
+	if turn.IsZero() {
+		// 不是 Codex 形态的 turn metadata（没有任何已知轮次字段）：不保留原文，也就不会被转发。
+		return Turn{}
+	}
+	turn.TurnMetadataHeader = header
+	return turn
+}
+
+// ParseCodexHeaders 解析 Codex 客户端的两个轮次头：x-codex-turn-metadata（JSON）与 x-codex-window-id。
+func ParseCodexHeaders(turnMetadata, windowID string) Turn {
+	turn := ParseCodexTurnMetadata(turnMetadata)
+	turn.WindowIDHeader = normalizeField(windowID)
+	return turn
 }
 
 func normalizeField(v string) string {

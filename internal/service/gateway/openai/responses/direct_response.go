@@ -6,6 +6,7 @@ import (
 	"sort"
 
 	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
+	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
 	responsesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/responses"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
@@ -273,8 +274,12 @@ type responsesStreamCarrier struct {
 // （usage 控制 chunk 抑制 emit）。
 func responsesStreamCarrierMeta(c responsesStreamCarrier) lifecycle.StreamChunkMeta {
 	if c.direct != nil {
-		// 首字判定与可见文本同源（见 adapter 侧 FirstTokenPayload 的说明）。
+		// 可见文本与 partial settlement 计量同源（见 adapter 侧 FirstTokenPayload）；进展按 StreamProgress
+		// 判定（reasoning item 事件即进展）；TTFT 口径由全局设置决定（semantic / visible）。
 		firstTokenPayload := responsesadapter.FirstTokenPayload(*c.direct)
+		visible := firstTokenPayload != ""
+		// 成功终态不算进展：它由 Finish 在结算后原样写出，不能在此触发前导写出与 fallback 锁定。
+		progress := !isDirectResponsesSuccessTerminal(c.direct.EventType) && responsesadapter.StreamProgress(*c.direct)
 		return lifecycle.StreamChunkMeta{
 			ID:           c.direct.ResponseID,
 			FinishReason: c.direct.FinishReason,
@@ -282,7 +287,9 @@ func responsesStreamCarrierMeta(c responsesStreamCarrier) lifecycle.StreamChunkM
 			// 成功终态必须等 durable settlement 收口后再交付。service 在 adapter 回调中保存原始
 			// terminal，并由 Finish 原样写出；失败终态仍走普通 emit/error 路径。
 			SuppressEmit:       isDirectResponsesSuccessTerminal(c.direct.EventType),
-			FirstTokenEligible: firstTokenPayload != "",
+			Progress:           progress,
+			FirstTokenEligible: adapter.TTFTEligible(progress, visible),
+			VisibleContent:     visible,
 			VisibleText:        firstTokenPayload,
 			ProtocolEventType:  c.direct.EventType,
 			TokenKind:          responsesTokenKind(c.direct.EventType),
@@ -292,11 +299,15 @@ func responsesStreamCarrierMeta(c responsesStreamCarrier) lifecycle.StreamChunkM
 
 	chunk := c.chat
 	firstTokenPayload := chatcompletionsadapter.FirstTokenPayload(*chunk)
+	visible := firstTokenPayload != ""
+	progress := chunk.Usage == nil && chatcompletionsadapter.StreamProgress(*chunk)
 	meta := lifecycle.StreamChunkMeta{
 		ID:                 chunk.ID,
 		Usage:              chunk.Usage,
 		SuppressEmit:       chunk.Usage != nil,
-		FirstTokenEligible: firstTokenPayload != "",
+		Progress:           progress,
+		FirstTokenEligible: adapter.TTFTEligible(progress, visible),
+		VisibleContent:     visible,
 		VisibleText:        firstTokenPayload,
 		ProtocolEventType:  "chat.completion.chunk",
 		TokenKind:          bridgeChatTokenKind(*chunk),

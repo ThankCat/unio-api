@@ -7,11 +7,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 	"golang.org/x/sync/singleflight"
 
+	"github.com/ThankCat/unio-gateway/internal/core/channel"
 	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/logging"
@@ -96,11 +98,27 @@ func (o *Outbound) ResolveAccountOutbound(ctx context.Context, accountID int64) 
 		creds = refreshed
 	}
 
-	return lifecycle.AccountOutbound{
+	outbound := lifecycle.AccountOutbound{
 		AccessToken:       creds.AccessToken,
 		UpstreamAccountID: row.UpstreamAccountID,
 		ProxyURL:          proxyURL,
-	}, nil
+		FingerprintMode:   channel.FingerprintMode(row.FingerprintMode),
+	}
+	if row.FingerprintSeed.Valid {
+		outbound.FingerprintSeed = uuid.UUID(row.FingerprintSeed.Bytes).String()
+	}
+	outbound.ResponseTimeout = accountTimeoutOverride(row.ResponseTimeoutMs)
+	outbound.FirstTokenTimeout = accountTimeoutOverride(row.FirstTokenTimeoutMs)
+	return outbound, nil
+}
+
+// accountTimeoutOverride 把账号级超时列转成覆写值：NULL 或负数视为未配置（继承渠道），0 = 不限制，正数覆写。
+func accountTimeoutOverride(v pgtype.Int4) *time.Duration {
+	if !v.Valid || v.Int32 < 0 {
+		return nil
+	}
+	d := time.Duration(v.Int32) * time.Millisecond
+	return &d
 }
 
 // refreshWithLock 同步刷新一个账号的令牌，进程内 singleflight 合并并发请求，

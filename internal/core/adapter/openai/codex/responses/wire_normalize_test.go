@@ -33,7 +33,7 @@ func TestNewAdapterNormalizesAndAggregates(t *testing.T) {
 	}))
 	defer server.Close()
 
-	a := NewAdapter(server.Client(), nil)
+	a := NewAdapter(server.Client(), nil, nil)
 	got, err := a.CreateResponse(context.Background(), channel.Runtime{
 		Origin: server.URL,
 		APIKey: "tok",

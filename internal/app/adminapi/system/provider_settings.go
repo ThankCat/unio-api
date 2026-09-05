@@ -31,6 +31,7 @@ type settingItemDTO struct {
 	Label       string          `json:"label"`
 	Description string          `json:"description"`
 	HotReload   bool            `json:"hot_reload"`
+	ReadOnly    bool            `json:"read_only"`
 	Default     json.RawMessage `json:"default"`
 	Value       json.RawMessage `json:"value"`
 	Source      string          `json:"source"`
@@ -51,6 +52,7 @@ func (h *providerSettingsHandler) listSettings(w http.ResponseWriter, r *http.Re
 			Label:       it.Label,
 			Description: it.Description,
 			HotReload:   it.HotReload,
+			ReadOnly:    it.ReadOnly,
 			Default:     it.Default,
 			Value:       it.Value,
 			Source:      it.Source,

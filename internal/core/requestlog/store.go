@@ -299,6 +299,7 @@ func (s *Store) CreateAttempt(ctx context.Context, params CreateAttemptParams) (
 		CompletedAt:            pgtype.Timestamptz{Valid: false},
 		RequestedServiceTier:   pgtype.Text{String: string(params.RequestedServiceTier), Valid: params.RequestedServiceTier != ""},
 		ForwardedServiceTier:   pgtype.Text{String: string(params.ForwardedServiceTier), Valid: params.ForwardedServiceTier != ""},
+		AccountID:              pgtype.Int8{Int64: params.AccountID, Valid: params.AccountID > 0},
 	})
 	if err != nil {
 		return AttemptRecord{}, requestLogStoreFailure(err, "create request attempt")

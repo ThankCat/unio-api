@@ -96,12 +96,20 @@ func NewWorkerServerApp(ctx context.Context, deps WorkerServerAppDeps) (*WorkerS
 		deps.Config.Worker.OrphanReservationSweepBatchSize,
 	)
 
+	// 运行时配置中枢：与 gateway/admin 同一注册表；worker 既是消费者（巡检开关、阈值），
+	// 也是 Codex 客户端版本自动同步值的唯一写入方。
+	settingsStore := appsettings.NewSettingsStore(
+		queries, deps.Redis, deps.Config.Redis.KeyNamespace, appsettings.DefaultRegistry(), deps.Logger,
+	)
+	_ = settingsStore.SeedDefaults(ctx)
+	codexVersion := codexVersionSource(settingsStore)
+
 	// 订阅账号令牌保活（第六节）：扫描将过期账号并刷新；分布式锁防多实例重复刷。
-	// 出站（令牌端点）与正式请求共用按账号代理解析器。
+	// 出站（令牌端点）与正式请求共用按账号代理解析器与 Codex 出站身份。
 	accountProxyClients := proxyclient.NewResolver(upstreamHTTPClient(nil))
 	subscriptionOutbound := subscription.NewOutbound(
 		queries,
-		subscription.NewTokenClient(accountProxyClients.ClientFor),
+		subscription.NewTokenClient(accountProxyClients.ClientFor, codexVersion),
 		permitStore,
 		deps.Redis,
 		deps.Logger,
@@ -128,14 +136,10 @@ func NewWorkerServerApp(ctx context.Context, deps WorkerServerAppDeps) (*WorkerS
 	// 故 worker-server 需自建一份 adapter registry 供 channeltest 使用。
 	// 开关 / 间隔 / 保留 / 探测超时均走运行时配置（系统设置 → 运营判定），始终注册 worker，
 	// 由 RunOnce 现读 enabled 决定是否巡检（可热关停，无需重启）。
-	adapterRegistry, err := NewAdapterRegistry(http.DefaultClient, deps.Logger)
+	adapterRegistry, err := NewAdapterRegistry(http.DefaultClient, deps.Logger, codexVersion)
 	if err != nil {
 		return nil, err
 	}
-	settingsStore := appsettings.NewSettingsStore(
-		queries, deps.Redis, deps.Config.Redis.KeyNamespace, appsettings.DefaultRegistry(), deps.Logger,
-	)
-	_ = settingsStore.SeedDefaults(ctx)
 	channelTestService := channeltest.NewService(queries, adapterRegistry, settingsStore, providerLedgerService)
 	channelModelInventoryService := channelmodelinventory.NewService(
 		deps.DB, queries, adapterRegistry, adapterRegistry, providerLedgerService, settingsStore,
@@ -175,6 +179,9 @@ func NewWorkerServerApp(ctx context.Context, deps WorkerServerAppDeps) (*WorkerS
 	units = append(units,
 		workers.NewChannelModelDiscoveryWorker(channelModelInventoryService, settingsStore, deps.Logger),
 		workers.NewChannelModelVerificationWorker(channelModelInventoryService),
+		// Codex 出站身份的版本跟随：每 6h 从 GitHub 同步官方最新正式版到 settings，
+		// gateway/admin/worker 的出站身份随之热更新（Admin 覆写优先）。
+		workers.NewCodexClientVersionSyncWorker(http.DefaultClient, settingsStore, deps.Logger),
 	)
 
 	// 多货币三件套（PLAN 5.6）：汇率日常同步（多源+合理性校验）、汇率变动后的存量毛利复查、

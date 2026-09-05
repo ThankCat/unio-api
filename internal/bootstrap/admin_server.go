@@ -149,11 +149,6 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		return nil, err
 	}
 
-	adapterRegistry, err := NewAdapterRegistry(http.DefaultClient, deps.Logger)
-	if err != nil {
-		return nil, err
-	}
-
 	queries := sqlc.New(deps.DB)
 	metricsRecorder := metrics.New()
 	runtimeTelemetry := newRuntimeControlTelemetry(metricsRecorder, deps.Logger)
@@ -165,6 +160,14 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		queries, deps.Redis, deps.Config.Redis.KeyNamespace, appsettings.DefaultRegistry(), deps.Logger,
 	)
 	_ = settingsStore.SeedDefaults(ctx)
+
+	// adapter registry 依赖 settings store：Codex 出站身份的版本来源随设置热更新（渠道检测、模型发现、
+	// 账号导入换码都以同一身份出站）。
+	codexVersion := codexVersionSource(settingsStore)
+	adapterRegistry, err := NewAdapterRegistry(http.DefaultClient, deps.Logger, codexVersion)
+	if err != nil {
+		return nil, err
+	}
 
 	providerService := provider.NewService(queries)
 	providerOpsService := providerops.NewService(queries)
@@ -248,7 +251,7 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 	var subscriptionAccountService *subscriptionaccountadmin.Service
 	if pool, ok := deps.DB.(*pgxpool.Pool); ok && sharedBreakerStore != nil {
 		accountProxyClients := proxyclient.NewResolver(upstreamHTTPClient(nil))
-		accountTokens := subscription.NewTokenClient(accountProxyClients.ClientFor)
+		accountTokens := subscription.NewTokenClient(accountProxyClients.ClientFor, codexVersion)
 		accountOutbound := subscription.NewOutbound(queries, accountTokens, sharedBreakerStore, deps.Redis, deps.Logger)
 		subscriptionAccountService = subscriptionaccountadmin.NewService(
 			queries,

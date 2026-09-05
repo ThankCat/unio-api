@@ -15,22 +15,26 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/channel"
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/core/sessionhint"
 	"github.com/ThankCat/unio-gateway/internal/core/usage"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
 
-// fakeResponsesAdapter 是 responses 直传 adapter 的测试替身：记录上送请求体并返回预置原文响应。
+// fakeResponsesAdapter 是 responses 直传 adapter 的测试替身：记录上送请求体、ctx 携带的会话亲和事实，
+// 并返回预置原文响应。
 type fakeResponsesAdapter struct {
-	called  int
-	gotBody json.RawMessage
-	resp    *responsesadapter.Response
-	err     error
+	called      int
+	gotBody     json.RawMessage
+	gotAffinity sessionhint.UpstreamAffinity
+	resp        *responsesadapter.Response
+	err         error
 }
 
 func (a *fakeResponsesAdapter) CreateResponse(ctx context.Context, _ channel.Runtime, req responsesadapter.Request) (*responsesadapter.Response, error) {
 	a.called++
 	a.gotBody = req.Body
+	a.gotAffinity = sessionhint.UpstreamAffinityFromContext(ctx)
 	adapter.MarkTransportStarted(ctx)
 	adapter.MarkRequestWritten(ctx, nil)
 	if a.err != nil {
@@ -388,11 +392,12 @@ func TestCreateResponse_DiversionDeepseekToBridge(t *testing.T) {
 
 // fakeStreamResponsesAdapter 是 responses 直传流式 adapter 的测试替身：按序 emit 预置事件并返回 facts。
 type fakeStreamResponsesAdapter struct {
-	called  int
-	gotBody json.RawMessage
-	chunks  []responsesadapter.StreamChunk
-	facts   *adapter.ResponseFacts
-	err     error
+	called      int
+	gotBody     json.RawMessage
+	gotAffinity sessionhint.UpstreamAffinity
+	chunks      []responsesadapter.StreamChunk
+	facts       *adapter.ResponseFacts
+	err         error
 }
 
 type fakeBridgeStreamChatAdapter struct {
@@ -423,9 +428,10 @@ func (a *fakeBridgeStreamChatAdapter) StreamChatCompletions(
 	return adapter.StreamOutcome{Facts: a.facts}, a.err
 }
 
-func (a *fakeStreamResponsesAdapter) StreamResponse(_ context.Context, _ channel.Runtime, req responsesadapter.Request, emit func(responsesadapter.StreamChunk) error) (adapter.StreamOutcome, error) {
+func (a *fakeStreamResponsesAdapter) StreamResponse(ctx context.Context, _ channel.Runtime, req responsesadapter.Request, emit func(responsesadapter.StreamChunk) error) (adapter.StreamOutcome, error) {
 	a.called++
 	a.gotBody = req.Body
+	a.gotAffinity = sessionhint.UpstreamAffinityFromContext(ctx)
 	for _, c := range a.chunks {
 		if err := emit(c); err != nil {
 			return adapter.StreamOutcome{Facts: a.facts}, err

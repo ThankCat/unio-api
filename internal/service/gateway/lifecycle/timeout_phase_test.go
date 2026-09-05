@@ -124,8 +124,9 @@ func TestTimeoutPhaseStaysConsistentAcrossConsumers(t *testing.T) {
 	if got := TimeoutPhaseOf(firstTokenErr, true, timingAt(true, false)); got != adapter.TimeoutPhaseFirstToken {
 		t.Fatalf("attempt phase = %q, want first_token", got)
 	}
+	// 2026-09-05：超时不再清绑定——预算掐断是网关侧判断而非渠道故障，清绑会把整段会话的缓存亲和推走。
 	verdict := classifyStickyFailure(firstTokenErr)
-	if !verdict.clear || verdict.reason != "upstream_timeout" {
-		t.Fatalf("first token timeout must clear the sticky binding: %+v", verdict)
+	if verdict.clear || verdict.temporaryBypass || verdict.reason != "upstream_timeout" {
+		t.Fatalf("first token timeout must keep the sticky binding untouched: %+v", verdict)
 	}
 }

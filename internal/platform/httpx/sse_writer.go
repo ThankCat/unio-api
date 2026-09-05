@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
@@ -28,14 +30,39 @@ type SSEEvent struct {
 	RetryMilliseconds *int    // retry 字段；nil 不写
 }
 
+// sseKeepaliveIntervalNanos 是进程级默认的下游保活间隔（纳秒），由 settings applier 热更新；
+// 0 表示关闭。对齐 Sub2API stream_keepalive_interval（默认 10s）。
+var sseKeepaliveIntervalNanos atomic.Int64
+
+// DefaultSSEKeepaliveInterval 与 Sub2API 默认一致。
+const DefaultSSEKeepaliveInterval = 10 * time.Second
+
+// SetSSEKeepaliveInterval 设置进程级下游保活间隔；d<=0 关闭。
+func SetSSEKeepaliveInterval(d time.Duration) {
+	if d < 0 {
+		d = 0
+	}
+	sseKeepaliveIntervalNanos.Store(int64(d))
+}
+
+// SSEKeepaliveInterval 返回当前生效的下游保活间隔（0 = 关闭）。
+func SSEKeepaliveInterval() time.Duration {
+	return time.Duration(sseKeepaliveIntervalNanos.Load())
+}
+
 // SSEWriter 把一个支持 flush 的 ResponseWriter 封装成 per-request 的 SSE 写出器。
+//
+// 写出串行化（mu）：保活 goroutine 与业务事件写出可能并发，SSE 帧不能交错。
 type SSEWriter struct {
 	ctx     context.Context
 	w       http.ResponseWriter
 	flusher http.Flusher
 	cfg     SSEWriterConfig
-	started bool  // 是否已写出 header + 首个 event
-	err     error // sticky 写出错误，一旦失败后续写出短路
+
+	mu          sync.Mutex
+	started     bool      // 是否已写出 header（首个 event 或保活注释）
+	err         error     // sticky 写出错误，一旦失败后续写出短路
+	lastWriteAt time.Time // 最近一次成功写出（event 或注释）的时间，保活据此判定空闲
 }
 
 func NewSSEWriter(ctx context.Context, w http.ResponseWriter, cfg SSEWriterConfig) (*SSEWriter, error) {
@@ -48,17 +75,55 @@ func NewSSEWriter(ctx context.Context, w http.ResponseWriter, cfg SSEWriterConfi
 	}
 
 	return &SSEWriter{
-		ctx:     ctx,
-		w:       w,
-		flusher: w.(http.Flusher),
-		cfg:     cfg,
-		started: false,
-		err:     nil,
+		ctx:         ctx,
+		w:           w,
+		flusher:     w.(http.Flusher),
+		cfg:         cfg,
+		started:     false,
+		err:         nil,
+		lastWriteAt: time.Now(),
 	}, nil
+}
+
+// RunKeepalive 启动下游保活：下游超过 interval 没有任何写出时补一帧 SSE 注释（": \n\n"），
+// 防止代理/客户端空闲断开。首字之前也发——上游长思考期间客户端只会收到这些注释。
+// interval<=0 不启动。返回的 stop 必须在流结束时调用（可重复调用）。
+//
+// 保活注释会提交 200 + SSE 响应头（Started 随之为 true），但它不是模型输出：
+// lifecycle 的 emitted / 首字 / 结算事实均不因它改变，首字前仍可静默换渠道。
+func (s *SSEWriter) RunKeepalive(interval time.Duration) (stop func()) {
+	if interval <= 0 {
+		return func() {}
+	}
+	done := make(chan struct{})
+	var once sync.Once
+	go func() {
+		// 检查粒度取间隔的一半，保证空闲判定误差不超过半个间隔。
+		ticker := time.NewTicker(interval / 2)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-s.ctx.Done():
+				return
+			case <-ticker.C:
+				s.mu.Lock()
+				idle := time.Since(s.lastWriteAt) >= interval && s.err == nil
+				s.mu.Unlock()
+				if idle {
+					_ = s.WriteComment("")
+				}
+			}
+		}
+	}()
+	return func() { once.Do(func() { close(done) }) }
 }
 
 // WriteEvent 写出一个完整 event：检查 ctx → 装 header → 写各字段行 → 空行 → flush。
 func (s *SSEWriter) WriteEvent(ev SSEEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if err := s.guard(); err != nil {
 		return err
 	}
@@ -104,6 +169,7 @@ func (s *SSEWriter) WriteEvent(ev SSEEvent) error {
 	}
 
 	s.flusher.Flush()
+	s.lastWriteAt = time.Now()
 
 	return nil
 }
@@ -115,6 +181,8 @@ func (s *SSEWriter) WriteData(data []byte) error {
 
 // WriteComment 写出 SSE comment 行用于 heartbeat 保活。
 func (s *SSEWriter) WriteComment(text string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if err := s.guard(); err != nil {
 		return err
 	}
@@ -126,11 +194,14 @@ func (s *SSEWriter) WriteComment(text string) error {
 	}
 
 	s.flusher.Flush()
+	s.lastWriteAt = time.Now()
 	return nil
 }
 
-// Started 返回是否已写出首个 event。
+// Started 返回是否已提交 SSE 响应头（首个 event 或保活注释）；为 true 后不能再改写成 JSON 错误响应。
 func (s *SSEWriter) Started() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.started
 }
 
@@ -163,6 +234,8 @@ func (s *SSEWriter) guard() error {
 
 // Err 返回 sticky 写出错误。
 func (s *SSEWriter) Err() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.err
 }
 

@@ -116,52 +116,75 @@ func TestAttemptTimingObserverConcurrentCallsPreserveInvariants(t *testing.T) {
 	}
 }
 
-// TestChatStreamChunkMetaWiresFirstTokenPayload 验证 meta 映射把 adapter 的权威判定同时接到
-// FirstTokenEligible 和 VisibleText 上：两者同源，才不会出现「算了首字但 partial settlement
-// 不计这段文本」的错位。完整协议矩阵由 adapter 包的 TestFirstTokenPayloadMatrix 覆盖。
+// TestChatStreamChunkMetaWiresFirstTokenPayload 验证 meta 映射把 adapter 的两个正交判定接到三个事实上：
+// VisibleContent / VisibleText 同源于 FirstTokenPayload（结算计量），Progress 来自 StreamProgress，
+// FirstTokenEligible 按 TTFT 口径派生——semantic 下 role-only 是进展即算首字，visible 下不算。
+// 完整协议矩阵由 adapter 包的 TestFirstTokenPayloadMatrix 覆盖。
 func TestChatStreamChunkMetaWiresFirstTokenPayload(t *testing.T) {
+	t.Cleanup(func() { adapter.SetTTFTMode(adapter.DefaultTTFTMode) })
 	reasoning := "thinking"
 	finish := "stop"
 	tests := []struct {
-		name            string
-		chunk           chatcompletionsadapter.ChatStreamChunk
-		wantEligible    bool
-		wantVisibleText string
+		name                string
+		chunk               chatcompletionsadapter.ChatStreamChunk
+		wantProgress        bool
+		wantVisible         bool
+		wantVisibleText     string
+		wantEligibleVisible bool // visible 口径下是否算首字
 	}{
 		{
-			name:            "content delta carries both facts",
-			chunk:           chatcompletionsadapter.ChatStreamChunk{Content: "hello"},
-			wantEligible:    true,
-			wantVisibleText: "hello",
+			name:                "content delta carries both facts",
+			chunk:               chatcompletionsadapter.ChatStreamChunk{Content: "hello"},
+			wantProgress:        true,
+			wantVisible:         true,
+			wantVisibleText:     "hello",
+			wantEligibleVisible: true,
 		},
 		{
-			name:            "reasoning delta counts as generated output",
-			chunk:           chatcompletionsadapter.ChatStreamChunk{ReasoningContent: &reasoning},
-			wantEligible:    true,
-			wantVisibleText: "thinking",
+			name:                "reasoning delta counts as generated output",
+			chunk:               chatcompletionsadapter.ChatStreamChunk{ReasoningContent: &reasoning},
+			wantProgress:        true,
+			wantVisible:         true,
+			wantVisibleText:     "thinking",
+			wantEligibleVisible: true,
 		},
 		{
-			name:  "role-only is a prelude frame",
-			chunk: chatcompletionsadapter.ChatStreamChunk{Role: "assistant"},
+			// role-only 是结构性进展（写出前导、锁 fallback），但没有可见内容：不进 partial settlement。
+			name:         "role-only is progress without visible content",
+			chunk:        chatcompletionsadapter.ChatStreamChunk{Role: "assistant"},
+			wantProgress: true,
 		},
 		{
-			name:  "finish-only is not a first token",
+			name:  "finish-only is neither progress nor first token",
 			chunk: chatcompletionsadapter.ChatStreamChunk{FinishReason: &finish},
 		},
 		{
-			name:  "usage-only is not a first token",
+			name:  "usage-only is neither progress nor first token",
 			chunk: chatcompletionsadapter.ChatStreamChunk{Usage: &adapter.ChatUsage{TotalTokens: 1}},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			adapter.SetTTFTMode(adapter.TTFTModeSemantic)
 			meta := chatStreamChunkMeta(tt.chunk)
-			if meta.FirstTokenEligible != tt.wantEligible {
-				t.Fatalf("FirstTokenEligible = %v, want %v", meta.FirstTokenEligible, tt.wantEligible)
+			if meta.Progress != tt.wantProgress {
+				t.Fatalf("Progress = %v, want %v", meta.Progress, tt.wantProgress)
+			}
+			if meta.VisibleContent != tt.wantVisible {
+				t.Fatalf("VisibleContent = %v, want %v", meta.VisibleContent, tt.wantVisible)
 			}
 			if meta.VisibleText != tt.wantVisibleText {
 				t.Fatalf("VisibleText = %q, want %q", meta.VisibleText, tt.wantVisibleText)
+			}
+			if meta.FirstTokenEligible != tt.wantProgress {
+				t.Fatalf("semantic FirstTokenEligible = %v, want progress %v", meta.FirstTokenEligible, tt.wantProgress)
+			}
+
+			adapter.SetTTFTMode(adapter.TTFTModeVisible)
+			meta = chatStreamChunkMeta(tt.chunk)
+			if meta.FirstTokenEligible != tt.wantEligibleVisible {
+				t.Fatalf("visible FirstTokenEligible = %v, want %v", meta.FirstTokenEligible, tt.wantEligibleVisible)
 			}
 		})
 	}

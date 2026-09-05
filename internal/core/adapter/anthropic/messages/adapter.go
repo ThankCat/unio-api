@@ -180,7 +180,8 @@ func (a *Adapter) StreamMessages(ctx context.Context, ch channel.Runtime, req Me
 	}
 
 	// 响应头预算只约束「上游开始响应」，不约束流本体：长补全会合法地流式数分钟。
-	// 首字预算与响应头同起点（§11.2）；首个有效生成 Token 之后才交给 idle 看门狗。
+	// 首字预算与响应头同起点（§11.2），由首个有效生成 Token 解除（Anthropic 的 thinking delta 本身就是
+	// 可见内容，没有 Responses 那种"只有结构性事件"的思考阶段）；idle 看门狗从响应头起守护数据间隔。
 	streamCtx, timeouts := adapter.StreamTimeoutContext(ctx, adapter.StreamTimeoutConfig{
 		ResponseHeader: ch.ResponseTimeout,
 		FirstToken:     ch.FirstTokenTimeout,

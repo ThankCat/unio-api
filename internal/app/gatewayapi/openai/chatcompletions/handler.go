@@ -50,9 +50,10 @@ func (h *chatCompletionsHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 	// session-id 头是会话粘性路由的回退会话键（body prompt_cache_key 优先，大 uncache 缺口 P0）。
 	r = r.WithContext(sessionhint.WithClientSessionID(r.Context(), r.Header.Get("session-id")))
 
-	// Codex 配 wire_api=chat 时同样带轮次元数据；只落本地请求审计、不转发上游。
+	// Codex 配 wire_api=chat 时同样带轮次元数据：解析值落本地请求审计，原文交给 Codex wire
+	// （反向桥接到号池时）按账号命名空间改写后转发；原文本身不出站。
 	r = r.WithContext(clientmeta.WithTurn(
-		r.Context(), clientmeta.ParseCodexTurnMetadata(r.Header.Get("x-codex-turn-metadata")),
+		r.Context(), clientmeta.ParseCodexHeaders(r.Header.Get("x-codex-turn-metadata"), r.Header.Get("x-codex-window-id")),
 	))
 
 	if err := httpx.DecodeJSON(w, r, &req); err != nil {
@@ -73,6 +74,9 @@ func (h *chatCompletionsHandler) ServeHTTP(w http.ResponseWriter, r *http.Reques
 			_ = httpx.WriteError(w, http.StatusInternalServerError, "streaming_unsupported", "streaming unsupported")
 			return
 		}
+		// 下游保活（gateway.stream_keepalive_interval_ms，对齐 Sub2API）：空闲期补 SSE 注释帧。
+		stopKeepalive := sw.RunKeepalive(httpx.SSEKeepaliveInterval())
+		defer stopKeepalive()
 
 		err = h.service.StreamChatCompletion(r.Context(), req, func(chunk ChatCompletionStreamResponse) error {
 			payload, marshalErr := json.Marshal(chunk)

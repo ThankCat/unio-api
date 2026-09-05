@@ -18,7 +18,17 @@ WITH filtered_page AS (
       AND (sqlc.narg('request_id')::text IS NULL OR r.request_id = sqlc.narg('request_id')::text)
       AND (sqlc.narg('status')::text IS NULL OR r.status = sqlc.narg('status')::text)
       AND (sqlc.narg('model')::text IS NULL OR r.requested_model_id ILIKE '%' || sqlc.narg('model')::text || '%')
-      AND (sqlc.narg('account_id')::bigint IS NULL OR r.final_account_id = sqlc.narg('account_id')::bigint)
+      -- 账号筛选按 attempt 级归因：final_account_id 只在成功/已结算路径写入，失败请求靠
+      -- request_attempts.account_id 命中，否则账号下钻永远看不到失败记录。
+      AND (
+          sqlc.narg('account_id')::bigint IS NULL
+          OR r.final_account_id = sqlc.narg('account_id')::bigint
+          OR EXISTS (
+              SELECT 1 FROM request_attempts aa
+              WHERE aa.request_record_id = r.id
+                AND aa.account_id = sqlc.narg('account_id')::bigint
+          )
+      )
       AND (
           (sqlc.narg('channel_id')::bigint IS NULL AND sqlc.narg('attempt_id')::bigint IS NULL AND sqlc.narg('scoring_sample')::text IS NULL)
           OR EXISTS (
@@ -141,9 +151,9 @@ SELECT
     r.reasoning_effort,
     r.reasoning_budget_tokens,
     r.client_ip,
-    -- 倍率取结算当时的快照（price_snapshots.price_ratio），历史无快照行为 NULL，展示端回落「—」；
-    -- 不再实时读 rt.price_ratio，避免管理员改倍率污染历史请求的倍率与倒推基准价展示。
-    ps.price_ratio AS sale_price_ratio,
+    -- 售价折扣取结算当时的快照（price_snapshots.sale_discount），历史无快照行为 NULL，展示端回落「—」；
+    -- 不再实时读当前定价行，避免管理员改折扣污染历史请求的折扣与倒推基准价展示。
+    ps.sale_discount AS sale_discount,
     -- 售价侧长上下文是否已应用（费用列标识）；无 price 快照时回落成本侧标记。
     COALESCE(ps.long_context_applied, cs.long_context_applied, false) AS long_context_applied,
     m.display_name AS model_display_name,
@@ -238,7 +248,15 @@ WHERE (sqlc.narg('user_id')::bigint IS NULL OR user_id = sqlc.narg('user_id')::b
   AND (sqlc.narg('request_id')::text IS NULL OR request_id = sqlc.narg('request_id')::text)
   AND (sqlc.narg('status')::text IS NULL OR status = sqlc.narg('status')::text)
   AND (sqlc.narg('model')::text IS NULL OR requested_model_id ILIKE '%' || sqlc.narg('model')::text || '%')
-  AND (sqlc.narg('account_id')::bigint IS NULL OR final_account_id = sqlc.narg('account_id')::bigint)
+  AND (
+      sqlc.narg('account_id')::bigint IS NULL
+      OR final_account_id = sqlc.narg('account_id')::bigint
+      OR EXISTS (
+          SELECT 1 FROM request_attempts aa
+          WHERE aa.request_record_id = request_records.id
+            AND aa.account_id = sqlc.narg('account_id')::bigint
+      )
+  )
   AND (
       (sqlc.narg('channel_id')::bigint IS NULL AND sqlc.narg('attempt_id')::bigint IS NULL AND sqlc.narg('scoring_sample')::text IS NULL)
       OR EXISTS (

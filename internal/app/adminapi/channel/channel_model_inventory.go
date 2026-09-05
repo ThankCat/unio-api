@@ -296,7 +296,6 @@ type inventoryDTO struct {
 	Channel         inventoryChannelDTO `json:"channel"`
 	LatestDiscovery *inventoryRunDTO    `json:"latest_discovery"`
 	Snapshot        *inventoryRunDTO    `json:"snapshot"`
-	SnapshotStale   bool                `json:"snapshot_stale"`
 	Stats           inventoryStatsDTO   `json:"stats"`
 	Items           []inventoryItemDTO  `json:"items"`
 }
@@ -343,7 +342,6 @@ type inventoryVerificationDTO struct {
 	ItemID      int64   `json:"item_id"`
 	RunID       int64   `json:"run_id"`
 	Status      string  `json:"status"`
-	Current     bool    `json:"current"`
 	HTTPStatus  int32   `json:"http_status"`
 	ErrorCode   *string `json:"error_code"`
 	Message     *string `json:"message"`
@@ -379,9 +377,8 @@ func toInventoryDTO(in channelmodelinventory.Inventory) inventoryDTO {
 			ID: in.Channel.ID, Name: in.Channel.Name, Status: in.Channel.Status, Protocol: in.Channel.Protocol,
 			AdapterKey: in.Channel.AdapterKey, ProviderID: in.Channel.ProviderID, ProviderSlug: in.Channel.ProviderSlug,
 		},
-		SnapshotStale: in.SnapshotStale,
-		Stats:         inventoryStatsDTO{Discovered: in.DiscoveredCount, Bindings: in.BindingCount, New: in.NewCount, Pending: in.PendingCount},
-		Items:         make([]inventoryItemDTO, 0, len(in.Items)),
+		Stats: inventoryStatsDTO{Discovered: in.DiscoveredCount, Bindings: in.BindingCount, New: in.NewCount, Pending: in.PendingCount},
+		Items: make([]inventoryItemDTO, 0, len(in.Items)),
 	}
 	if in.LatestDiscovery != nil {
 		dto := toInventoryRunDTO(*in.LatestDiscovery)
@@ -407,7 +404,7 @@ func toInventoryDTO(in channelmodelinventory.Inventory) inventoryDTO {
 			if binding.Verification != nil {
 				bindingDTO.Verification = &inventoryVerificationDTO{
 					ItemID: binding.Verification.ItemID, RunID: binding.Verification.RunID,
-					Status: binding.Verification.Status, Current: binding.Verification.Current,
+					Status:     binding.Verification.Status,
 					HTTPStatus: binding.Verification.HTTPStatus, ErrorCode: stringPtr(binding.Verification.ErrorCode),
 					Message: stringPtr(binding.Verification.Message), LatencyMs: binding.Verification.LatencyMs,
 					CompletedAt: formatTimePtr(binding.Verification.CompletedAt),

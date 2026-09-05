@@ -114,6 +114,54 @@ func TestFinalizeOrphanReservationClosesExpiredRunningAttempt(t *testing.T) {
 	}
 }
 
+// TestFinalizeOrphanReservationClosesDeliveryStartedStream 冻结 2026-09-05 缺口修复：
+// 流式交付已开始（delivery=in_progress）后进程死亡的请求同样是孤儿——usage 事实已丢失、永远不会有
+// settlement，必须可被扫描命中并收口（释放冻结、请求 failed、交付标 interrupted）。
+func TestFinalizeOrphanReservationClosesDeliveryStartedStream(t *testing.T) {
+	d := newChatSettlementDBDeps(t)
+	makeReservationOldEnoughForOrphanSweep(t, d)
+	if _, err := d.pool.Exec(d.ctx,
+		`UPDATE request_records SET delivery_status = 'in_progress' WHERE id = $1`, d.requestRecord.ID,
+	); err != nil {
+		t.Fatalf("mark delivery in progress: %v", err)
+	}
+
+	// 扫描查询必须命中交付已开始的孤儿（此前 delivery_status='not_started' 把它永久排除）。
+	rows, err := d.queries.ListOrphanAuthorizedReservations(d.ctx, sqlc.ListOrphanAuthorizedReservationsParams{
+		CreatedBefore: pgtype.Timestamptz{Time: time.Now().Add(-15 * time.Minute), Valid: true},
+		BatchLimit:    100,
+	})
+	if err != nil {
+		t.Fatalf("list orphan reservations: %v", err)
+	}
+	if len(rows) != 1 || rows[0].ID != d.reservationID {
+		t.Fatalf("delivery-started orphan must be a sweep candidate, got %+v", rows)
+	}
+
+	service := NewChatSettlementService(d.pool, d.queries, billing.Service{}, ledger.NewService(d.pool, d.queries))
+	if finalized, err := service.FinalizeOrphanReservation(
+		d.ctx,
+		rows[0],
+		[]int64{d.attemptRecord.ID},
+		[]string{d.attemptRecord.PermitID.String},
+	); err != nil {
+		t.Fatalf("finalize delivery-started orphan: %v", err)
+	} else if !finalized {
+		t.Fatal("delivery-started orphan with a dead permit must be finalized")
+	}
+
+	assertRequestAndReservationStatus(t, d, "failed", "released")
+	var deliveryStatus string
+	if err := d.pool.QueryRow(d.ctx,
+		`SELECT delivery_status FROM request_records WHERE id = $1`, d.requestRecord.ID,
+	).Scan(&deliveryStatus); err != nil {
+		t.Fatalf("read delivery status: %v", err)
+	}
+	if deliveryStatus != "interrupted" {
+		t.Fatalf("delivery status = %q, want interrupted", deliveryStatus)
+	}
+}
+
 func TestFinalizeOrphanReservationClosesSafeLegacyRunningAttempt(t *testing.T) {
 	d := newChatSettlementDBDeps(t)
 	makeReservationOldEnoughForOrphanSweep(t, d)

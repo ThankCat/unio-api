@@ -139,7 +139,7 @@ func TestGatewayServerProviderAdapterPreflightAcceptsEnabledBindings(t *testing.
 			{ChannelID: 2, Protocols: []string{"anthropic"}, AdapterKey: "deepseek", ProviderSlug: "deepseek"},
 		},
 	}
-	registry, err := NewAdapterRegistry(nil, zap.NewNop())
+	registry, err := NewAdapterRegistry(nil, zap.NewNop(), nil)
 	if err != nil {
 		t.Fatalf("NewAdapterRegistry returned error: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestGatewayServerProviderAdapterPreflightRejectsUnknownBinding(t *testing.T
 			{ChannelID: 1, Protocols: []string{"openai"}, AdapterKey: "unknown", ProviderSlug: "unknown"},
 		},
 	}
-	registry, err := NewAdapterRegistry(nil, zap.NewNop())
+	registry, err := NewAdapterRegistry(nil, zap.NewNop(), nil)
 	if err != nil {
 		t.Fatalf("NewAdapterRegistry returned error: %v", err)
 	}

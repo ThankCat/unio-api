@@ -194,6 +194,12 @@ type updateConfigRequest struct {
 	Priority         int32  `json:"priority"`
 	// SubscriptionExpiresAt 是订阅到期时间（RFC3339）；空串/缺省表示清除（未知）。
 	SubscriptionExpiresAt string `json:"subscription_expires_at"`
+	// FingerprintMode 是指纹收敛档位（off / device）；缺省/空串表示不改。种子由系统管理，不接受输入。
+	FingerprintMode string `json:"fingerprint_mode"`
+	// ResponseTimeoutMs / FirstTokenTimeoutMs 是账号级超时覆写：null/缺省=继承渠道，0=不限制，正数=覆写。
+	// 表单整体提交：每次都带当前值。
+	ResponseTimeoutMs   *int32 `json:"response_timeout_ms"`
+	FirstTokenTimeoutMs *int32 `json:"first_token_timeout_ms"`
 }
 
 func (h *Handler) updateConfig(w http.ResponseWriter, r *http.Request) {
@@ -228,6 +234,9 @@ func (h *Handler) updateConfig(w http.ResponseWriter, r *http.Request) {
 		ConcurrencyLimit:      req.ConcurrencyLimit,
 		Priority:              req.Priority,
 		SubscriptionExpiresAt: expiresAt,
+		FingerprintMode:       req.FingerprintMode,
+		ResponseTimeoutMs:     req.ResponseTimeoutMs,
+		FirstTokenTimeoutMs:   req.FirstTokenTimeoutMs,
 	})
 	if err != nil {
 		adminhttp.WriteServiceError(w, err)
