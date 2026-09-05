@@ -480,7 +480,7 @@ func createModelPriceForTest(t *testing.T, ctx context.Context, queries *sqlc.Qu
 		OutputPrice:        numeric(400),
 		// 倍率随价格行走，不再取自环境设置：按 1.0 卖即等于基准价。
 		// 需要别的倍率时由用例自己 UPDATE，环境不再影响结果。
-		SalePriceRatio: numeric(1),
+		SaleDiscount: numeric(1),
 		Status:         "enabled",
 		EffectiveFrom:  timestamptz(at.Add(-time.Hour)),
 		EffectiveTo:    nullTimestamptz(),

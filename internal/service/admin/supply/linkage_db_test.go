@@ -145,7 +145,7 @@ func (f *fixture) pricing(channelID, modelID int64) {
 	if _, err := f.pool.Exec(f.ctx, `
 		INSERT INTO model_prices (
 			model_id, currency, pricing_unit, uncached_input_price, output_price,
-			sale_price_ratio, status, effective_from
+			sale_discount, status, effective_from
 		)
 		VALUES ($1, 'USD', 'per_1m_tokens', 100, 200, 1, 'enabled', now() - interval '1 hour')
 		ON CONFLICT DO NOTHING
@@ -161,7 +161,7 @@ func (f *fixture) pricing(channelID, modelID int64) {
 	}
 }
 
-// basePriceOnly 只写生效基准价，故意不配倍率或绝对售价：用于验证草稿行不可启用。
+// basePriceOnly 只写生效基准价，故意不配折扣或绝对售价：用于验证草稿行不可启用。
 func (f *fixture) basePriceOnly(modelID int64) {
 	f.t.Helper()
 	if _, err := f.pool.Exec(f.ctx, `
@@ -388,7 +388,7 @@ func TestModelEnableRequiresModelPrice(t *testing.T) {
 	}
 }
 
-// 加法侧守卫（售价）：有生效基准价但没有倍率/绝对售价时不允许启用。
+// 加法侧守卫（售价）：有生效基准价但没有折扣/绝对售价时不允许启用。
 func TestModelEnableRequiresSalePrice(t *testing.T) {
 	f := newFixture(t)
 	modelID := f.model(uniqueName("openai/supply-no-sale"), "disabled")
@@ -411,7 +411,7 @@ func TestModelEnableRequiresSalePrice(t *testing.T) {
 	}
 
 	if _, err := f.pool.Exec(f.ctx, `
-		UPDATE model_prices SET sale_price_ratio = 1 WHERE model_id = $1
+		UPDATE model_prices SET sale_discount = 1 WHERE model_id = $1
 	`, modelID); err != nil {
 		t.Fatalf("add sale ratio to draft price: %v", err)
 	}

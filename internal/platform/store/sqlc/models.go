@@ -104,8 +104,10 @@ type Channel struct {
 	// NULL=inherit gateway.routing_sticky; true=enabled with channel TTL; false=disabled
 	StickyEnabled pgtype.Bool
 	// Channel sticky TTL in milliseconds; required only when sticky_enabled=true
-	StickyTtlMs         pgtype.Int8
-	ResponseTimeoutMs   pgtype.Int4
+	StickyTtlMs pgtype.Int8
+	// NULL 继承全局默认；0 不限制；正数覆写（号池账号可再覆写一层）。非流式限制完整响应；流式限制收到上游响应头。
+	ResponseTimeoutMs pgtype.Int4
+	// NULL 继承全局默认；0 不限制；正数覆写（号池账号可再覆写一层）。限制流式首个上游进展。
 	FirstTokenTimeoutMs pgtype.Int4
 	CreatedAt           pgtype.Timestamptz
 	UpdatedAt           pgtype.Timestamptz
@@ -508,7 +510,7 @@ type ModelPrice struct {
 	LongContextThreshold        pgtype.Int8
 	LongContextInputMultiplier  pgtype.Numeric
 	LongContextOutputMultiplier pgtype.Numeric
-	// 模型对外绝对售价；整组非空时覆盖倍率，Standard 与 Fast 必须同在。整组为空时回退「基准价 × 同行 sale_price_ratio」。两者都空则此行不可售。
+	// 模型对外绝对售价；整组非空时覆盖折扣，Standard 与 Fast 必须同在。整组为空时回退「基准价 × 同行 sale_discount」。两者都空则此行不可售。
 	SaleUncachedInputPrice         pgtype.Numeric
 	SaleCacheReadInputPrice        pgtype.Numeric
 	SaleCacheCreation5mInputPrice  pgtype.Numeric
@@ -516,8 +518,8 @@ type ModelPrice struct {
 	SaleCacheCreation30mInputPrice pgtype.Numeric
 	SaleOutputPrice                pgtype.Numeric
 	SaleReasoningOutputPrice       pgtype.Numeric
-	// 模型售价倍率：绝对售价整组留空时，客户售价 = 基准价 × 本倍率。可与绝对售价同行共存，但绝对售价生效时倍率不参与计算。
-	SalePriceRatio pgtype.Numeric
+	// 售价折扣系数（0.05 = 0.5 折）：客户售价 = 基准牌价 × 本值；与 sale_* 绝对售价二选一。
+	SaleDiscount pgtype.Numeric
 }
 
 type ModelPriceServiceTier struct {
@@ -534,7 +536,7 @@ type ModelPriceServiceTier struct {
 	ReferenceSource            pgtype.Text
 	ReferenceCheckedAt         pgtype.Date
 	CreatedAt                  pgtype.Timestamptz
-	// Fast 档对外绝对售价；整组为空时回退「该档基准价 × 模型 sale_price_ratio」（与 Standard 共用倍率）。
+	// Fast 档对外绝对售价；整组为空时回退「该档基准价 × 模型 sale_discount」（与 Standard 共用折扣）。
 	SaleUncachedInputPrice         pgtype.Numeric
 	SaleCacheReadInputPrice        pgtype.Numeric
 	SaleCacheCreation5mInputPrice  pgtype.Numeric
@@ -545,20 +547,21 @@ type ModelPriceServiceTier struct {
 }
 
 type PriceSnapshot struct {
-	ID                         int64
-	RequestRecordID            int64
-	PriceID                    pgtype.Int8
-	Currency                   string
-	PricingUnit                string
-	UncachedInputPrice         pgtype.Numeric
-	CacheReadInputPrice        pgtype.Numeric
-	CacheCreation5mInputPrice  pgtype.Numeric
-	CacheCreation1hInputPrice  pgtype.Numeric
-	OutputPrice                pgtype.Numeric
-	ReasoningOutputPrice       pgtype.Numeric
-	FormulaVersion             string
-	CreatedAt                  pgtype.Timestamptz
-	PriceRatio                 pgtype.Numeric
+	ID                        int64
+	RequestRecordID           int64
+	PriceID                   pgtype.Int8
+	Currency                  string
+	PricingUnit               string
+	UncachedInputPrice        pgtype.Numeric
+	CacheReadInputPrice       pgtype.Numeric
+	CacheCreation5mInputPrice pgtype.Numeric
+	CacheCreation1hInputPrice pgtype.Numeric
+	OutputPrice               pgtype.Numeric
+	ReasoningOutputPrice      pgtype.Numeric
+	FormulaVersion            string
+	CreatedAt                 pgtype.Timestamptz
+	// 结算时刻生效的售价折扣系数快照（倍率定价路径）；绝对售价路径为 NULL。
+	SaleDiscount               pgtype.Numeric
 	CacheCreation30mInputPrice pgtype.Numeric
 	LongContextApplied         bool
 	ServiceTier                pgtype.Text
@@ -740,6 +743,8 @@ type RequestAttempt struct {
 	RequestedServiceTier       pgtype.Text
 	UpstreamServiceTier        pgtype.Text
 	ForwardedServiceTier       pgtype.Text
+	// permit 固化的订阅账号（attempt 级归因，创建即写入）；credential 型渠道为 NULL。
+	AccountID pgtype.Int8
 }
 
 type RequestRecord struct {
@@ -848,66 +853,67 @@ type SchemaHealthCheck struct {
 }
 
 type SettlementRecoveryJob struct {
-	ID                                    int64
-	UserID                                int64
-	RequestRecordID                       int64
-	AttemptID                             int64
-	ReservationID                         int64
-	ResponseProtocol                      string
-	ResponseID                            string
-	ResponseModelID                       string
-	ModelID                               int64
-	ProviderID                            int64
-	ChannelID                             int64
-	UpstreamProtocol                      string
-	UpstreamResponseID                    string
-	UpstreamModel                         string
-	FinishClass                           string
-	UpstreamFinishReason                  string
-	UpstreamStatusCode                    int32
-	UpstreamRequestID                     pgtype.Text
-	UsageUncachedInputTokens              int64
-	UsageUncachedInputTokensState         string
-	UsageCacheReadInputTokens             int64
-	UsageCacheReadInputTokensState        string
-	UsageCacheCreation5mInputTokens       int64
-	UsageCacheCreation5mInputTokensState  string
-	UsageCacheCreation1hInputTokens       int64
-	UsageCacheCreation1hInputTokensState  string
-	UsageOutputTokensTotal                int64
-	UsageOutputTokensTotalState           string
-	UsageReasoningOutputTokens            int64
-	UsageReasoningOutputTokensState       string
-	UsageServerWebSearchRequests          int64
-	UsageServerWebFetchRequests           int64
-	UsageSource                           string
-	UsageMappingVersion                   string
-	PriceID                               pgtype.Int8
-	Currency                              string
-	PricingUnit                           string
-	UncachedInputPrice                    pgtype.Numeric
-	CacheReadInputPrice                   pgtype.Numeric
-	CacheCreation5mInputPrice             pgtype.Numeric
-	CacheCreation1hInputPrice             pgtype.Numeric
-	OutputPrice                           pgtype.Numeric
-	ReasoningOutputPrice                  pgtype.Numeric
-	FormulaVersion                        string
-	EstimatedAmount                       pgtype.Numeric
-	AuthorizedAmount                      pgtype.Numeric
-	Status                                string
-	AttemptCount                          int32
-	MaxAttempts                           int32
-	NextRunAt                             pgtype.Timestamptz
-	LockedBy                              pgtype.Text
-	LockedUntil                           pgtype.Timestamptz
-	LastErrorCode                         pgtype.Text
-	LastErrorMessage                      pgtype.Text
-	LastInternalErrorDetail               pgtype.Text
-	LastAttemptedAt                       pgtype.Timestamptz
-	CompletedAt                           pgtype.Timestamptz
-	CreatedAt                             pgtype.Timestamptz
-	UpdatedAt                             pgtype.Timestamptz
-	PriceRatio                            pgtype.Numeric
+	ID                                   int64
+	UserID                               int64
+	RequestRecordID                      int64
+	AttemptID                            int64
+	ReservationID                        int64
+	ResponseProtocol                     string
+	ResponseID                           string
+	ResponseModelID                      string
+	ModelID                              int64
+	ProviderID                           int64
+	ChannelID                            int64
+	UpstreamProtocol                     string
+	UpstreamResponseID                   string
+	UpstreamModel                        string
+	FinishClass                          string
+	UpstreamFinishReason                 string
+	UpstreamStatusCode                   int32
+	UpstreamRequestID                    pgtype.Text
+	UsageUncachedInputTokens             int64
+	UsageUncachedInputTokensState        string
+	UsageCacheReadInputTokens            int64
+	UsageCacheReadInputTokensState       string
+	UsageCacheCreation5mInputTokens      int64
+	UsageCacheCreation5mInputTokensState string
+	UsageCacheCreation1hInputTokens      int64
+	UsageCacheCreation1hInputTokensState string
+	UsageOutputTokensTotal               int64
+	UsageOutputTokensTotalState          string
+	UsageReasoningOutputTokens           int64
+	UsageReasoningOutputTokensState      string
+	UsageServerWebSearchRequests         int64
+	UsageServerWebFetchRequests          int64
+	UsageSource                          string
+	UsageMappingVersion                  string
+	PriceID                              pgtype.Int8
+	Currency                             string
+	PricingUnit                          string
+	UncachedInputPrice                   pgtype.Numeric
+	CacheReadInputPrice                  pgtype.Numeric
+	CacheCreation5mInputPrice            pgtype.Numeric
+	CacheCreation1hInputPrice            pgtype.Numeric
+	OutputPrice                          pgtype.Numeric
+	ReasoningOutputPrice                 pgtype.Numeric
+	FormulaVersion                       string
+	EstimatedAmount                      pgtype.Numeric
+	AuthorizedAmount                     pgtype.Numeric
+	Status                               string
+	AttemptCount                         int32
+	MaxAttempts                          int32
+	NextRunAt                            pgtype.Timestamptz
+	LockedBy                             pgtype.Text
+	LockedUntil                          pgtype.Timestamptz
+	LastErrorCode                        pgtype.Text
+	LastErrorMessage                     pgtype.Text
+	LastInternalErrorDetail              pgtype.Text
+	LastAttemptedAt                      pgtype.Timestamptz
+	CompletedAt                          pgtype.Timestamptz
+	CreatedAt                            pgtype.Timestamptz
+	UpdatedAt                            pgtype.Timestamptz
+	// 补偿任务冻结的售价折扣系数（与创建时刻的定价一致，重放不受后续调价影响）。
+	SaleDiscount                          pgtype.Numeric
 	UsageCacheCreation30mInputTokens      int64
 	UsageCacheCreation30mInputTokensState string
 	CacheCreation30mInputPrice            pgtype.Numeric
@@ -954,6 +960,14 @@ type SubscriptionAccount struct {
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
 	ProxyID               pgtype.Int8
+	// 指纹收敛档位：off=客户×账号 1:1 映射（默认）；device=账号内收敛 installation_id。会话 id 永不收敛。
+	FingerprintMode string
+	// 系统管理的账号级随机种子（device 派生 installation_id 用）；首次开启收敛时生成、永不改写、不对外暴露。
+	FingerprintSeed pgtype.UUID
+	// NULL 继承渠道；0 不限制；正数覆写。非流式限制完整响应；流式限制收到上游响应头。
+	ResponseTimeoutMs pgtype.Int4
+	// NULL 继承渠道；0 不限制；正数覆写。限制流式首个上游进展。
+	FirstTokenTimeoutMs pgtype.Int4
 }
 
 type SubscriptionAccountStat struct {

@@ -25,14 +25,14 @@ func (o SaleOverride) Configured() bool {
 	return o.UncachedInputPrice.Valid && o.OutputPrice.Valid
 }
 
-// ResolveCustomerPrice 两级解析客户售价：模型配了绝对售价就直接用，否则基准价 × 该模型的售价倍率。
+// ResolveCustomerPrice 两级解析客户售价：模型配了绝对售价就直接用，否则基准价 × 该模型的售价折扣。
 //
-// 绝对售价与倍率是两套独立实体，不做混合：绝对售价整组覆盖时倍率完全不参与，避免「这一项按绝对价、
-// 那一项按倍率」或「Standard 走绝对、Fast 走倍率」。两条路径都产出可直接入库的 NUMERIC(20,10) 快照，
+// 绝对售价与折扣是两套独立实体，不做混合：绝对售价整组覆盖时折扣完全不参与，避免「这一项按绝对价、
+// 那一项按折扣」或「Standard 走绝对、Fast 走折扣」。两条路径都产出可直接入库的 NUMERIC(20,10) 快照，
 // Currency / PricingUnit / FormulaVersion 一律取自基准价（绝对售价只覆盖单价，不改计价单位）。
-func ResolveCustomerPrice(base CustomerPriceSnapshot, ratio pgtype.Numeric, override SaleOverride) (CustomerPriceSnapshot, error) {
+func ResolveCustomerPrice(base CustomerPriceSnapshot, discount pgtype.Numeric, override SaleOverride) (CustomerPriceSnapshot, error) {
 	if !override.Configured() {
-		return ScaleCustomerPrice(base, ratio)
+		return ScaleCustomerPrice(base, discount)
 	}
 	return CustomerPriceSnapshot{
 		Currency:                   base.Currency,
@@ -48,15 +48,15 @@ func ResolveCustomerPrice(base CustomerPriceSnapshot, ratio pgtype.Numeric, over
 	}, nil
 }
 
-// ScaleCustomerPrice 把「模型基准售价」按「该模型的售价倍率」逐分项缩放，得到客户最终售价快照。
+// ScaleCustomerPrice 把「模型基准售价」按「该模型的售价折扣」逐分项缩放，得到客户最终售价快照。
 //
-// 客户售价 = 模型基准价 × 售价倍率（同一条 model_prices 行的 sale_price_ratio）。每个单价分量
-// 独立相乘并四舍五入到 NUMERIC(20,10)（与 model_prices / price_snapshots 单价同精度，可直接入库快照）。
-// 未配置（NULL）的 cache / reasoning 分量保持 NULL —— 计费时由 normalizeTokenRates 回退到已缩放的
-// uncached / output，与现有口径一致。Currency / PricingUnit / FormulaVersion 原样保留。
-// ratio 无效（NaN/Inf/NULL）或为负时返回 ErrInvalidRate。
-func ScaleCustomerPrice(base CustomerPriceSnapshot, ratio pgtype.Numeric) (CustomerPriceSnapshot, error) {
-	ratioRat, err := requiredNonNegativeNumeric(ratio)
+// 客户售价 = 模型基准价 × 售价折扣系数（同一条 model_prices 行的 sale_discount，0.05 = 0.5 折）。
+// 每个单价分量独立相乘并四舍五入到 NUMERIC(20,10)（与 model_prices / price_snapshots 单价同精度，
+// 可直接入库快照）。未配置（NULL）的 cache / reasoning 分量保持 NULL —— 计费时由 normalizeTokenRates
+// 回退到已缩放的 uncached / output，与现有口径一致。Currency / PricingUnit / FormulaVersion 原样保留。
+// discount 无效（NaN/Inf/NULL）或为负时返回 ErrInvalidRate。
+func ScaleCustomerPrice(base CustomerPriceSnapshot, discount pgtype.Numeric) (CustomerPriceSnapshot, error) {
+	ratioRat, err := requiredNonNegativeNumeric(discount)
 	if err != nil {
 		return CustomerPriceSnapshot{}, err
 	}

@@ -38,14 +38,14 @@ func TestListDiscountHistoryReplaysPriceWindows(t *testing.T) {
 			EffectiveFrom:      ts(now.Add(-72 * time.Hour)),
 			EffectiveUntil:     ts(changeAt),
 			UncachedInputPrice: num(t, "4"), OutputPrice: num(t, "20"),
-			SalePriceRatio: num(t, "0.2"),
+			SaleDiscount: num(t, "0.2"),
 		},
 		{
 			ModelID: 1, ModelKey: "gpt-5.6-sol",
 			WindowStatus:       "enabled",
 			EffectiveFrom:      ts(changeAt),
 			UncachedInputPrice: num(t, "4"), OutputPrice: num(t, "20"),
-			SalePriceRatio: num(t, "0.3"),
+			SaleDiscount: num(t, "0.3"),
 		},
 	}}
 
@@ -66,8 +66,8 @@ func TestListDiscountHistoryReplaysPriceWindows(t *testing.T) {
 	if last := h.Points[len(h.Points)-1].At; time.Since(last) > time.Minute {
 		t.Fatalf("last sample must be at request time, got %v", last)
 	}
-	ratioValue(t, h.Points[0].Ratio, 0.2, "oldest point")
-	ratioValue(t, h.Points[len(h.Points)-1].Ratio, 0.3, "newest point")
+	ratioValue(t, h.Points[0].Discount, 0.2, "oldest point")
+	ratioValue(t, h.Points[len(h.Points)-1].Discount, 0.3, "newest point")
 	ratioValue(t, h.Current, 0.3, "current")
 	ratioValue(t, h.Min, 0.2, "min")
 	if h.Average == nil || *h.Average <= 0.2 || *h.Average >= 0.3 {
@@ -81,16 +81,16 @@ func TestListDiscountHistoryReplaysPriceWindows(t *testing.T) {
 	}
 }
 
-func TestListDiscountHistoryAbsoluteSaleUsesPriceRatio(t *testing.T) {
+func TestListDiscountHistoryAbsoluteSaleUsesSaleDiscount(t *testing.T) {
 	t.Parallel()
 	now := time.Now().UTC()
-	// 绝对售价（$1 / $5）覆盖牌价（$4 / $20）：折扣按 售价/牌价 = 0.25 算，倍率列不参与。
+	// 绝对售价（$1 / $5）覆盖牌价（$4 / $20）：折扣按 售价/牌价 = 0.25 算，折扣列不参与。
 	store := &fakeStore{windows: []sqlc.ListPublicModelPriceWindowsRow{{
 		ModelID: 2, ModelKey: "claude-opus-4-6",
 		WindowStatus:       "enabled",
 		EffectiveFrom:      ts(now.Add(-24 * time.Hour)),
 		UncachedInputPrice: num(t, "4"), OutputPrice: num(t, "20"),
-		SalePriceRatio:         num(t, "0.9"),
+		SaleDiscount:         num(t, "0.9"),
 		SaleUncachedInputPrice: num(t, "1"), SaleOutputPrice: num(t, "5"),
 	}}}
 
@@ -110,7 +110,7 @@ func TestListDiscountHistoryGapsBeforePricing(t *testing.T) {
 		WindowStatus:       "enabled",
 		EffectiveFrom:      ts(now.Add(-2 * time.Hour)),
 		UncachedInputPrice: num(t, "5"), OutputPrice: num(t, "30"),
-		SalePriceRatio: num(t, "0.2"),
+		SaleDiscount: num(t, "0.2"),
 	}}}
 
 	histories, err := NewService(store).ListDiscountHistory(context.Background(), 48*time.Hour)
@@ -118,8 +118,8 @@ func TestListDiscountHistoryGapsBeforePricing(t *testing.T) {
 		t.Fatalf("ListDiscountHistory: %v", err)
 	}
 	h := histories[0]
-	if h.Points[0].Ratio != nil {
-		t.Fatalf("point before pricing must be nil, got %v", *h.Points[0].Ratio)
+	if h.Points[0].Discount != nil {
+		t.Fatalf("point before pricing must be nil, got %v", *h.Points[0].Discount)
 	}
 	ratioValue(t, h.Current, 0.2, "current")
 }
@@ -137,14 +137,14 @@ func TestListDiscountHistoryMidHourChangeVisibleImmediately(t *testing.T) {
 			EffectiveFrom:      ts(now.Add(-24 * time.Hour)),
 			EffectiveUntil:     ts(changeAt),
 			UncachedInputPrice: num(t, "5"), OutputPrice: num(t, "25"),
-			SalePriceRatio: num(t, "0.06"),
+			SaleDiscount: num(t, "0.06"),
 		},
 		{
 			ModelID: 5, ModelKey: "gpt-5.6-sol",
 			WindowStatus:       "enabled",
 			EffectiveFrom:      ts(changeAt),
 			UncachedInputPrice: num(t, "5"), OutputPrice: num(t, "25"),
-			SalePriceRatio: num(t, "0.07"),
+			SaleDiscount: num(t, "0.07"),
 		},
 	}}
 
@@ -154,7 +154,7 @@ func TestListDiscountHistoryMidHourChangeVisibleImmediately(t *testing.T) {
 	}
 	h := histories[0]
 	ratioValue(t, h.Current, 0.07, "current")
-	ratioValue(t, h.Points[len(h.Points)-1].Ratio, 0.07, "newest point")
+	ratioValue(t, h.Points[len(h.Points)-1].Discount, 0.07, "newest point")
 }
 
 func TestListDiscountHistoryStoreError(t *testing.T) {

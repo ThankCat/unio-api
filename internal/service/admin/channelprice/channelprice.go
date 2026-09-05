@@ -1,6 +1,6 @@
 // Package channelprice 编排 admin 管理端的渠道-模型成本价（channel_prices）读写（DEC-026 倍率定价）。
 //
-// channel_prices 自此只承载「上游成本价」；客户售价 = 模型基准价（model_prices）× 线路倍率（routes.price_ratio），
+// channel_prices 自此只承载「上游成本价」；客户售价 = 模型基准价（model_prices）× 售价折扣（model_prices.sale_discount），
 // 与渠道解耦。设计约束：
 //   - 金额只填明确数值、绝不用 float；DTO 层用十进制字符串承载，避免精度丢失。
 //   - 价格不可改金额：账务（cost_snapshots）按外键引用历史成本；改价靠「新建一条 + 关闭旧窗口」。

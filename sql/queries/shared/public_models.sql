@@ -26,7 +26,7 @@ SELECT
     mp.cache_creation_30m_input_price,
     mp.output_price,
     mp.reasoning_output_price,
-    mp.sale_price_ratio,
+    mp.sale_discount,
     mp.sale_uncached_input_price,
     mp.sale_cache_read_input_price,
     mp.sale_cache_creation_5m_input_price,
@@ -92,7 +92,7 @@ WITH windows AS (
         END)::timestamptz AS effective_until,
         mp.uncached_input_price,
         mp.output_price,
-        mp.sale_price_ratio,
+        mp.sale_discount,
         mp.sale_uncached_input_price,
         mp.sale_output_price
     FROM model_prices mp
@@ -107,7 +107,7 @@ SELECT
     effective_until,
     uncached_input_price,
     output_price,
-    sale_price_ratio,
+    sale_discount,
     sale_uncached_input_price,
     sale_output_price
 FROM windows

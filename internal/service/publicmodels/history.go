@@ -12,11 +12,11 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 )
 
-// DiscountPoint 是某一时刻的折扣采样（Ratio = 售价 / 官方牌价，0.2 表示 2 折）。
+// DiscountPoint 是某一时刻的折扣采样（Discount = 售价 / 官方牌价，0.2 表示 2 折）。
 type DiscountPoint struct {
 	At time.Time
 	// Ratio 为 nil 表示该时刻没有生效价格（模型当时尚未定价），前端应断开折线。
-	Ratio *float64
+	Discount *float64
 }
 
 // DiscountHistory 是单个模型的折扣走势与区间统计。
@@ -86,18 +86,18 @@ func buildHistory(
 	var sum float64
 	var count int
 	for _, at := range timeline {
-		ratio := ratioAt(windows, at)
-		history.Points = append(history.Points, DiscountPoint{At: at, Ratio: ratio})
-		if ratio == nil {
+		discount := discountAt(windows, at)
+		history.Points = append(history.Points, DiscountPoint{At: at, Discount: discount})
+		if discount == nil {
 			continue
 		}
-		sum += *ratio
+		sum += *discount
 		count++
-		if history.Min == nil || *ratio < *history.Min {
-			value := *ratio
+		if history.Min == nil || *discount < *history.Min {
+			value := *discount
 			history.Min = &value
 		}
-		history.Current = ratio
+		history.Current = discount
 	}
 	if count > 0 {
 		average := sum / float64(count)
@@ -106,12 +106,12 @@ func buildHistory(
 	return history
 }
 
-// ratioAt 取 at 时刻生效窗口的折扣。
+// discountAt 取 at 时刻生效窗口的折扣。
 //
 // enabled 窗口优先（同一时刻至多一个，DB 排除约束保证）；停用窗口按其真实生效区间
 // 参与回放——被替换/停用前它确实计费过，抹掉会让走势在每次调价时整段消失。
 // 停用窗口的终点（effective_until）已在 SQL 里按停用时刻收口。
-func ratioAt(windows []sqlc.ListPublicModelPriceWindowsRow, at time.Time) *float64 {
+func discountAt(windows []sqlc.ListPublicModelPriceWindowsRow, at time.Time) *float64 {
 	var fallback *float64
 	for _, w := range windows {
 		if !w.EffectiveFrom.Valid || w.EffectiveFrom.Time.After(at) {
@@ -121,22 +121,22 @@ func ratioAt(windows []sqlc.ListPublicModelPriceWindowsRow, at time.Time) *float
 			continue
 		}
 		if w.WindowStatus == "enabled" {
-			return windowRatio(w)
+			return windowDiscount(w)
 		}
 		if fallback == nil {
-			fallback = windowRatio(w)
+			fallback = windowDiscount(w)
 		}
 	}
 	return fallback
 }
 
-// windowRatio 求单个窗口的折扣：绝对售价整组配置时用 售价/牌价，否则直接取倍率。
+// windowDiscount 求单个窗口的折扣：绝对售价整组配置时用 售价/牌价，否则直接取折扣系数。
 // 与 billing.ResolveCustomerPrice 的两级解析同口径，保证走势与实际结算一致。
-func windowRatio(w sqlc.ListPublicModelPriceWindowsRow) *float64 {
+func windowDiscount(w sqlc.ListPublicModelPriceWindowsRow) *float64 {
 	if w.SaleUncachedInputPrice.Valid && w.SaleOutputPrice.Valid {
 		return divideNumeric(w.SaleUncachedInputPrice, w.UncachedInputPrice)
 	}
-	return numericFloat(w.SalePriceRatio)
+	return numericFloat(w.SaleDiscount)
 }
 
 func divideNumeric(numerator, denominator pgtype.Numeric) *float64 {

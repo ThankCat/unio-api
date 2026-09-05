@@ -26,17 +26,17 @@ func (f *fakeModels) ListDiscountHistory(context.Context, time.Duration) ([]publ
 	return nil, nil
 }
 
-func (f *fakeModels) MinSaleRatio(context.Context) (*float64, error) {
+func (f *fakeModels) MinSaleDiscount(context.Context) (*float64, error) {
 	return f.ratio, f.err
 }
 
-func TestMinSaleRatioRoute(t *testing.T) {
+func TestMinSaleDiscountRoute(t *testing.T) {
 	t.Parallel()
 	ratio := 0.2
 	handler := NewRouter(Deps{Logger: zap.NewNop(), Models: &fakeModels{ratio: &ratio}})
 
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/models/min-sale-ratio", nil))
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/models/min-sale-discount", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body = %s", rec.Code, rec.Body.String())
 	}
@@ -46,37 +46,37 @@ func TestMinSaleRatioRoute(t *testing.T) {
 
 	var body struct {
 		Data struct {
-			MinSaleRatio *float64 `json:"min_sale_ratio"`
+			MinSaleDiscount *float64 `json:"min_sale_discount"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode: %v; body = %s", err, rec.Body.String())
 	}
-	if body.Data.MinSaleRatio == nil || *body.Data.MinSaleRatio != 0.2 {
-		t.Fatalf("min_sale_ratio = %v, want 0.2", body.Data.MinSaleRatio)
+	if body.Data.MinSaleDiscount == nil || *body.Data.MinSaleDiscount != 0.2 {
+		t.Fatalf("min_sale_discount = %v, want 0.2", body.Data.MinSaleDiscount)
 	}
 }
 
-func TestMinSaleRatioRouteEmpty(t *testing.T) {
+func TestMinSaleDiscountRouteEmpty(t *testing.T) {
 	t.Parallel()
 	handler := NewRouter(Deps{Logger: zap.NewNop(), Models: &fakeModels{}})
 
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/models/min-sale-ratio", nil))
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/models/min-sale-discount", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body = %s", rec.Code, rec.Body.String())
 	}
 
 	var body struct {
 		Data struct {
-			MinSaleRatio *float64 `json:"min_sale_ratio"`
+			MinSaleDiscount *float64 `json:"min_sale_discount"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode: %v; body = %s", err, rec.Body.String())
 	}
-	if body.Data.MinSaleRatio != nil {
-		t.Fatalf("empty catalog want null, got %v", *body.Data.MinSaleRatio)
+	if body.Data.MinSaleDiscount != nil {
+		t.Fatalf("empty catalog want null, got %v", *body.Data.MinSaleDiscount)
 	}
 }
 

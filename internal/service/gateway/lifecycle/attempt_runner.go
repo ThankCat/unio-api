@@ -652,7 +652,7 @@ scan:
 				ProviderRechargeRateID:        candidate.ProviderRechargeRateID,
 				SalePrice:                     candidate.SalePrice,
 				FastSalePrice:                 candidate.FastSalePrice,
-				PriceRatio:                    candidate.PriceRatio,
+				SaleDiscount:                    candidate.SaleDiscount,
 				LongContextPolicy:             candidate.LongContextPolicy,
 				Facts:                         success.Facts,
 			})

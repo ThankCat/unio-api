@@ -12,7 +12,7 @@ import (
 )
 
 const findActiveModelPrice = `-- name: FindActiveModelPrice :one
-SELECT id, model_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_creation_5m_input_price, cache_creation_1h_input_price, output_price, reasoning_output_price, status, effective_from, effective_to, created_at, updated_at, cache_creation_30m_input_price, long_context_enabled, long_context_threshold, long_context_input_multiplier, long_context_output_multiplier, sale_uncached_input_price, sale_cache_read_input_price, sale_cache_creation_5m_input_price, sale_cache_creation_1h_input_price, sale_cache_creation_30m_input_price, sale_output_price, sale_reasoning_output_price, sale_price_ratio
+SELECT id, model_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_creation_5m_input_price, cache_creation_1h_input_price, output_price, reasoning_output_price, status, effective_from, effective_to, created_at, updated_at, cache_creation_30m_input_price, long_context_enabled, long_context_threshold, long_context_input_multiplier, long_context_output_multiplier, sale_uncached_input_price, sale_cache_read_input_price, sale_cache_creation_5m_input_price, sale_cache_creation_1h_input_price, sale_cache_creation_30m_input_price, sale_output_price, sale_reasoning_output_price, sale_discount
 FROM model_prices
 WHERE model_id = $1
     AND status = 'enabled'
@@ -62,7 +62,7 @@ func (q *Queries) FindActiveModelPrice(ctx context.Context, arg FindActiveModelP
 		&i.SaleCacheCreation30mInputPrice,
 		&i.SaleOutputPrice,
 		&i.SaleReasoningOutputPrice,
-		&i.SalePriceRatio,
+		&i.SaleDiscount,
 	)
 	return i, err
 }

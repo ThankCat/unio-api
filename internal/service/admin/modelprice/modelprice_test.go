@@ -89,7 +89,7 @@ func currentEnabledRow() sqlc.ListModelPricesByModelRow {
 		PricingUnit:        PricingUnitPer1MTokens,
 		UncachedInputPrice: mustNumeric("2.5"),
 		OutputPrice:        mustNumeric("15"),
-		SalePriceRatio:     mustNumeric("0.2"),
+		SaleDiscount:     mustNumeric("0.2"),
 		Status:             StatusEnabled,
 		EffectiveFrom:      pgtype.Timestamptz{Time: now.Add(-time.Hour), Valid: true},
 		ModelExternalID:    "gpt-test",
@@ -122,7 +122,7 @@ func TestCreateRequiresIntent(t *testing.T) {
 	}
 }
 
-// 配基准价允许草稿：没有倍率也没有绝对售价时校验放行，售价留给后续入口。
+// 配基准价允许草稿：没有折扣也没有绝对售价时校验放行，售价留给后续入口。
 func TestCreateAllowsBaseWithoutSale(t *testing.T) {
 	svc := NewService(rejectingStore{}, nil, nil)
 
@@ -153,7 +153,7 @@ func TestCreateIntentBaseCopiesCurrentSale(t *testing.T) {
 	if got := numericString(store.got.OutputPrice); got != "18" {
 		t.Fatalf("base output = %s, want 18", got)
 	}
-	if got := numericString(store.got.SalePriceRatio); got != "0.2" {
+	if got := numericString(store.got.SaleDiscount); got != "0.2" {
 		t.Fatalf("copied sale ratio = %s, want 0.2", got)
 	}
 	if store.got.SaleUncachedInputPrice.Valid {
@@ -161,7 +161,7 @@ func TestCreateIntentBaseCopiesCurrentSale(t *testing.T) {
 	}
 }
 
-func TestCreateIntentSaleRatioCopiesBaseAndKeepsAbsolute(t *testing.T) {
+func TestCreateIntentSaleDiscountCopiesBaseAndKeepsAbsolute(t *testing.T) {
 	current := currentEnabledRow()
 	current.SaleUncachedInputPrice = mustNumeric("5")
 	current.SaleOutputPrice = mustNumeric("30")
@@ -171,8 +171,8 @@ func TestCreateIntentSaleRatioCopiesBaseAndKeepsAbsolute(t *testing.T) {
 	ratio := "0.5"
 	in := CreateInput{
 		ModelID:        7,
-		Intent:         IntentSaleRatio,
-		SalePriceRatio: &ratio,
+		Intent:         IntentSaleDiscount,
+		SaleDiscount: &ratio,
 		Status:         StatusEnabled,
 		EffectiveFrom:  time.Now().UTC(),
 	}
@@ -185,7 +185,7 @@ func TestCreateIntentSaleRatioCopiesBaseAndKeepsAbsolute(t *testing.T) {
 	if got := numericString(store.got.UncachedInputPrice); got != "2.5" {
 		t.Fatalf("copied base input = %s, want 2.5", got)
 	}
-	if got := numericString(store.got.SalePriceRatio); got != "0.5" {
+	if got := numericString(store.got.SaleDiscount); got != "0.5" {
 		t.Fatalf("sale ratio = %s, want 0.5", got)
 	}
 	if got := numericString(store.got.SaleUncachedInputPrice); got != "5" {
@@ -219,7 +219,7 @@ func TestCreateIntentSaleAbsoluteCopiesBaseAndKeepsRatio(t *testing.T) {
 	if got := numericString(store.got.UncachedInputPrice); got != "2.5" {
 		t.Fatalf("copied base input = %s, want 2.5", got)
 	}
-	if got := numericString(store.got.SalePriceRatio); got != "0.2" {
+	if got := numericString(store.got.SaleDiscount); got != "0.2" {
 		t.Fatalf("kept sale ratio = %s, want 0.2", got)
 	}
 	if got := numericString(store.got.SaleUncachedInputPrice); got != "5" {
@@ -234,8 +234,8 @@ func TestCreateSaleIntentRequiresEffectiveBase(t *testing.T) {
 	ratio := "0.2"
 	_, err := svc.createInLock(context.Background(), nil, CreateInput{
 		ModelID:        7,
-		Intent:         IntentSaleRatio,
-		SalePriceRatio: &ratio,
+		Intent:         IntentSaleDiscount,
+		SaleDiscount: &ratio,
 		Status:         StatusEnabled,
 		EffectiveFrom:  time.Now().UTC(),
 	})
@@ -244,7 +244,7 @@ func TestCreateSaleIntentRequiresEffectiveBase(t *testing.T) {
 	}
 }
 
-// 有 Fast 基准价时，绝对售价必须连 Fast 一起给。倍率即使还在，也不能拿来补 Fast。
+// 有 Fast 基准价时，绝对售价必须连 Fast 一起给。折扣即使还在，也不能拿来补 Fast。
 func TestCreateRequiresFastSalePricesWhenAbsoluteConfigured(t *testing.T) {
 	current := currentEnabledRow()
 	current.FastServiceTierID = 8
@@ -277,7 +277,7 @@ func TestCreateRequiresFastSalePricesWhenAbsoluteConfigured(t *testing.T) {
 	if store.got == nil {
 		t.Fatal("create params were not captured")
 	}
-	if got := numericString(store.got.SalePriceRatio); got != "0.2" {
+	if got := numericString(store.got.SaleDiscount); got != "0.2" {
 		t.Fatalf("kept sale ratio = %s, want 0.2", got)
 	}
 	if got := numericString(store.got.FastSaleUncachedInputPrice); got != "8" {
@@ -285,8 +285,8 @@ func TestCreateRequiresFastSalePricesWhenAbsoluteConfigured(t *testing.T) {
 	}
 }
 
-// 只改倍率时 Fast 基准价照抄；已有 Fast 绝对售价也照抄，不当成互斥清掉。
-func TestCreateSaleRatioCopiesFastBaseAndKeepsFastAbsolute(t *testing.T) {
+// 只改折扣时 Fast 基准价照抄；已有 Fast 绝对售价也照抄，不当成互斥清掉。
+func TestCreateSaleDiscountCopiesFastBaseAndKeepsFastAbsolute(t *testing.T) {
 	current := currentEnabledRow()
 	current.FastServiceTierID = 8
 	current.FastUncachedInputPrice = mustNumeric("4")
@@ -301,8 +301,8 @@ func TestCreateSaleRatioCopiesFastBaseAndKeepsFastAbsolute(t *testing.T) {
 	ratio := "0.4"
 	in := CreateInput{
 		ModelID:        7,
-		Intent:         IntentSaleRatio,
-		SalePriceRatio: &ratio,
+		Intent:         IntentSaleDiscount,
+		SaleDiscount: &ratio,
 		Status:         StatusEnabled,
 		EffectiveFrom:  time.Now().UTC(),
 	}
@@ -310,7 +310,7 @@ func TestCreateSaleRatioCopiesFastBaseAndKeepsFastAbsolute(t *testing.T) {
 		t.Fatalf("expected to reach the store, got %v", err)
 	}
 	if store.got == nil || !store.got.FastConfigured {
-		t.Fatal("sale_ratio must copy Fast base from the current window")
+		t.Fatal("sale_discount must copy Fast base from the current window")
 	}
 	if got := numericString(store.got.FastSaleUncachedInputPrice); got != "8" {
 		t.Fatalf("kept fast absolute input = %s, want 8", got)
@@ -320,15 +320,15 @@ func TestCreateSaleRatioCopiesFastBaseAndKeepsFastAbsolute(t *testing.T) {
 	}
 }
 
-// 倍率必须为正：0 或负数意味着白送或倒付钱。
-func TestCreateRejectsNonPositiveSaleRatio(t *testing.T) {
+// 折扣必须为正：0 或负数意味着白送或倒付钱。
+func TestCreateRejectsNonPositiveSaleDiscount(t *testing.T) {
 	svc := NewService(rejectingStore{}, nil, nil)
 
 	for _, ratio := range []string{"0", "-0.5"} {
 		in := CreateInput{
 			ModelID:        7,
-			Intent:         IntentSaleRatio,
-			SalePriceRatio: &ratio,
+			Intent:         IntentSaleDiscount,
+			SaleDiscount: &ratio,
 			Status:         StatusEnabled,
 			EffectiveFrom:  time.Now().UTC(),
 		}

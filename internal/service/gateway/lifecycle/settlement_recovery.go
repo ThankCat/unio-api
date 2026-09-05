@@ -187,7 +187,7 @@ func (s *ChatSettlementRecoveryStore) CreatePendingChatSettlementRecoveryJob(ctx
 		OutputPrice:                           tierSelection.salePrice.OutputPrice,
 		ReasoningOutputPrice:                  tierSelection.salePrice.ReasoningOutputPrice,
 		FormulaVersion:                        billing.FormulaVersionV1,
-		PriceRatio:                            params.PriceRatio,
+		SaleDiscount:                            params.SaleDiscount,
 		LongContextEnabled:                    params.LongContextPolicy.Enabled,
 		LongContextThreshold:                  settlementRecoveryLongContextThreshold(params.LongContextPolicy),
 		LongContextInputMultiplier:            params.LongContextPolicy.InputMultiplier,
@@ -383,7 +383,7 @@ func (s *ChatSettlementRecoveryService) chatSettlementParamsFromJob(ctx context.
 			ReasoningOutputPrice:       job.ReasoningOutputPrice,
 			FormulaVersion:             job.FormulaVersion,
 		},
-		PriceRatio: job.PriceRatio,
+		SaleDiscount: job.SaleDiscount,
 		LongContextPolicy: billing.LongContextPolicy{
 			Enabled:          job.LongContextEnabled,
 			Threshold:        int8OrZero(job.LongContextThreshold),

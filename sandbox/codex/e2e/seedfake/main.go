@@ -92,7 +92,7 @@ func main() {
 	must(err, "upsert model")
 	_, err = pool.Exec(ctx, `
 		INSERT INTO model_prices (model_id, currency, pricing_unit, uncached_input_price, output_price,
-		                          sale_price_ratio, status, effective_from)
+		                          sale_discount, status, effective_from)
 		SELECT $1, 'USD', 'per_1m_tokens', 2, 8, 1, 'enabled', now() - interval '1 hour'
 		WHERE NOT EXISTS (
 			SELECT 1 FROM model_prices WHERE model_id = $1 AND status = 'enabled'

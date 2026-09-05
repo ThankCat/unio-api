@@ -48,7 +48,7 @@ func num(t *testing.T, s string) pgtype.Numeric {
 	return n
 }
 
-// baseRow 是倍率定价（0.2）的最小在售行：in $4 / out $20 / cache read $0.4。
+// baseRow 是折扣定价（0.2）的最小在售行：in $4 / out $20 / cache read $0.4。
 func baseRow(t *testing.T) sqlc.ListPublicModelsRow {
 	t.Helper()
 	return sqlc.ListPublicModelsRow{
@@ -67,7 +67,7 @@ func baseRow(t *testing.T) sqlc.ListPublicModelsRow {
 		UncachedInputPrice:  num(t, "4"),
 		CacheReadInputPrice: num(t, "0.4"),
 		OutputPrice:         num(t, "20"),
-		SalePriceRatio:      num(t, "0.2"),
+		SaleDiscount:      num(t, "0.2"),
 		LabHasLogo:          true,
 		PriceEffectiveFrom:  pgtype.Timestamptz{Time: time.Date(2026, 8, 26, 0, 0, 0, 0, time.UTC), Valid: true},
 	}
@@ -108,7 +108,7 @@ func TestListResolvesRatioPricing(t *testing.T) {
 	if m.Standard.Sale.CacheCreation30m != nil {
 		t.Fatalf("unset cache write must stay nil, got %q", *m.Standard.Sale.CacheCreation30m)
 	}
-	strValue(t, m.SaleRatio, "0.2", "sale ratio")
+	strValue(t, m.SaleDiscount, "0.2", "sale ratio")
 	if m.Fast != nil {
 		t.Fatal("fast tier not configured, want nil")
 	}
@@ -126,7 +126,7 @@ func TestListResolvesRatioPricing(t *testing.T) {
 func TestListAbsoluteSaleOverridesRatio(t *testing.T) {
 	t.Parallel()
 	row := baseRow(t)
-	// 绝对售价整组配置（两必填项），倍率不再参与，也不对外暴露。
+	// 绝对售价整组配置（两必填项），折扣不再参与，也不对外暴露。
 	row.SaleUncachedInputPrice = num(t, "1.5")
 	row.SaleOutputPrice = num(t, "7")
 
@@ -142,8 +142,8 @@ func TestListAbsoluteSaleOverridesRatio(t *testing.T) {
 	if m.Standard.Sale.CacheRead != nil {
 		t.Fatalf("optional absolute item empty must stay nil, got %q", *m.Standard.Sale.CacheRead)
 	}
-	if m.SaleRatio != nil {
-		t.Fatalf("sale ratio must be nil on absolute path, got %q", *m.SaleRatio)
+	if m.SaleDiscount != nil {
+		t.Fatalf("sale ratio must be nil on absolute path, got %q", *m.SaleDiscount)
 	}
 }
 
@@ -210,20 +210,20 @@ func TestListStoreError(t *testing.T) {
 	}
 }
 
-func TestMinSaleRatioPicksLowest(t *testing.T) {
+func TestMinSaleDiscountPicksLowest(t *testing.T) {
 	t.Parallel()
 	cheap := baseRow(t)
-	cheap.SalePriceRatio = num(t, "0.2")
+	cheap.SaleDiscount = num(t, "0.2")
 
 	mid := baseRow(t)
 	mid.ID = 3
 	mid.ModelID = "claude-opus-4-6"
-	mid.SalePriceRatio = num(t, "0.5")
+	mid.SaleDiscount = num(t, "0.5")
 
 	svc := NewService(&fakeStore{models: []sqlc.ListPublicModelsRow{mid, cheap}})
-	got, err := svc.MinSaleRatio(context.Background())
+	got, err := svc.MinSaleDiscount(context.Background())
 	if err != nil {
-		t.Fatalf("MinSaleRatio: %v", err)
+		t.Fatalf("MinSaleDiscount: %v", err)
 	}
 	if got == nil {
 		t.Fatal("want min sale ratio, got nil")
@@ -233,7 +233,7 @@ func TestMinSaleRatioPicksLowest(t *testing.T) {
 	}
 }
 
-func TestMinSaleRatioIncludesAbsoluteSale(t *testing.T) {
+func TestMinSaleDiscountIncludesAbsoluteSale(t *testing.T) {
 	t.Parallel()
 	// 绝对售价 1.5 / 4 = 0.375，应参与「最低折扣」，且比 0.5 更低。
 	absolute := baseRow(t)
@@ -243,12 +243,12 @@ func TestMinSaleRatioIncludesAbsoluteSale(t *testing.T) {
 	ratio := baseRow(t)
 	ratio.ID = 3
 	ratio.ModelID = "claude-opus-4-6"
-	ratio.SalePriceRatio = num(t, "0.5")
+	ratio.SaleDiscount = num(t, "0.5")
 
 	svc := NewService(&fakeStore{models: []sqlc.ListPublicModelsRow{absolute, ratio}})
-	got, err := svc.MinSaleRatio(context.Background())
+	got, err := svc.MinSaleDiscount(context.Background())
 	if err != nil {
-		t.Fatalf("MinSaleRatio: %v", err)
+		t.Fatalf("MinSaleDiscount: %v", err)
 	}
 	if got == nil {
 		t.Fatal("want min sale ratio, got nil")
@@ -258,12 +258,12 @@ func TestMinSaleRatioIncludesAbsoluteSale(t *testing.T) {
 	}
 }
 
-func TestMinSaleRatioEmptyCatalog(t *testing.T) {
+func TestMinSaleDiscountEmptyCatalog(t *testing.T) {
 	t.Parallel()
 	svc := NewService(&fakeStore{})
-	got, err := svc.MinSaleRatio(context.Background())
+	got, err := svc.MinSaleDiscount(context.Background())
 	if err != nil {
-		t.Fatalf("MinSaleRatio: %v", err)
+		t.Fatalf("MinSaleDiscount: %v", err)
 	}
 	if got != nil {
 		t.Fatalf("empty catalog want nil, got %v", *got)

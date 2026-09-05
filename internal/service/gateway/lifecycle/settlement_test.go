@@ -405,8 +405,8 @@ func (d *chatSettlementDBDeps) params() ChatSettlementParams {
 			ReasoningOutputPrice: testNumeric(18_0000000000, -10),
 			FormulaVersion:       billing.FormulaVersionV1,
 		},
-		// PriceRatio 随 SalePrice 一起快照进 price_snapshots.price_ratio（0.5×），供请求展示恒显结算当时倍率。
-		PriceRatio: testNumeric(0_5000000000, -10),
+		// SaleDiscount 随 SalePrice 一起快照进 price_snapshots.sale_discount（0.5 折扣），供请求展示恒显结算当时折扣。
+		SaleDiscount: testNumeric(0_5000000000, -10),
 		Facts:      chatSettlementFacts(coreusage.SourceUpstreamResponse),
 	}
 }
@@ -686,7 +686,7 @@ func TestChatSettlementSettlesSuccessfulChat(t *testing.T) {
 		t.Fatalf("expected formula version %q, got %q", billing.FormulaVersionV1, snapshot.FormulaVersion)
 	}
 	// 线路倍率随售价一起快照，供请求详情/列表恒显示结算当时倍率（不随后续改倍率漂移）。
-	assertNumericEqual(t, snapshot.PriceRatio, testNumeric(0_5000000000, -10))
+	assertNumericEqual(t, snapshot.SaleDiscount, testNumeric(0_5000000000, -10))
 
 	costSnapshot, err := deps.queries.GetCostSnapshotByRequest(deps.ctx, deps.requestRecord.ID)
 	if err != nil {
@@ -1373,7 +1373,7 @@ func TestChatSettlementMultiplierPathComputesAndPinsCost(t *testing.T) {
 		OutputPrice:          testNumeric(500_0000000000, -10),
 		ReasoningOutputPrice: testNumeric(500_0000000000, -10),
 		// 倍率随价格行走：按 1.0 卖，合并成本倍率 0.12 × 0.5 = 0.06 远低于它。
-		SalePriceRatio: testNumeric(1_0000000000, -10),
+		SaleDiscount: testNumeric(1_0000000000, -10),
 		Status:         "enabled",
 		EffectiveFrom:  pgtype.Timestamptz{Time: time.Now().Add(-time.Hour), Valid: true},
 		EffectiveTo:    pgtype.Timestamptz{Valid: false},
@@ -1385,7 +1385,7 @@ func TestChatSettlementMultiplierPathComputesAndPinsCost(t *testing.T) {
 	mult, err := deps.queries.CreateChannelCostMultiplier(deps.ctx, sqlc.CreateChannelCostMultiplierParams{
 		ChannelID: deps.channelID,
 		ModelID:   pgtype.Int8{Valid: false},
-		// 合并倍率（0.12 × 0.5 = 0.06）必须低于模型售价倍率，否则毛利守卫会拒绝这份配置。
+		// 合并倍率（0.12 × 0.5 = 0.06）必须低于模型售价折扣，否则毛利守卫会拒绝这份配置。
 		Multiplier:    testNumeric(12, -2), // 0.12
 		Status:        "enabled",
 		EffectiveFrom: pgtype.Timestamptz{Time: time.Now().Add(-time.Hour), Valid: true},

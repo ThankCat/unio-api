@@ -129,7 +129,7 @@ SELECT EXISTS (
             AND mp.status = 'enabled'
             AND mp.effective_from <= now()
             AND (mp.effective_to IS NULL OR mp.effective_to > now())
-            AND (mp.sale_uncached_input_price IS NOT NULL OR mp.sale_price_ratio IS NOT NULL)
+            AND (mp.sale_uncached_input_price IS NOT NULL OR mp.sale_discount IS NOT NULL)
       )
       AND (
           EXISTS (
@@ -157,14 +157,14 @@ SELECT EXISTS (
 ) AS has_base;
 
 -- name: ModelHasResolvableSalePrice :one
--- ModelHasResolvableSalePrice 判断生效基准价窗口上是否已配倍率或绝对售价。
+-- ModelHasResolvableSalePrice 判断生效基准价窗口上是否已配售价折扣或绝对售价。
 SELECT EXISTS (
     SELECT 1 FROM model_prices mp
     WHERE mp.model_id = sqlc.arg(model_id)
       AND mp.status = 'enabled'
       AND mp.effective_from <= now()
       AND (mp.effective_to IS NULL OR mp.effective_to > now())
-      AND (mp.sale_uncached_input_price IS NOT NULL OR mp.sale_price_ratio IS NOT NULL)
+      AND (mp.sale_uncached_input_price IS NOT NULL OR mp.sale_discount IS NOT NULL)
 ) AS has_sale;
 
 -- name: ListModelsLosingSalePrice :many
@@ -187,7 +187,7 @@ WHERE m.status = 'enabled'
         AND target.status = 'enabled'
         AND target.effective_from <= now()
         AND (target.effective_to IS NULL OR target.effective_to > now())
-        AND (target.sale_uncached_input_price IS NOT NULL OR target.sale_price_ratio IS NOT NULL)
+        AND (target.sale_uncached_input_price IS NOT NULL OR target.sale_discount IS NOT NULL)
   )
   -- 排除目标窗口后已无其他可售窗口。exclude 为空时该子查询恒无行，
   -- 对应 replace 语义：当前窗口整组失效，剩余集合为空。
@@ -200,7 +200,7 @@ WHERE m.status = 'enabled'
         AND mp.status = 'enabled'
         AND mp.effective_from <= now()
         AND (mp.effective_to IS NULL OR mp.effective_to > now())
-        AND (mp.sale_uncached_input_price IS NOT NULL OR mp.sale_price_ratio IS NOT NULL)
+        AND (mp.sale_uncached_input_price IS NOT NULL OR mp.sale_discount IS NOT NULL)
   )
 ORDER BY m.id;
 
@@ -215,7 +215,7 @@ SELECT EXISTS (
       AND mp.status = 'enabled'
       AND mp.effective_from <= sqlc.arg(expires_at)::timestamptz
       AND (mp.effective_to IS NULL OR mp.effective_to > sqlc.arg(expires_at)::timestamptz)
-      AND (mp.sale_uncached_input_price IS NOT NULL OR mp.sale_price_ratio IS NOT NULL)
+      AND (mp.sale_uncached_input_price IS NOT NULL OR mp.sale_discount IS NOT NULL)
 ) AS has_successor;
 
 -- name: ListModelRuntimeProtocols :many

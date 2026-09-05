@@ -97,14 +97,6 @@ type channelOpsModelDTO struct {
 	HasPrice         bool                      `json:"has_price"`
 }
 
-type channelOpsRouteDTO struct {
-	ID         int64  `json:"id"`
-	Name       string `json:"name"`
-	Mode       string `json:"mode"`
-	Status     string `json:"status"`
-	PriceRatio string `json:"price_ratio"`
-}
-
 func (h *channelOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 	from, to, _, err := adminhttp.RangeWindow(r)
 	if err != nil {

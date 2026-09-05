@@ -35,7 +35,7 @@ func TestScaleCustomerPriceMultipliesEachRate(t *testing.T) {
 	}
 }
 
-func TestScaleCustomerPriceRatioOnePreservesValue(t *testing.T) {
+func TestScaleCustomerPriceDiscountOnePreservesValue(t *testing.T) {
 	scaled, err := ScaleCustomerPrice(defaultCustomerPriceSnapshot(), numeric(1, 0)) // 1.0
 	if err != nil {
 		t.Fatalf("ScaleCustomerPrice: %v", err)
@@ -45,15 +45,15 @@ func TestScaleCustomerPriceRatioOnePreservesValue(t *testing.T) {
 	assertScaledRate(t, "output", scaled.OutputPrice, big.NewRat(8, 1))
 }
 
-func TestScaleCustomerPriceRejectsNegativeRatio(t *testing.T) {
+func TestScaleCustomerPriceRejectsNegativeDiscount(t *testing.T) {
 	if _, err := ScaleCustomerPrice(defaultCustomerPriceSnapshot(), numeric(-1, 0)); err == nil {
-		t.Fatal("expected error for negative ratio")
+		t.Fatal("expected error for negative discount")
 	}
 }
 
-func TestScaleCustomerPriceRejectsInvalidRatio(t *testing.T) {
+func TestScaleCustomerPriceRejectsInvalidDiscount(t *testing.T) {
 	if _, err := ScaleCustomerPrice(defaultCustomerPriceSnapshot(), nullNumeric()); err == nil {
-		t.Fatal("expected error for NULL ratio")
+		t.Fatal("expected error for NULL discount")
 	}
 }
 
@@ -69,7 +69,7 @@ func TestResolveCustomerPricePrefersAbsoluteOverride(t *testing.T) {
 	assertScaledRate(t, "output", got.OutputPrice, big.NewRat(9, 1))
 }
 
-func TestResolveCustomerPriceFallsBackToRatio(t *testing.T) {
+func TestResolveCustomerPriceFallsBackToDiscount(t *testing.T) {
 	got, err := ResolveCustomerPrice(defaultCustomerPriceSnapshot(), numeric(15, -1), SaleOverride{})
 	if err != nil {
 		t.Fatalf("ResolveCustomerPrice: %v", err)
@@ -78,9 +78,9 @@ func TestResolveCustomerPriceFallsBackToRatio(t *testing.T) {
 	assertScaledRate(t, "output", got.OutputPrice, big.NewRat(12, 1))               // 8.0 × 1.5
 }
 
-func TestResolveCustomerPriceRejectsMissingRatioWithoutOverride(t *testing.T) {
+func TestResolveCustomerPriceRejectsMissingDiscountWithoutOverride(t *testing.T) {
 	if _, err := ResolveCustomerPrice(defaultCustomerPriceSnapshot(), nullNumeric(), SaleOverride{}); err == nil {
-		t.Fatal("expected error when neither absolute sale nor ratio is configured")
+		t.Fatal("expected error when neither absolute sale nor discount is configured")
 	}
 }
 

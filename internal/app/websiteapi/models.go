@@ -15,7 +15,7 @@ import (
 type ModelsService interface {
 	List(ctx context.Context) ([]publicmodels.Model, error)
 	ListDiscountHistory(ctx context.Context, window time.Duration) ([]publicmodels.DiscountHistory, error)
-	MinSaleRatio(ctx context.Context) (*float64, error)
+	MinSaleDiscount(ctx context.Context) (*float64, error)
 }
 
 // discountHistoryWindow 是折扣走势的回看窗口，与前端「近 48 小时」文案一致。
@@ -69,7 +69,7 @@ type modelDTO struct {
 	ReleaseDate         *string         `json:"release_date"`
 	Standard            priceGroupDTO   `json:"standard"`
 	Fast                *priceGroupDTO  `json:"fast"`
-	SaleRatio           *string         `json:"sale_ratio"`
+	SaleDiscount           *string         `json:"sale_discount"`
 	LongContext         *longContextDTO `json:"long_context"`
 	Capabilities        []capabilityDTO `json:"capabilities"`
 	LabHasLogo          bool            `json:"lab_has_logo"`
@@ -107,10 +107,10 @@ func (h *modelsHandler) list(w http.ResponseWriter, r *http.Request) {
 	}})
 }
 
-// discountPointDTO 是一个采样点；ratio 为 null 表示该时刻尚无生效价格，前端应断开折线。
+// discountPointDTO 是一个采样点；discount 为 null 表示该时刻尚无生效价格，前端应断开折线。
 type discountPointDTO struct {
 	At    string   `json:"at"`
-	Ratio *float64 `json:"ratio"`
+	Discount *float64 `json:"discount"`
 }
 
 type discountHistoryDTO struct {
@@ -140,7 +140,7 @@ func (h *modelsHandler) discountHistory(w http.ResponseWriter, r *http.Request) 
 	for _, item := range histories {
 		points := make([]discountPointDTO, 0, len(item.Points))
 		for _, p := range item.Points {
-			points = append(points, discountPointDTO{At: p.At.UTC().Format(time.RFC3339), Ratio: p.Ratio})
+			points = append(points, discountPointDTO{At: p.At.UTC().Format(time.RFC3339), Discount: p.Discount})
 		}
 		dtos = append(dtos, discountHistoryDTO{
 			ModelID: item.ModelID,
@@ -159,24 +159,24 @@ func (h *modelsHandler) discountHistory(w http.ResponseWriter, r *http.Request) 
 	}})
 }
 
-type minSaleRatioData struct {
-	// MinSaleRatio 是在售模型最低售价/牌价比（0.2 = 2 折）；无有效定价时为 null。
-	MinSaleRatio *float64 `json:"min_sale_ratio"`
+type minSaleDiscountData struct {
+	// MinSaleDiscount 是在售模型最低售价/牌价比（0.2 = 2 折）；无有效定价时为 null。
+	MinSaleDiscount *float64 `json:"min_sale_discount"`
 	GeneratedAt  string   `json:"generated_at"`
 }
 
-// minSaleRatio 返回目录里最低的当前折扣，供首页「X 折起」使用。
-func (h *modelsHandler) minSaleRatio(w http.ResponseWriter, r *http.Request) {
-	ratio, err := h.service.MinSaleRatio(r.Context())
+// minSaleDiscount 返回目录里最低的当前折扣，供首页「X 折起」使用。
+func (h *modelsHandler) minSaleDiscount(w http.ResponseWriter, r *http.Request) {
+	discount, err := h.service.MinSaleDiscount(r.Context())
 	if err != nil {
-		h.logger.Error("website min sale ratio failed", zap.Error(err))
-		_ = httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "failed to load min sale ratio")
+		h.logger.Error("website min sale discount failed", zap.Error(err))
+		_ = httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "failed to load min sale discount")
 		return
 	}
 
 	w.Header().Set("Cache-Control", modelsCacheControl)
-	_ = httpx.WriteJSON(w, http.StatusOK, map[string]minSaleRatioData{"data": {
-		MinSaleRatio: ratio,
+	_ = httpx.WriteJSON(w, http.StatusOK, map[string]minSaleDiscountData{"data": {
+		MinSaleDiscount: discount,
 		GeneratedAt:  time.Now().UTC().Format(time.RFC3339),
 	}})
 }
@@ -193,7 +193,7 @@ func toModelDTO(m publicmodels.Model) modelDTO {
 		ContextWindowTokens: m.ContextWindowTokens,
 		MaxOutputTokens:     m.MaxOutputTokens,
 		Standard:            toPriceGroupDTO(m.Standard),
-		SaleRatio:           m.SaleRatio,
+		SaleDiscount:           m.SaleDiscount,
 		LabHasLogo:          m.LabHasLogo,
 		PriceEffectiveFrom:  m.PriceEffectiveFrom.UTC().Format(time.RFC3339),
 	}

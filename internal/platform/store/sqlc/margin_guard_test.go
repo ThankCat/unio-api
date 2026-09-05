@@ -134,7 +134,7 @@ func TestMarginGuardRejectsAbsoluteSalePriceBelowCost(t *testing.T) {
 
 // 模型售价倍率被压到成本线以下必须被拒。
 // 倍率是倍率路径下售价公式的一半，漏掉它就等于给亏本配置留了一条后门。
-func TestMarginGuardRejectsModelSaleRatioBelowCost(t *testing.T) {
+func TestMarginGuardRejectsModelSaleDiscountBelowCost(t *testing.T) {
 	ctx, tx, queries, cleanup := newModelChannelTestTx(t)
 	defer cleanup()
 
@@ -149,7 +149,7 @@ func TestMarginGuardRejectsModelSaleRatioBelowCost(t *testing.T) {
 
 	if _, err := tx.Exec(ctx, `
 		UPDATE model_prices
-		SET sale_price_ratio = 0.0000000001
+		SET sale_discount = 0.0000000001
 		WHERE model_id = $1 AND status = 'enabled'`, modelID); err != nil {
 		t.Fatalf("stage below-cost model sale ratio: %v", err)
 	}

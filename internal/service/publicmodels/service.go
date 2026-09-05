@@ -5,7 +5,7 @@
 // 独立 DTO 与缓存策略，本包只负责把数据库事实解析成领域对象。
 //
 // 售价解析复用计费系统的 billing.ResolveCustomerPrice（绝对售价整组优先，否则基准价 ×
-// 行级倍率）——目录标价与实际结算价永远同源，不存在第二套口径。
+// 行级折扣）——目录标价与实际结算价永远同源，不存在第二套口径。
 package publicmodels
 
 import (
@@ -79,8 +79,8 @@ type Model struct {
 	Standard PriceGroup
 	// Fast 为 nil 表示该模型未配置 priority 档。
 	Fast *PriceGroup
-	// SaleRatio 仅在倍率定价路径下非空（如 "0.2"）；绝对售价路径由前端按 Sale/List 自行算比。
-	SaleRatio *string
+	// SaleDiscount 仅在折扣定价路径下非空（如 "0.2"）；绝对售价路径由前端按 Sale/List 自行算比。
+	SaleDiscount *string
 
 	LongContext  *LongContext
 	Capabilities []Capability
@@ -132,13 +132,13 @@ func (s *Service) List(ctx context.Context) ([]Model, error) {
 	return out, nil
 }
 
-// MinSaleRatio 返回在售模型里最低的售价/牌价比（0.2 = 2 折）。无有效定价时为 nil。
-func (s *Service) MinSaleRatio(ctx context.Context) (*float64, error) {
+// MinSaleDiscount 返回在售模型里最低的售价/牌价比（0.2 = 2 折）。无有效定价时为 nil。
+func (s *Service) MinSaleDiscount(ctx context.Context) (*float64, error) {
 	models, err := s.List(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return minSaleRatio(models), nil
+	return minSaleDiscount(models), nil
 }
 
 func buildModel(row sqlc.ListPublicModelsRow, caps []Capability) (Model, error) {
@@ -162,7 +162,7 @@ func buildModel(row sqlc.ListPublicModelsRow, caps []Capability) (Model, error) 
 		OutputPrice:                row.SaleOutputPrice,
 		ReasoningOutputPrice:       row.SaleReasoningOutputPrice,
 	}
-	standardSale, err := billing.ResolveCustomerPrice(standardList, row.SalePriceRatio, standardOverride)
+	standardSale, err := billing.ResolveCustomerPrice(standardList, row.SaleDiscount, standardOverride)
 	if err != nil {
 		return Model{}, err
 	}
@@ -187,9 +187,9 @@ func buildModel(row sqlc.ListPublicModelsRow, caps []Capability) (Model, error) 
 		PriceEffectiveFrom: row.PriceEffectiveFrom.Time,
 	}
 
-	// 倍率路径才对外给出 ratio：绝对售价路径下倍率不参与定价，给出去只会误导。
+	// 折扣路径才对外给出折扣系数：绝对售价路径下折扣不参与定价，给出去只会误导。
 	if !standardOverride.Configured() {
-		model.SaleRatio = opsutil.NumericStringPtr(row.SalePriceRatio)
+		model.SaleDiscount = opsutil.NumericStringPtr(row.SaleDiscount)
 	}
 
 	if row.LongContextEnabled {
@@ -221,7 +221,7 @@ func buildModel(row sqlc.ListPublicModelsRow, caps []Capability) (Model, error) 
 			OutputPrice:                row.FastSaleOutputPrice,
 			ReasoningOutputPrice:       row.FastSaleReasoningOutputPrice,
 		}
-		fastSale, err := billing.ResolveCustomerPrice(fastList, row.SalePriceRatio, fastOverride)
+		fastSale, err := billing.ResolveCustomerPrice(fastList, row.SaleDiscount, fastOverride)
 		if err != nil {
 			return Model{}, err
 		}
@@ -262,12 +262,12 @@ func datePtr(v pgtype.Date) *time.Time {
 	return &out
 }
 
-// minSaleRatio 取各模型折扣比的最小值。口径与 website 前端 modelDiscountRatio 一致：
-// 倍率路径用 SaleRatio；绝对售价路径用 售价/牌价（uncached input）。
-func minSaleRatio(models []Model) *float64 {
+// minSaleDiscount 取各模型折扣比的最小值。口径与 website 前端 modelDiscountRatio 一致：
+// 折扣路径用 SaleDiscount；绝对售价路径用 售价/牌价（uncached input）。
+func minSaleDiscount(models []Model) *float64 {
 	var min *float64
 	for _, m := range models {
-		ratio, ok := modelSaleRatio(m)
+		ratio, ok := modelSaleDiscount(m)
 		if !ok {
 			continue
 		}
@@ -279,9 +279,9 @@ func minSaleRatio(models []Model) *float64 {
 	return min
 }
 
-func modelSaleRatio(m Model) (float64, bool) {
-	if m.SaleRatio != nil {
-		ratio, err := strconv.ParseFloat(*m.SaleRatio, 64)
+func modelSaleDiscount(m Model) (float64, bool) {
+	if m.SaleDiscount != nil {
+		ratio, err := strconv.ParseFloat(*m.SaleDiscount, 64)
 		if err == nil && ratio > 0 {
 			return ratio, true
 		}

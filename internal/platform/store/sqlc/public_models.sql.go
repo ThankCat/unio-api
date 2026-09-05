@@ -76,7 +76,7 @@ WITH windows AS (
         END)::timestamptz AS effective_until,
         mp.uncached_input_price,
         mp.output_price,
-        mp.sale_price_ratio,
+        mp.sale_discount,
         mp.sale_uncached_input_price,
         mp.sale_output_price
     FROM model_prices mp
@@ -91,7 +91,7 @@ SELECT
     effective_until,
     uncached_input_price,
     output_price,
-    sale_price_ratio,
+    sale_discount,
     sale_uncached_input_price,
     sale_output_price
 FROM windows
@@ -108,7 +108,7 @@ type ListPublicModelPriceWindowsRow struct {
 	EffectiveUntil         pgtype.Timestamptz
 	UncachedInputPrice     pgtype.Numeric
 	OutputPrice            pgtype.Numeric
-	SalePriceRatio         pgtype.Numeric
+	SaleDiscount           pgtype.Numeric
 	SaleUncachedInputPrice pgtype.Numeric
 	SaleOutputPrice        pgtype.Numeric
 }
@@ -139,7 +139,7 @@ func (q *Queries) ListPublicModelPriceWindows(ctx context.Context, since pgtype.
 			&i.EffectiveUntil,
 			&i.UncachedInputPrice,
 			&i.OutputPrice,
-			&i.SalePriceRatio,
+			&i.SaleDiscount,
 			&i.SaleUncachedInputPrice,
 			&i.SaleOutputPrice,
 		); err != nil {
@@ -174,7 +174,7 @@ SELECT
     mp.cache_creation_30m_input_price,
     mp.output_price,
     mp.reasoning_output_price,
-    mp.sale_price_ratio,
+    mp.sale_discount,
     mp.sale_uncached_input_price,
     mp.sale_cache_read_input_price,
     mp.sale_cache_creation_5m_input_price,
@@ -239,7 +239,7 @@ type ListPublicModelsRow struct {
 	CacheCreation30mInputPrice         pgtype.Numeric
 	OutputPrice                        pgtype.Numeric
 	ReasoningOutputPrice               pgtype.Numeric
-	SalePriceRatio                     pgtype.Numeric
+	SaleDiscount                       pgtype.Numeric
 	SaleUncachedInputPrice             pgtype.Numeric
 	SaleCacheReadInputPrice            pgtype.Numeric
 	SaleCacheCreation5mInputPrice      pgtype.Numeric
@@ -306,7 +306,7 @@ func (q *Queries) ListPublicModels(ctx context.Context) ([]ListPublicModelsRow, 
 			&i.CacheCreation30mInputPrice,
 			&i.OutputPrice,
 			&i.ReasoningOutputPrice,
-			&i.SalePriceRatio,
+			&i.SaleDiscount,
 			&i.SaleUncachedInputPrice,
 			&i.SaleCacheReadInputPrice,
 			&i.SaleCacheCreation5mInputPrice,

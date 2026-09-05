@@ -49,7 +49,7 @@ func NewRouter(deps Deps) http.Handler {
 		mh := &modelsHandler{service: deps.Models, logger: deps.Logger}
 		r.Get("/models", mh.list)
 		r.Get("/models/discount-history", mh.discountHistory)
-		r.Get("/models/min-sale-ratio", mh.minSaleRatio)
+		r.Get("/models/min-sale-discount", mh.minSaleDiscount)
 		if deps.Stats != nil {
 			sh := &statsHandler{service: deps.Stats, logger: deps.Logger}
 			r.Get("/stats/min-first-token-ms", sh.minFirstTokenMs)

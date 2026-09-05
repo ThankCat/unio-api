@@ -180,7 +180,7 @@ INSERT INTO model_prices (
     cache_creation_30m_input_price,
     output_price,
     reasoning_output_price,
-    sale_price_ratio,
+    sale_discount,
     sale_uncached_input_price,
     sale_cache_read_input_price,
     sale_cache_creation_5m_input_price,
@@ -207,7 +207,7 @@ SELECT
     sqlc.arg(cache_creation_30m_input_price),
     sqlc.arg(output_price),
     sqlc.arg(reasoning_output_price),
-    sqlc.narg(sale_price_ratio),
+    sqlc.narg(sale_discount),
     sqlc.narg(sale_uncached_input_price),
     sqlc.narg(sale_cache_read_input_price),
     sqlc.narg(sale_cache_creation_5m_input_price),
@@ -309,8 +309,8 @@ SELECT
     mp.cache_creation_30m_input_price,
     mp.output_price,
     mp.reasoning_output_price,
-    -- 售价两种表达：倍率（乘在基准价上）与绝对售价（整组给齐时优先）。
-    mp.sale_price_ratio,
+    -- 售价两种表达：折扣（乘在基准价上）与绝对售价（整组给齐时优先）。
+    mp.sale_discount,
     mp.sale_uncached_input_price,
     mp.sale_cache_read_input_price,
     mp.sale_cache_creation_5m_input_price,
@@ -737,8 +737,8 @@ SELECT
     base.cache_creation_30m_input_price AS base_cache_creation_30m_input_price,
     base.output_price AS base_output_price,
     base.reasoning_output_price AS base_reasoning_output_price,
-    -- 售价：绝对售价整组非空时整组覆盖，否则基准价 × sale_price_ratio。两套实体可共存，不能混算。
-    base.sale_price_ratio AS base_sale_price_ratio,
+    -- 售价：绝对售价整组非空时整组覆盖，否则基准价 × 售价折扣 sale_discount。两套实体可共存，不能混算。
+    base.sale_discount AS base_sale_discount,
     base.sale_uncached_input_price AS base_sale_uncached_input_price,
     base.sale_cache_read_input_price AS base_sale_cache_read_input_price,
     base.sale_cache_creation_5m_input_price AS base_sale_cache_creation_5m_input_price,
@@ -773,7 +773,7 @@ LEFT JOIN LATERAL (
         mp.cache_creation_5m_input_price, mp.cache_creation_1h_input_price,
         mp.cache_creation_30m_input_price,
         mp.output_price, mp.reasoning_output_price,
-        mp.sale_price_ratio,
+        mp.sale_discount,
         mp.sale_uncached_input_price,
         mp.sale_cache_read_input_price,
         mp.sale_cache_creation_5m_input_price,

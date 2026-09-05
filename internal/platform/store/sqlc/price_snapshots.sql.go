@@ -25,7 +25,7 @@ INSERT INTO price_snapshots (
     output_price,
     reasoning_output_price,
     formula_version,
-    price_ratio,
+    sale_discount,
     long_context_applied,
     service_tier,
     model_price_service_tier_id
@@ -48,7 +48,7 @@ VALUES (
     $15,
     $16
 )
-RETURNING id, request_record_id, price_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_creation_5m_input_price, cache_creation_1h_input_price, output_price, reasoning_output_price, formula_version, created_at, price_ratio, cache_creation_30m_input_price, long_context_applied, service_tier, model_price_service_tier_id
+RETURNING id, request_record_id, price_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_creation_5m_input_price, cache_creation_1h_input_price, output_price, reasoning_output_price, formula_version, created_at, sale_discount, cache_creation_30m_input_price, long_context_applied, service_tier, model_price_service_tier_id
 `
 
 type CreatePriceSnapshotParams struct {
@@ -64,7 +64,7 @@ type CreatePriceSnapshotParams struct {
 	OutputPrice                pgtype.Numeric
 	ReasoningOutputPrice       pgtype.Numeric
 	FormulaVersion             string
-	PriceRatio                 pgtype.Numeric
+	SaleDiscount               pgtype.Numeric
 	LongContextApplied         bool
 	ServiceTier                pgtype.Text
 	ModelPriceServiceTierID    pgtype.Int8
@@ -85,7 +85,7 @@ func (q *Queries) CreatePriceSnapshot(ctx context.Context, arg CreatePriceSnapsh
 		arg.OutputPrice,
 		arg.ReasoningOutputPrice,
 		arg.FormulaVersion,
-		arg.PriceRatio,
+		arg.SaleDiscount,
 		arg.LongContextApplied,
 		arg.ServiceTier,
 		arg.ModelPriceServiceTierID,
@@ -105,7 +105,7 @@ func (q *Queries) CreatePriceSnapshot(ctx context.Context, arg CreatePriceSnapsh
 		&i.ReasoningOutputPrice,
 		&i.FormulaVersion,
 		&i.CreatedAt,
-		&i.PriceRatio,
+		&i.SaleDiscount,
 		&i.CacheCreation30mInputPrice,
 		&i.LongContextApplied,
 		&i.ServiceTier,
@@ -115,7 +115,7 @@ func (q *Queries) CreatePriceSnapshot(ctx context.Context, arg CreatePriceSnapsh
 }
 
 const getPriceSnapshotByRequest = `-- name: GetPriceSnapshotByRequest :one
-SELECT id, request_record_id, price_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_creation_5m_input_price, cache_creation_1h_input_price, output_price, reasoning_output_price, formula_version, created_at, price_ratio, cache_creation_30m_input_price, long_context_applied, service_tier, model_price_service_tier_id
+SELECT id, request_record_id, price_id, currency, pricing_unit, uncached_input_price, cache_read_input_price, cache_creation_5m_input_price, cache_creation_1h_input_price, output_price, reasoning_output_price, formula_version, created_at, sale_discount, cache_creation_30m_input_price, long_context_applied, service_tier, model_price_service_tier_id
 FROM price_snapshots
 WHERE request_record_id = $1
 `
@@ -138,7 +138,7 @@ func (q *Queries) GetPriceSnapshotByRequest(ctx context.Context, requestRecordID
 		&i.ReasoningOutputPrice,
 		&i.FormulaVersion,
 		&i.CreatedAt,
-		&i.PriceRatio,
+		&i.SaleDiscount,
 		&i.CacheCreation30mInputPrice,
 		&i.LongContextApplied,
 		&i.ServiceTier,

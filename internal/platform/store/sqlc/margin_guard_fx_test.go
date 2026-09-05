@@ -177,7 +177,7 @@ func TestMarginGuardUsesLatestRate(t *testing.T) {
 }
 
 // 倍率路径跨币种（D2 修订，000059）：CNY provider 的倍率成本按原币记账，
-// 守卫分支 B 比较 sale_ratio × rate ≥ multiplier × factor。
+// 守卫分支 B 比较 sale_discount × rate ≥ multiplier × factor。
 func TestMarginGuardRatioPathCrossCurrency(t *testing.T) {
 	ctx, tx, queries, cleanup := newModelChannelTestTx(t)
 	defer cleanup()
@@ -190,7 +190,7 @@ func TestMarginGuardRatioPathCrossCurrency(t *testing.T) {
 	insertExchangeRateForTest(t, ctx, tx, "CNY", "7", time.Now().UTC())
 	// 基准价 100/400 USD；售价倍率 0.04 → 折 CNY 侧 0.28；倍率成本 0.2 × 1.0 = 0.2 CNY/单位基准 → 盈利。
 	createModelPriceForTest(t, ctx, queries, modelID, time.Now().UTC())
-	if _, err := tx.Exec(ctx, `UPDATE model_prices SET sale_price_ratio = 0.04 WHERE model_id = $1`, modelID); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE model_prices SET sale_discount = 0.04 WHERE model_id = $1`, modelID); err != nil {
 		t.Fatalf("set sale ratio: %v", err)
 	}
 	if _, err := tx.Exec(ctx, `
@@ -204,7 +204,7 @@ func TestMarginGuardRatioPathCrossCurrency(t *testing.T) {
 	}
 
 	// 售价倍率降到 0.02：0.02 × 7 = 0.14 < 0.2 → 分支 B 违规。
-	_, err := tx.Exec(ctx, `UPDATE model_prices SET sale_price_ratio = 0.02 WHERE model_id = $1`, modelID)
+	_, err := tx.Exec(ctx, `UPDATE model_prices SET sale_discount = 0.02 WHERE model_id = $1`, modelID)
 	if err == nil {
 		_, err = tx.Exec(ctx, "SET CONSTRAINTS ALL IMMEDIATE")
 	}

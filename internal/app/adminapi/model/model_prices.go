@@ -15,7 +15,7 @@ import (
 )
 
 // ModelPriceService 定义 adminapi 操作模型定价（model_prices）所需的最小能力（DEC-026）。
-// 创建必须带 intent（base / sale_ratio / sale_absolute）；草稿行可以只有基准价。
+// 创建必须带 intent（base / sale_discount / sale_absolute）；草稿行可以只有基准价。
 type ModelPriceService interface {
 	List(ctx context.Context, modelID int64) ([]modelprice.ModelPrice, error)
 	Create(ctx context.Context, in modelprice.CreateInput) (modelprice.ModelPrice, error)
@@ -39,7 +39,7 @@ type modelPriceDTO struct {
 	CacheCreation30mInputPrice  *string                `json:"cache_creation_30m_input_price"`
 	OutputPrice                 string                 `json:"output_price"`
 	ReasoningOutputPrice        *string                `json:"reasoning_output_price"`
-	SalePriceRatio              *string                `json:"sale_price_ratio"`
+	SaleDiscount              *string                `json:"sale_discount"`
 	SalePrices                  *salePriceVectorDTO    `json:"sale_prices"`
 	SaleConfigured              bool                   `json:"sale_configured"`
 	LongContextEnabled          bool                   `json:"long_context_enabled"`
@@ -58,7 +58,7 @@ type modelPriceDTO struct {
 	Warnings []string `json:"warnings,omitempty"`
 }
 
-// salePriceVectorDTO 是一组对外绝对售价：整组给齐或整组留空，非空时优先于售价倍率。
+// salePriceVectorDTO 是一组对外绝对售价：整组给齐或整组留空，非空时优先于售价折扣。
 type salePriceVectorDTO struct {
 	UncachedInputPrice         string  `json:"uncached_input_price"`
 	CacheReadInputPrice        *string `json:"cache_read_input_price"`
@@ -110,7 +110,7 @@ type fastPriceRequest struct {
 	ReferenceCheckedAt         *string             `json:"reference_checked_at"`
 }
 
-// createModelPriceRequest 必须带 intent：base / sale_ratio / sale_absolute。
+// createModelPriceRequest 必须带 intent：base / sale_discount / sale_absolute。
 // 没有 intent 的旧请求返回 400，避免静默按「整行手填」走。
 type createModelPriceRequest struct {
 	Intent                      string              `json:"intent"`
@@ -123,7 +123,7 @@ type createModelPriceRequest struct {
 	CacheCreation30mInputPrice  *string             `json:"cache_creation_30m_input_price"`
 	OutputPrice                 string              `json:"output_price"`
 	ReasoningOutputPrice        *string             `json:"reasoning_output_price"`
-	SalePriceRatio              *string             `json:"sale_price_ratio"`
+	SaleDiscount              *string             `json:"sale_discount"`
 	SalePrices                  *salePriceVectorDTO `json:"sale_prices"`
 	LongContextEnabled          bool                `json:"long_context_enabled"`
 	LongContextThreshold        *int64              `json:"long_context_threshold"`
@@ -214,7 +214,7 @@ func (h *modelPricesHandler) create(w http.ResponseWriter, r *http.Request) {
 		CacheCreation30mInputPrice:  req.CacheCreation30mInputPrice,
 		OutputPrice:                 req.OutputPrice,
 		ReasoningOutputPrice:        req.ReasoningOutputPrice,
-		SalePriceRatio:              req.SalePriceRatio,
+		SaleDiscount:              req.SaleDiscount,
 		SalePrices:                  saleVectorInput(req.SalePrices),
 		LongContextEnabled:          req.LongContextEnabled,
 		LongContextThreshold:        req.LongContextThreshold,
@@ -289,7 +289,7 @@ func toModelPriceDTO(p modelprice.ModelPrice) modelPriceDTO {
 		CacheCreation30mInputPrice:  p.CacheCreation30mInputPrice,
 		OutputPrice:                 p.OutputPrice,
 		ReasoningOutputPrice:        p.ReasoningOutputPrice,
-		SalePriceRatio:              p.SalePriceRatio,
+		SaleDiscount:              p.SaleDiscount,
 		SalePrices:                  saleVectorDTO(p.SalePrices),
 		SaleConfigured:              p.SaleConfigured,
 		LongContextEnabled:          p.LongContextEnabled,

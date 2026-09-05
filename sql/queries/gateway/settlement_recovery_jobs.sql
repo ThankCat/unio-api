@@ -65,7 +65,7 @@ INSERT INTO settlement_recovery_jobs (
     output_price,
     reasoning_output_price,
     formula_version,
-    price_ratio,
+    sale_discount,
     long_context_enabled,
     long_context_threshold,
     long_context_input_multiplier,
@@ -139,7 +139,7 @@ SELECT
            sqlc.arg(output_price),
            sqlc.arg(reasoning_output_price),
            sqlc.arg(formula_version),
-           sqlc.arg(price_ratio),
+           sqlc.arg(sale_discount),
            sqlc.arg(long_context_enabled),
            sqlc.narg(long_context_threshold),
            sqlc.narg(long_context_input_multiplier),
@@ -212,7 +212,7 @@ WHERE settlement_recovery_jobs.user_id = EXCLUDED.user_id
   AND settlement_recovery_jobs.output_price = EXCLUDED.output_price
   AND settlement_recovery_jobs.reasoning_output_price IS NOT DISTINCT FROM EXCLUDED.reasoning_output_price
   AND settlement_recovery_jobs.formula_version = EXCLUDED.formula_version
-  AND settlement_recovery_jobs.price_ratio IS NOT DISTINCT FROM EXCLUDED.price_ratio
+  AND settlement_recovery_jobs.sale_discount IS NOT DISTINCT FROM EXCLUDED.sale_discount
   AND settlement_recovery_jobs.long_context_enabled = EXCLUDED.long_context_enabled
   AND settlement_recovery_jobs.long_context_threshold IS NOT DISTINCT FROM EXCLUDED.long_context_threshold
   AND settlement_recovery_jobs.long_context_input_multiplier IS NOT DISTINCT FROM EXCLUDED.long_context_input_multiplier

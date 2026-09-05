@@ -145,7 +145,7 @@ type ChatSettlementParams struct {
 	CostBaseModelPriceID    int64
 	ChannelCostMultiplierID int64
 	ProviderRechargeRateID  int64
-	// SalePrice 是客户最终售价快照：模型绝对售价，或模型基准价 × 该模型的售价倍率（DEC-026）。
+	// SalePrice 是客户最终售价快照：模型绝对售价，或模型基准价 × 该模型的售价折扣（DEC-026）。
 	// 路由时算好并透传到结算；同一请求所有候选共享、不随命中哪条渠道变。
 	// 此处为短上下文牌价；若 LongContextPolicy 触发则结算前再缩放。
 	SalePrice billing.CustomerPriceSnapshot
@@ -154,10 +154,10 @@ type ChatSettlementParams struct {
 	FastModelPriceServiceTierID   int64
 	FastChannelPriceServiceTierID int64
 	FastSalePrice                 billing.CustomerPriceSnapshot
-	// PriceRatio 是算 SalePrice 用的模型售价倍率（model_prices.sale_price_ratio），随 SalePrice
+	// SaleDiscount 是算 SalePrice 用的模型售价折扣（model_prices.sale_discount），随 SalePrice
 	// 一起快照进 price_snapshots，供请求详情/列表恒显示结算当时的倍率与倒推基准价（不随后续改倍率漂移）。
 	// 走绝对售价路径时为空——那条路径下的售价不是算出来的，没有倍率可记。
-	PriceRatio pgtype.Numeric
+	SaleDiscount pgtype.Numeric
 	// LongContextPolicy 来自售价所用 model_prices 窗口；结算按真实 usage 输入合计决定是否放大售价与成本。
 	LongContextPolicy billing.LongContextPolicy
 	Facts             adapter.ResponseFacts
@@ -1014,7 +1014,7 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		OutputPrice:                salePrice.OutputPrice,
 		ReasoningOutputPrice:       salePrice.ReasoningOutputPrice,
 		FormulaVersion:             billing.FormulaVersionV1,
-		PriceRatio:                 params.PriceRatio,
+		SaleDiscount:                 params.SaleDiscount,
 		LongContextApplied:         longContextApplied,
 		ServiceTier:                pgtype.Text{String: string(tierSelection.settled), Valid: tierSelection.settled != ""},
 		ModelPriceServiceTierID:    nullableInt8(tierSelection.modelPriceServiceTierID),
@@ -1570,13 +1570,17 @@ func (s *ChatSettlementService) releaseDeadSettlementReservation(ctx context.Con
 // FinalizeOrphanReservation 收口一条「进程崩溃遗留的孤儿预授权」：请求永久停留 running、冻结余额永不释放。
 //
 // 这类残留发生在 gateway 在 PreAuthorize 之后、settlement/补偿任务建立之前崩溃：既没有正常结算路径，
-// 也没有 settlement_recovery_job 兜底。running attempt 只有在 worker 已确认其 permit 失效后才会传入收口。
+// 也没有 settlement_recovery_job 兜底。交付已开始的流式请求同样在收口范围内（2026-09-05：热重启/崩溃
+// 杀死在途流后，请求停在 running + delivery in_progress，此前无人回收）——上游 usage 事实已随进程丢失，
+// 不可能再结算，处置与「已 emit 帧但无可用输出」一致：不扣费、释放冻结、记敞口。
+// running attempt 只有在 worker 已确认其 permit 失效后才会传入收口（进程死亡的跨进程证明；正常长流的
+// permit 每 10s 续期，结算窗口由「先建补偿任务再内联结算」+ 行锁内重查兜住）。
 // 本方法在单事务内：
-//  1. 锁请求记录，仅当其仍为 running 才继续（幂等闸门：已被其他路径收口则直接返回）；
+//  1. 锁请求记录，仅当其仍为 running 且交付未完成才继续（幂等闸门：已被其他路径收口则直接返回）；
 //  2. 重新确认没有 recovery job，且 running attempt 集合仍与 worker 的死亡证明完全一致；
 //  3. 把遗留 attempt 收口为平台失败；
 //  4. 释放冻结余额（用户不扣费），并记一条 risk_exposure 异常作为「可能已产生上游成本」的上界敞口；
-//  5. 把请求原子推进到 failed。
+//  5. 交付曾开始的把 delivery 推进到 interrupted，并把请求原子推进到 failed。
 //
 // 以「请求仍为 running」为闸门，崩溃后下个 tick 安全重放；多 worker 并发由请求记录行锁串行化。
 func (s *ChatSettlementService) FinalizeOrphanReservation(
@@ -1615,10 +1619,12 @@ func (s *ChatSettlementService) FinalizeOrphanReservation(
 	}
 
 	// 幂等闸门：只有仍停留在 running 的请求才需要收口；其余终态说明已被其他路径处理。
+	// 交付 completed 意味着 settlement 已收口（capture 路径拥有该预授权），绝不在此释放；
+	// not_started / in_progress / interrupted 都是「进程死后无人收口」的合法孤儿形态。
 	if requestlog.RequestStatus(lockedRequest.Status) != requestlog.RequestStatusRunning {
 		return false, nil
 	}
-	if requestlog.DeliveryStatus(lockedRequest.DeliveryStatus) != requestlog.DeliveryStatusNotStarted {
+	if requestlog.DeliveryStatus(lockedRequest.DeliveryStatus) == requestlog.DeliveryStatusCompleted {
 		return false, nil
 	}
 
@@ -1730,6 +1736,17 @@ func (s *ChatSettlementService) FinalizeOrphanReservation(
 	}
 
 	txRequestLog := requestlog.NewStore(txQueries)
+	// 交付曾开始（客户收到过前导/内容帧）的孤儿把 delivery 一并收口为 interrupted，
+	// 避免请求 failed 而交付栏永远显示「进行中」的矛盾展示。
+	if requestlog.DeliveryStatus(lockedRequest.DeliveryStatus) == requestlog.DeliveryStatusInProgress {
+		if _, err := txRequestLog.MarkRequestDeliveryInterrupted(ctx, reservation.RequestRecordID); err != nil {
+			return false, failure.Wrap(
+				failure.CodeGatewayRequestOrphanReclaimed,
+				err,
+				failure.WithMessage("mark delivery interrupted for orphan reservation finalize"),
+			)
+		}
+	}
 	_, err = txRequestLog.MarkRequestFailed(ctx, requestlog.MarkRequestFailedParams{
 		ID:                  reservation.RequestRecordID,
 		ErrorCode:           string(failure.CodeGatewayRequestOrphanReclaimed),

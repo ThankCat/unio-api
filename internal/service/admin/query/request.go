@@ -142,7 +142,7 @@ type RequestListItem struct {
 	APIKeyName   *string
 	APIKeyPrefix *string
 
-	SalePriceRatio      *string
+	SaleDiscount      *string
 	FinalChannelName    *string
 	ChannelChain        string
 	ScoringAttemptID    *int64
@@ -232,7 +232,7 @@ type RequestDetail struct {
 	// 费用明细快照：平台成本单价+金额 / 用户售价单价 / 线路倍率+策略（供详情费用明细「计算过程」）。
 	CostSnapshot     *CostSnapshotView
 	PriceSnapshot    *PriceSnapshotView
-	SalePriceRatio   *string
+	SaleDiscount   *string
 	Attempts         []Attempt
 	Usage            *Usage
 	LedgerEntries    []LedgerEntry
@@ -462,9 +462,9 @@ func (s *RequestService) Get(ctx context.Context, requestID string, includeInter
 	case err == nil:
 		v := toPriceSnapshotView(priceRow)
 		detail.PriceSnapshot = &v
-		// 售价倍率取结算当时的快照（供费用汇总倒推基准价 = 售价 ÷ 倍率）。
+		// 售价折扣取结算当时的快照（供费用汇总倒推基准价 = 售价 ÷ 折扣）。
 		// 模型配了绝对售价时快照里没有倍率，展示端回落「—」：那条路径下售价不是算出来的。
-		detail.SalePriceRatio = opsutil.NumericStringPtr(priceRow.PriceRatio)
+		detail.SaleDiscount = opsutil.NumericStringPtr(priceRow.SaleDiscount)
 	case errors.Is(err, pgx.ErrNoRows):
 	default:
 		return RequestDetail{}, storeFailed(err, "get price snapshot")
@@ -577,7 +577,7 @@ func toRequestListItem(r sqlc.ListRequestRecordsPageRow) RequestListItem {
 		APIKeyName:   textPtr(r.ApiKeyName),
 		APIKeyPrefix: textPtr(r.ApiKeyPrefix),
 
-		SalePriceRatio:      opsutil.NumericStringPtr(r.SalePriceRatio),
+		SaleDiscount:      opsutil.NumericStringPtr(r.SaleDiscount),
 		FinalChannelName:    textPtr(r.FinalChannelName),
 		ChannelChain:        r.ChannelChain,
 		ScoringDimensions:   r.ScoringDimensions,

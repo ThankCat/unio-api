@@ -348,7 +348,7 @@ var ErrNoRuntimeSupply = fmt.Errorf("model has no usable channel")
 // ErrNoBasePrice 表示模型没有生效基准价，不能启用。
 var ErrNoBasePrice = fmt.Errorf("model has no effective base price")
 
-// ErrNoSalePrice 表示模型有基准价但没有倍率或绝对售价，不能启用。
+// ErrNoSalePrice 表示模型有基准价但没有折扣或绝对售价，不能启用。
 var ErrNoSalePrice = fmt.Errorf("model has no resolvable sale price")
 
 func affectedFromLosingConfigured(rows []sqlc.ListModelsLosingConfiguredSupplyRow) []AffectedModel {

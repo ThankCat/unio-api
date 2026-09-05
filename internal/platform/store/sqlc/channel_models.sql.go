@@ -18,7 +18,7 @@ SELECT
     m.max_output_tokens AS model_max_output_tokens,
     p.id AS provider_id,
     p.slug AS provider_slug,
-    -- 倍率路径成本按 provider 结算币种记账（D2 修订）：基准价数值 × 倍率 = 原币金额，
+    -- 成本倍率路径按 provider 结算币种记账（D2 修订）：基准价数值 × 成本倍率 = 原币金额，
     -- 比较/报表时按当日汇率折算；充值倍率只承载「名义额度 → 原币支出」的折价，不再folding汇率。
     p.currency AS provider_currency,
     c.adapter_key AS adapter_key,
@@ -70,10 +70,10 @@ SELECT
     fast_base.sale_output_price AS fast_sale_output_price,
     fast_base.sale_reasoning_output_price AS fast_sale_reasoning_output_price,
     -- 售价的两种表达都挂在模型自己的价格行上，是两套独立实体：绝对售价整组非空时
-    -- Standard 与 Fast 都只走绝对售价；否则 Go 侧回退 base × sale_price_ratio。
+    -- Standard 与 Fast 都只走绝对售价；否则 Go 侧回退 base × 售价折扣 sale_discount。
     -- 两者都空则该行不可售，候选会被排除。Fast 与 Standard 必须走同一套实体，不能混算。
-    -- 倍率不分档，故这里只带一列。
-    base.sale_price_ratio,
+    -- 售价折扣不分档，故这里只带一列。
+    base.sale_discount,
     base.sale_uncached_input_price,
     base.sale_cache_read_input_price,
     base.sale_cache_creation_5m_input_price,
@@ -116,13 +116,13 @@ JOIN providers p ON p.id = c.provider_id
 LEFT JOIN proxies cpx ON cpx.id = c.proxy_id AND cpx.status = 'enabled'
 JOIN LATERAL (
     -- base: 模型当前生效的基准价（DEC-026/DEC-031，售价与成本的唯一基数）。
-    -- 客户售价 = base × 模型倍率 sale_price_ratio；渠道真实成本（倍率路径）= base × 价格倍率 × 充值倍率。
+    -- 客户售价 = base × 售价折扣 sale_discount；渠道真实成本（倍率路径）= base × 成本倍率 × 充值倍率。
     SELECT mp.id, mp.currency, mp.pricing_unit,
         mp.uncached_input_price, mp.cache_read_input_price,
         mp.cache_creation_5m_input_price, mp.cache_creation_1h_input_price,
         mp.cache_creation_30m_input_price,
         mp.output_price, mp.reasoning_output_price,
-        mp.sale_price_ratio,
+        mp.sale_discount,
         mp.sale_uncached_input_price, mp.sale_cache_read_input_price,
         mp.sale_cache_creation_5m_input_price, mp.sale_cache_creation_1h_input_price,
         mp.sale_cache_creation_30m_input_price,
@@ -265,7 +265,7 @@ type FindModelCandidatesRow struct {
 	FastSaleCacheCreation30mInputPrice pgtype.Numeric
 	FastSaleOutputPrice                pgtype.Numeric
 	FastSaleReasoningOutputPrice       pgtype.Numeric
-	SalePriceRatio                     pgtype.Numeric
+	SaleDiscount                       pgtype.Numeric
 	SaleUncachedInputPrice             pgtype.Numeric
 	SaleCacheReadInputPrice            pgtype.Numeric
 	SaleCacheCreation5mInputPrice      pgtype.Numeric
@@ -310,7 +310,7 @@ type FindModelCandidatesRow struct {
 //     协议用 protocols 数组包含判定，一条渠道可同时服务 openai 与 anthropic；
 //  2. 已定价过滤：候选必须有 model_prices 基准价（base，INNER JOIN 保证），且渠道成本可解析——
 //     「有 channel_prices 绝对成本覆盖」 OR 「有 channel_cost_multipliers 价格倍率」（否则排除，不参与计费）；
-//  3. 带回基准价（base）：既是客户售价的回退基数（× 模型倍率 sale_price_ratio），也是渠道成本基数
+//  3. 带回基准价（base）：既是客户售价的回退基数（× 售价折扣 sale_discount），也是渠道成本基数
 //     （× 价格倍率 × 充值倍率，DEC-031 同一基数）；
 //     成本三来源：绝对覆盖 cost（若有）/ 价格倍率 mult + 充值倍率 recharge（供 Go 侧
 //     ScaleProviderCostByFactors 派生真实成本与毛利结算），带回来源行 id 作 pin。
@@ -378,7 +378,7 @@ func (q *Queries) FindModelCandidates(ctx context.Context, arg FindModelCandidat
 			&i.FastSaleCacheCreation30mInputPrice,
 			&i.FastSaleOutputPrice,
 			&i.FastSaleReasoningOutputPrice,
-			&i.SalePriceRatio,
+			&i.SaleDiscount,
 			&i.SaleUncachedInputPrice,
 			&i.SaleCacheReadInputPrice,
 			&i.SaleCacheCreation5mInputPrice,

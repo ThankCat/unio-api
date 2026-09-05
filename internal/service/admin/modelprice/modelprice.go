@@ -1,14 +1,14 @@
 // Package modelprice 编排 admin 管理端的模型定价（model_prices）读写（DEC-026）。
 //
-// 一条价格行同时承载三件事：基准价（也是成本基数，DEC-031）、售价倍率、绝对售价。
-// 倍率与绝对售价是两套独立实体，可以同行共存；绝对售价是倍率的整组覆盖，不能混算。
-// 客户最终售价 = 绝对售价整组非空时用绝对售价，否则基准价 × 售价倍率。
+// 一条价格行同时承载三件事：基准价（也是成本基数，DEC-031）、售价折扣、绝对售价。
+// 折扣与绝对售价是两套独立实体，可以同行共存；绝对售价是折扣的整组覆盖，不能混算。
+// 客户最终售价 = 绝对售价整组非空时用绝对售价，否则基准价 × 售价折扣。
 // 允许只有基准价、没有售价的草稿行；那种行不可售（不能启用、不能调用）。
-// 创建走三个 intent：配基准价、按倍率定价、按绝对售价。改哪边就新开窗口，另一套售价从当前生效行复制。
+// 创建走三个 intent：配基准价、按折扣定价、按绝对售价。改哪边就新开窗口，另一套售价从当前生效行复制。
 // 设计约束（沿用 channelprice 口径）：
 //   - 金额只填明确数值、绝不用 float；DTO 层用十进制字符串承载，避免精度丢失。
 //   - 价格不可改金额：账务（price_snapshots）按事实快照引用历史价；改价靠「新建一条 + 关闭旧窗口」。
-//     售价倍率与绝对售价同样如此——它们与基准价同行，改动一律走新窗口。
+//     售价折扣与绝对售价同样如此——它们与基准价同行，改动一律走新窗口。
 //   - 同一 model 的启用窗口不可重叠，否则结算取基准价有歧义。
 //   - 毛利由数据库守卫在提交时兜底（售价低于任一渠道成本即拒绝）；草稿行售价不可解析时跳过守卫。
 package modelprice
@@ -39,9 +39,9 @@ const (
 
 	// IntentBase 配基准价：新窗口写入新基准价，售价从当前生效行复制（没有则留空）。
 	IntentBase = "base"
-	// IntentSaleRatio 按倍率定价：复制当前基准价与当前绝对售价，写入新倍率。
-	IntentSaleRatio = "sale_ratio"
-	// IntentSaleAbsolute 按绝对售价：复制当前基准价与当前倍率，写入新绝对售价。
+	// IntentSaleDiscount 按折扣定价：复制当前基准价与当前绝对售价，写入新折扣。
+	IntentSaleDiscount = "sale_discount"
+	// IntentSaleAbsolute 按绝对售价：复制当前基准价与当前折扣，写入新绝对售价。
 	IntentSaleAbsolute = "sale_absolute"
 )
 
@@ -83,7 +83,7 @@ type ModelPrice struct {
 	CacheCreation30mInputPrice  *string
 	OutputPrice                 string
 	ReasoningOutputPrice        *string
-	SalePriceRatio              *string
+	SaleDiscount              *string
 	SalePrices                  *SalePriceVector
 	SaleConfigured              bool
 	LongContextEnabled          bool
@@ -105,7 +105,7 @@ type ModelPrice struct {
 
 // FastPrice 是同一模型价格窗口下已经持久化的 Fast 精确售价。
 // Fast 与 Standard 绑在同一套售价实体上：走绝对售价时两边都必须有绝对售价；
-// 走倍率时两边都按各自基准价 × 模型倍率。不允许一档绝对、另一档倍率。
+// 走折扣时两边都按各自基准价 × 售价折扣。不允许一档绝对、另一档折扣。
 type FastPrice struct {
 	ServiceTierID              int64
 	UncachedInputPrice         string
@@ -162,7 +162,7 @@ type CreateInput struct {
 	CacheCreation30mInputPrice  *string
 	OutputPrice                 string
 	ReasoningOutputPrice        *string
-	SalePriceRatio              *string
+	SaleDiscount              *string
 	SalePrices                  *SalePriceVector
 	LongContextEnabled          bool
 	LongContextThreshold        *int64
@@ -339,9 +339,9 @@ func (s *Service) createInLock(ctx context.Context, supplyQ *sqlc.Queries, in Cr
 	return result, nil
 }
 
-// draftSellable 判断待写入窗口自身是否可售：倍率或绝对售价有其一即可。
+// draftSellable 判断待写入窗口自身是否可售：折扣或绝对售价有其一即可。
 func draftSellable(draft createDraft) bool {
-	return draft.params.SalePriceRatio.Valid || draft.params.SaleUncachedInputPrice.Valid
+	return draft.params.SaleDiscount.Valid || draft.params.SaleUncachedInputPrice.Valid
 }
 
 type createDraft struct {
@@ -351,12 +351,12 @@ type createDraft struct {
 
 func validateIntent(intent string) error {
 	switch intent {
-	case IntentBase, IntentSaleRatio, IntentSaleAbsolute:
+	case IntentBase, IntentSaleDiscount, IntentSaleAbsolute:
 		return nil
 	case "":
-		return invalidArgument("intent", "intent is required (base, sale_ratio, or sale_absolute)")
+		return invalidArgument("intent", "intent is required (base, sale_discount, or sale_absolute)")
 	default:
-		return invalidArgument("intent", "intent must be base, sale_ratio, or sale_absolute")
+		return invalidArgument("intent", "intent must be base, sale_discount, or sale_absolute")
 	}
 }
 
@@ -397,12 +397,12 @@ func (s *Service) buildCreateDraft(ctx context.Context, in CreateInput) (createD
 	switch in.Intent {
 	case IntentBase:
 		return s.buildBaseDraft(ctx, in)
-	case IntentSaleRatio:
-		return s.buildSaleRatioDraft(ctx, in)
+	case IntentSaleDiscount:
+		return s.buildSaleDiscountDraft(ctx, in)
 	case IntentSaleAbsolute:
 		return s.buildSaleAbsoluteDraft(ctx, in)
 	default:
-		return createDraft{}, invalidArgument("intent", "intent must be base, sale_ratio, or sale_absolute")
+		return createDraft{}, invalidArgument("intent", "intent must be base, sale_discount, or sale_absolute")
 	}
 }
 
@@ -437,10 +437,10 @@ func (s *Service) buildBaseDraft(ctx context.Context, in CreateInput) (createDra
 		return createDraft{}, err
 	}
 
-	var saleRatio pgtype.Numeric
+	var saleDiscount pgtype.Numeric
 	var sale saleVectorAmounts
 	if current != nil {
-		saleRatio = current.SalePriceRatio
+		saleDiscount = current.SaleDiscount
 		sale = saleVectorFromRow(*current)
 		if fastPrice.configured {
 			fastPrice.sale = fastSaleVectorFromRow(*current)
@@ -449,17 +449,17 @@ func (s *Service) buildBaseDraft(ctx context.Context, in CreateInput) (createDra
 
 	return createDraft{
 		model:  model,
-		params: createParams(in, currency, in.PricingUnit, amounts, longContext, fastPrice, saleRatio, sale),
+		params: createParams(in, currency, in.PricingUnit, amounts, longContext, fastPrice, saleDiscount, sale),
 	}, nil
 }
 
-func (s *Service) buildSaleRatioDraft(ctx context.Context, in CreateInput) (createDraft, error) {
-	saleRatio, err := parseOptionalPositiveMultiplier("sale_price_ratio", in.SalePriceRatio)
+func (s *Service) buildSaleDiscountDraft(ctx context.Context, in CreateInput) (createDraft, error) {
+	saleDiscount, err := parseOptionalPositiveMultiplier("sale_discount", in.SaleDiscount)
 	if err != nil {
 		return createDraft{}, err
 	}
-	if !saleRatio.Valid {
-		return createDraft{}, invalidArgument("sale_price_ratio", "sale_price_ratio is required")
+	if !saleDiscount.Valid {
+		return createDraft{}, invalidArgument("sale_discount", "sale_discount is required")
 	}
 
 	model, err := s.lookupModel(ctx, in.ModelID)
@@ -482,7 +482,7 @@ func (s *Service) buildSaleRatioDraft(ctx context.Context, in CreateInput) (crea
 			amountsFromRow(*current),
 			longContextFromRow(*current),
 			fastPrice,
-			saleRatio,
+			saleDiscount,
 			saleVectorFromRow(*current),
 		),
 	}, nil
@@ -534,7 +534,7 @@ func (s *Service) buildSaleAbsoluteDraft(ctx context.Context, in CreateInput) (c
 			amountsFromRow(*current),
 			longContextFromRow(*current),
 			fastPrice,
-			current.SalePriceRatio,
+			current.SaleDiscount,
 			sale,
 		),
 	}, nil
@@ -557,7 +557,7 @@ func createParams(
 	amounts modelPriceAmounts,
 	longContext longContextConfig,
 	fastPrice fastPriceConfig,
-	saleRatio pgtype.Numeric,
+	saleDiscount pgtype.Numeric,
 	sale saleVectorAmounts,
 ) sqlc.CreateModelPriceParams {
 	return sqlc.CreateModelPriceParams{
@@ -571,7 +571,7 @@ func createParams(
 		CacheCreation30mInputPrice:         amounts.cacheCreation30mInputPrice,
 		OutputPrice:                        amounts.outputPrice,
 		ReasoningOutputPrice:               amounts.reasoningOutputPrice,
-		SalePriceRatio:                     saleRatio,
+		SaleDiscount:                     saleDiscount,
 		SaleUncachedInputPrice:             sale.uncachedInputPrice,
 		SaleCacheReadInputPrice:            sale.cacheReadInputPrice,
 		SaleCacheCreation5mInputPrice:      sale.cacheCreation5mInputPrice,
@@ -1015,7 +1015,7 @@ func parseModelPriceAmounts(in CreateInput) (modelPriceAmounts, error) {
 }
 
 func markSaleConfigured(p ModelPrice) ModelPrice {
-	p.SaleConfigured = p.SalePriceRatio != nil || p.SalePrices != nil
+	p.SaleConfigured = p.SaleDiscount != nil || p.SalePrices != nil
 	return p
 }
 
@@ -1032,7 +1032,7 @@ func toModelPrice(c sqlc.ModelPrice) ModelPrice {
 		CacheCreation30mInputPrice: numericPtr(c.CacheCreation30mInputPrice),
 		OutputPrice:                numericString(c.OutputPrice),
 		ReasoningOutputPrice:       numericPtr(c.ReasoningOutputPrice),
-		SalePriceRatio:             numericPtr(c.SalePriceRatio),
+		SaleDiscount:             numericPtr(c.SaleDiscount),
 		SalePrices: saleVectorFromValues(
 			c.SaleUncachedInputPrice,
 			c.SaleCacheReadInputPrice,
@@ -1068,7 +1068,7 @@ func toModelPriceFromCreateRow(c sqlc.CreateModelPriceRow) ModelPrice {
 		CacheCreation30mInputPrice: numericPtr(c.CacheCreation30mInputPrice),
 		OutputPrice:                numericString(c.OutputPrice),
 		ReasoningOutputPrice:       numericPtr(c.ReasoningOutputPrice),
-		SalePriceRatio:             numericPtr(c.SalePriceRatio),
+		SaleDiscount:             numericPtr(c.SaleDiscount),
 		SalePrices: saleVectorFromValues(
 			c.SaleUncachedInputPrice,
 			c.SaleCacheReadInputPrice,
@@ -1128,7 +1128,7 @@ func toModelPriceFromRow(c sqlc.ListModelPricesByModelRow) ModelPrice {
 		CacheCreation30mInputPrice: numericPtr(c.CacheCreation30mInputPrice),
 		OutputPrice:                numericString(c.OutputPrice),
 		ReasoningOutputPrice:       numericPtr(c.ReasoningOutputPrice),
-		SalePriceRatio:             numericPtr(c.SalePriceRatio),
+		SaleDiscount:             numericPtr(c.SaleDiscount),
 		SalePrices: saleVectorFromValues(
 			c.SaleUncachedInputPrice,
 			c.SaleCacheReadInputPrice,
