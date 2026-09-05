@@ -85,9 +85,37 @@ type SummaryParams struct {
 	Q           string
 	From        *time.Time
 	To          *time.Time
+	// SeriesFrom/SeriesTo 只控制热力条展示窗；省略时回落到 From/To。
+	SeriesFrom *time.Time
+	SeriesTo   *time.Time
+	// PreviousFrom/PreviousTo 控制卡片环比窗；省略时使用等长上一周期。
+	PreviousFrom *time.Time
+	PreviousTo   *time.Time
 	// Bucket/TZ 供卡片热力条分桶；留空时按天、按 UTC。
 	Bucket string
 	TZ     string
+}
+
+func supportedBucket(bucket string) bool {
+	switch bucket {
+	case "minute", "hour", "day", "week", "month", "quarter", "year":
+		return true
+	default:
+		return false
+	}
+}
+
+func previousWindow(params SummaryParams) (*time.Time, *time.Time) {
+	if params.PreviousFrom != nil || params.PreviousTo != nil {
+		return params.PreviousFrom, params.PreviousTo
+	}
+	if params.From == nil || params.To == nil {
+		return nil, nil
+	}
+	d := params.To.Sub(*params.From)
+	from := params.From.Add(-d)
+	to := *params.From
+	return &from, &to
 }
 
 // SummaryModel 是时间窗内实际扣费次数最多的模型之一。
@@ -138,6 +166,8 @@ type Window struct {
 // Point 是一个时间桶，热力条按它着色。
 type Point struct {
 	BucketStart      time.Time
+	BucketEnd        time.Time
+	IsFuture         bool
 	RequestCount     int64
 	TokenCount       int64
 	ChargeUSD        string
@@ -244,8 +274,9 @@ func (s *Service) Summary(ctx context.Context, params SummaryParams) (Summary, *
 		TopModels:               topModels,
 	}
 
-	// 环比和热力条都要求有完整时间窗；不给窗口时（全量统计）没有"上一周期"可言。
-	if params.From == nil || params.To == nil || !params.To.After(*params.From) {
+	// 环比和热力条都要求有时间窗；不给窗口时（全量统计）没有"上一周期"可言。
+	// 起止相等时仍要允许生成完整的展示窗，例如当天刚过 00:00 的 24 个小时格。
+	if params.From == nil || params.To == nil || params.To.Before(*params.From) {
 		return summary, nil
 	}
 	previous, series, compareErr := s.compare(ctx, params, bounds)
@@ -268,15 +299,24 @@ func (s *Service) compare(
 	if bucket == "" {
 		bucket = "day"
 	}
+	if !supportedBucket(bucket) {
+		return nil, nil, consoleservice.InvalidArgument("bucket", "bucket must be minute, hour, day, week, month, quarter, or year.")
+	}
 	if tz == "" {
 		tz = "UTC"
 	}
-	span := params.To.Sub(*params.From)
-	previousFrom := params.From.Add(-span)
+	previousFrom, previousTo := previousWindow(params)
+	if previousFrom == nil || previousTo == nil || previousTo.Before(*previousFrom) {
+		return nil, nil, consoleservice.InvalidArgument("previous_to", "previous_to must be later than or equal to previous_from.")
+	}
+	seriesFrom, seriesTo := params.From, params.To
+	if params.SeriesFrom != nil && params.SeriesTo != nil && !params.SeriesTo.Before(*params.SeriesFrom) {
+		seriesFrom, seriesTo = params.SeriesFrom, params.SeriesTo
+	}
 
 	prevBounds := bounds
-	prevBounds.FromTime = pgtype.Timestamptz{Time: previousFrom, Valid: true}
-	prevBounds.ToTime = pgtype.Timestamptz{Time: *params.From, Valid: true}
+	prevBounds.FromTime = pgtype.Timestamptz{Time: *previousFrom, Valid: true}
+	prevBounds.ToTime = pgtype.Timestamptz{Time: *previousTo, Valid: true}
 	prevRow, err := s.store.SummarizeConsoleBilledRequests(ctx, prevBounds)
 	if err != nil {
 		return nil, nil, consoleservice.RequestUnavailable("summarize previous charged requests", err)
@@ -293,6 +333,8 @@ func (s *Service) compare(
 		Endpoints:   bounds.Endpoints,
 		StreamTypes: bounds.StreamTypes,
 		Q:           bounds.Q,
+		SeriesFrom:  pgtype.Timestamptz{Time: *seriesFrom, Valid: true},
+		SeriesTo:    pgtype.Timestamptz{Time: *seriesTo, Valid: true},
 	})
 	if err != nil {
 		return nil, nil, consoleservice.RequestUnavailable("list request timeseries", err)
@@ -303,7 +345,9 @@ func (s *Service) compare(
 		series = append(series, Point{
 			AverageLatencyMs: row.AverageLatencyMs,
 			BucketStart:      row.BucketStart.Time,
+			BucketEnd:        row.BucketEnd.Time,
 			ChargeUSD:        opsutil.NumericString(row.ChargeUsd),
+			IsFuture:         !row.BucketStart.Time.Before(*params.To),
 			RequestCount:     row.RequestCount,
 			TokenCount:       row.TokenCount,
 		})

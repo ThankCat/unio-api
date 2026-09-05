@@ -362,7 +362,7 @@ SELECT
             + COALESCE(ur.cache_creation_30m_input_tokens, 0)::numeric
                 * COALESCE(ps.cache_creation_30m_input_price, ps.uncached_input_price, 0)
         ) / 1000000
-        / COALESCE(NULLIF(ps.price_ratio, 0), 1)
+        / COALESCE(NULLIF(ps.sale_discount, 0), 1)
     ), 0)::numeric AS list_charge_usd,
     COALESCE(
         AVG(EXTRACT(EPOCH FROM (w.completed_at - w.started_at)) * 1000)

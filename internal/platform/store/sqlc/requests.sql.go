@@ -87,7 +87,15 @@ WHERE ($1::bigint IS NULL OR user_id = $1::bigint)
   AND ($3::text IS NULL OR request_id = $3::text)
   AND ($4::text IS NULL OR status = $4::text)
   AND ($5::text IS NULL OR requested_model_id ILIKE '%' || $5::text || '%')
-  AND ($6::bigint IS NULL OR final_account_id = $6::bigint)
+  AND (
+      $6::bigint IS NULL
+      OR final_account_id = $6::bigint
+      OR EXISTS (
+          SELECT 1 FROM request_attempts aa
+          WHERE aa.request_record_id = request_records.id
+            AND aa.account_id = $6::bigint
+      )
+  )
   AND (
       ($7::bigint IS NULL AND $8::bigint IS NULL AND $9::text IS NULL)
       OR EXISTS (
@@ -230,7 +238,7 @@ func (q *Queries) GetRequestRecordByRequestID(ctx context.Context, requestID str
 
 const listAdminRequestAttemptsByRequest = `-- name: ListAdminRequestAttemptsByRequest :many
 SELECT
-    a.id, a.request_record_id, a.attempt_index, a.provider_id, a.channel_id, a.adapter_key, a.upstream_model, a.upstream_protocol, a.upstream_response_id, a.upstream_response_model, a.upstream_finish_reason, a.finish_class, a.status, a.upstream_status_code, a.upstream_request_id, a.error_code, a.error_message, a.internal_error_detail, a.upstream_timeout_phase, a.gateway_first_token_at, a.final_usage_received, a.usage_mapping_version, a.started_at, a.completed_at, a.created_at, a.upstream_started_at, a.upstream_first_token_at, a.upstream_completed_at, a.provider_origin_revision, a.provider_status_revision, a.channel_config_revision, a.routing_candidate_index, a.upstream_endpoint, a.breaker_provider_disposition, a.breaker_channel_disposition, a.ttft_scoring_sample, a.error_scoring_sample, a.error_scoring_failure, a.fault_party, a.permit_id, a.requested_service_tier, a.upstream_service_tier, a.forwarded_service_tier,
+    a.id, a.request_record_id, a.attempt_index, a.provider_id, a.channel_id, a.adapter_key, a.upstream_model, a.upstream_protocol, a.upstream_response_id, a.upstream_response_model, a.upstream_finish_reason, a.finish_class, a.status, a.upstream_status_code, a.upstream_request_id, a.error_code, a.error_message, a.internal_error_detail, a.upstream_timeout_phase, a.gateway_first_token_at, a.final_usage_received, a.usage_mapping_version, a.started_at, a.completed_at, a.created_at, a.upstream_started_at, a.upstream_first_token_at, a.upstream_completed_at, a.provider_origin_revision, a.provider_status_revision, a.channel_config_revision, a.routing_candidate_index, a.upstream_endpoint, a.breaker_provider_disposition, a.breaker_channel_disposition, a.ttft_scoring_sample, a.error_scoring_sample, a.error_scoring_failure, a.fault_party, a.permit_id, a.requested_service_tier, a.upstream_service_tier, a.forwarded_service_tier, a.account_id,
     c.name AS channel_name,
     cs.cost_multiplier AS channel_cost_multiplier,
     cs.provider_recharge_rate
@@ -294,6 +302,7 @@ type ListAdminRequestAttemptsByRequestRow struct {
 	RequestedServiceTier       pgtype.Text
 	UpstreamServiceTier        pgtype.Text
 	ForwardedServiceTier       pgtype.Text
+	AccountID                  pgtype.Int8
 	ChannelName                string
 	ChannelCostMultiplier      pgtype.Numeric
 	ProviderRechargeRate       pgtype.Numeric
@@ -354,6 +363,7 @@ func (q *Queries) ListAdminRequestAttemptsByRequest(ctx context.Context, request
 			&i.RequestedServiceTier,
 			&i.UpstreamServiceTier,
 			&i.ForwardedServiceTier,
+			&i.AccountID,
 			&i.ChannelName,
 			&i.ChannelCostMultiplier,
 			&i.ProviderRechargeRate,
@@ -969,7 +979,17 @@ WITH filtered_page AS (
       AND ($8::text IS NULL OR r.request_id = $8::text)
       AND ($9::text IS NULL OR r.status = $9::text)
       AND ($10::text IS NULL OR r.requested_model_id ILIKE '%' || $10::text || '%')
-      AND ($11::bigint IS NULL OR r.final_account_id = $11::bigint)
+      -- 账号筛选按 attempt 级归因：final_account_id 只在成功/已结算路径写入，失败请求靠
+      -- request_attempts.account_id 命中，否则账号下钻永远看不到失败记录。
+      AND (
+          $11::bigint IS NULL
+          OR r.final_account_id = $11::bigint
+          OR EXISTS (
+              SELECT 1 FROM request_attempts aa
+              WHERE aa.request_record_id = r.id
+                AND aa.account_id = $11::bigint
+          )
+      )
       AND (
           ($1::bigint IS NULL AND $2::bigint IS NULL AND $3::text IS NULL)
           OR EXISTS (
@@ -1092,9 +1112,9 @@ SELECT
     r.reasoning_effort,
     r.reasoning_budget_tokens,
     r.client_ip,
-    -- 倍率取结算当时的快照（price_snapshots.price_ratio），历史无快照行为 NULL，展示端回落「—」；
-    -- 不再实时读 rt.price_ratio，避免管理员改倍率污染历史请求的倍率与倒推基准价展示。
-    ps.price_ratio AS sale_price_ratio,
+    -- 售价折扣取结算当时的快照（price_snapshots.sale_discount），历史无快照行为 NULL，展示端回落「—」；
+    -- 不再实时读当前定价行，避免管理员改折扣污染历史请求的折扣与倒推基准价展示。
+    ps.sale_discount AS sale_discount,
     -- 售价侧长上下文是否已应用（费用列标识）；无 price 快照时回落成本侧标记。
     COALESCE(ps.long_context_applied, cs.long_context_applied, false) AS long_context_applied,
     m.display_name AS model_display_name,
@@ -1276,7 +1296,7 @@ type ListRequestRecordsPageRow struct {
 	ReasoningEffort                 pgtype.Text
 	ReasoningBudgetTokens           pgtype.Int4
 	ClientIp                        pgtype.Text
-	SalePriceRatio                  pgtype.Numeric
+	SaleDiscount                    pgtype.Numeric
 	LongContextApplied              bool
 	ModelDisplayName                pgtype.Text
 	ModelOwnedBy                    pgtype.Text
@@ -1407,7 +1427,7 @@ func (q *Queries) ListRequestRecordsPage(ctx context.Context, arg ListRequestRec
 			&i.ReasoningEffort,
 			&i.ReasoningBudgetTokens,
 			&i.ClientIp,
-			&i.SalePriceRatio,
+			&i.SaleDiscount,
 			&i.LongContextApplied,
 			&i.ModelDisplayName,
 			&i.ModelOwnedBy,
@@ -1546,7 +1566,7 @@ SELECT
             + COALESCE(ur.cache_creation_30m_input_tokens, 0)::numeric
                 * COALESCE(ps.cache_creation_30m_input_price, ps.uncached_input_price, 0)
         ) / 1000000
-        / COALESCE(NULLIF(ps.price_ratio, 0), 1)
+        / COALESCE(NULLIF(ps.sale_discount, 0), 1)
     ), 0)::numeric AS list_charge_usd,
     COALESCE(
         AVG(EXTRACT(EPOCH FROM (w.completed_at - w.started_at)) * 1000)

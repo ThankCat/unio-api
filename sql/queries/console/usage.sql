@@ -8,9 +8,9 @@
 -- LATERAL 的代价是固定的 N 次索引查找（1 万行约 13ms），不受参数估算影响。
 
 -- name: ListConsoleUsageTimeseries :many
--- 按 bucket（minute/hour/day）分桶的用量与费用。
--- 调用方传入的时间窗需覆盖「上一周期 + 当前周期」，由 service 层按 from 切分，避免查两次。
--- 空桶由 generate_series 补齐，趋势图不需要在前端处理缺失日期。
+-- 按 bucket（minute/hour/day/week/month/quarter/year）分桶的用量与费用。
+-- from_time/to_time 是实际数据统计窗；series_from/series_to 是需要补齐的展示窗。
+-- 空桶由 generate_series 补齐，允许请求卡片展示尚未到达的未来桶。
 WITH windowed AS MATERIALIZED (
     SELECT
         r.id,
@@ -162,22 +162,50 @@ grouped AS (
     FROM billed b
     GROUP BY b.bucket_start
 ),
+bucket_starts AS (
+    SELECT series.local_start
+    FROM generate_series(
+        date_trunc(
+            sqlc.arg(bucket)::text,
+            sqlc.arg(series_from)::timestamptz AT TIME ZONE sqlc.arg(tz)::text
+        ),
+        date_trunc(
+            sqlc.arg(bucket)::text,
+            sqlc.arg(series_to)::timestamptz AT TIME ZONE sqlc.arg(tz)::text
+        ),
+        CASE sqlc.arg(bucket)::text
+            WHEN 'minute' THEN interval '1 minute'
+            WHEN 'hour' THEN interval '1 hour'
+            WHEN 'day' THEN interval '1 day'
+            WHEN 'week' THEN interval '1 week'
+            WHEN 'month' THEN interval '1 month'
+            WHEN 'quarter' THEN interval '3 months'
+            WHEN 'year' THEN interval '1 year'
+            ELSE interval '1 day'
+        END
+    ) AS series(local_start)
+    WHERE series.local_start < (
+        sqlc.arg(series_to)::timestamptz AT TIME ZONE sqlc.arg(tz)::text
+    )
+),
 buckets AS (
-    SELECT generate_series(
-        date_trunc(
-            sqlc.arg(bucket)::text,
-            sqlc.arg(from_time)::timestamptz AT TIME ZONE sqlc.arg(tz)::text
-        ),
-        date_trunc(
-            sqlc.arg(bucket)::text,
-            (sqlc.arg(to_time)::timestamptz - interval '1 microsecond')
-                AT TIME ZONE sqlc.arg(tz)::text
-        ),
-        ('1 ' || sqlc.arg(bucket)::text)::interval
-    ) AS local_start
+    SELECT
+        local_start,
+        local_start + CASE sqlc.arg(bucket)::text
+            WHEN 'minute' THEN interval '1 minute'
+            WHEN 'hour' THEN interval '1 hour'
+            WHEN 'day' THEN interval '1 day'
+            WHEN 'week' THEN interval '1 week'
+            WHEN 'month' THEN interval '1 month'
+            WHEN 'quarter' THEN interval '3 months'
+            WHEN 'year' THEN interval '1 year'
+            ELSE interval '1 day'
+        END AS local_end
+    FROM bucket_starts
 )
 SELECT
     (bk.local_start AT TIME ZONE sqlc.arg(tz)::text)::timestamptz AS bucket_start,
+    (bk.local_end AT TIME ZONE sqlc.arg(tz)::text)::timestamptz AS bucket_end,
     COALESCE(g.request_count, 0)::bigint AS request_count,
     COALESCE(g.token_count, 0)::bigint AS token_count,
     COALESCE(g.uncached_input_token_count, 0)::bigint AS uncached_input_token_count,
@@ -275,7 +303,7 @@ SELECT
             + COALESCE(ur.cache_creation_30m_input_tokens, 0)::numeric
                 * COALESCE(ps.cache_creation_30m_input_price, ps.uncached_input_price, 0)
         ) / 1000000
-        / COALESCE(NULLIF(ps.price_ratio, 0), 1)
+        / COALESCE(NULLIF(ps.sale_discount, 0), 1)
     ), 0)::numeric AS list_charge_usd,
     COALESCE(SUM(
         (
