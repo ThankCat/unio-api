@@ -125,6 +125,13 @@ func TestOverviewQueriesPreviousWindowOfEqualLength(t *testing.T) {
 	if !store.seriesParams.FromTime.Time.Equal(wantPreviousFrom) || !store.seriesParams.ToTime.Time.Equal(params.To) {
 		t.Fatalf("series window = %v..%v", store.seriesParams.FromTime.Time, store.seriesParams.ToTime.Time)
 	}
+	// 展示窗必须和统计窗对齐，否则 generate_series 拿不到边界，卡片折线是空的。
+	if !store.seriesParams.SeriesFrom.Valid || !store.seriesParams.SeriesFrom.Time.Equal(wantPreviousFrom) {
+		t.Fatalf("series_from = %+v, want %v", store.seriesParams.SeriesFrom, wantPreviousFrom)
+	}
+	if !store.seriesParams.SeriesTo.Valid || !store.seriesParams.SeriesTo.Time.Equal(params.To) {
+		t.Fatalf("series_to = %+v, want %v", store.seriesParams.SeriesTo, params.To)
+	}
 }
 
 func TestOverviewRejectsRangeTooLongForBucket(t *testing.T) {

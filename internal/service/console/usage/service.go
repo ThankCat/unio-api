@@ -412,10 +412,14 @@ func (s *Service) Overview(ctx context.Context, params OverviewParams) (Overview
 	}
 
 	// 两个周期首尾相接，一次查完再按 from 切分，省掉一次全表扫描。
+	// series_from/series_to 是 generate_series 的展示窗，必须和统计窗对齐，
+	// 否则 SQL 补空桶得到 0 行，卡片折线会消失。
+	seriesFrom := pgtype.Timestamptz{Time: previousFrom, Valid: true}
+	seriesTo := pgtype.Timestamptz{Time: params.To, Valid: true}
 	rows, sqlErr := s.store.ListConsoleUsageTimeseries(ctx, sqlc.ListConsoleUsageTimeseriesParams{
 		UserID:      params.UserID,
-		FromTime:    pgtype.Timestamptz{Time: previousFrom, Valid: true},
-		ToTime:      pgtype.Timestamptz{Time: params.To, Valid: true},
+		FromTime:    seriesFrom,
+		ToTime:      seriesTo,
 		Bucket:      bucket,
 		Tz:          normalizeTZ(params.TZ),
 		ApiKeyIds:   emptyInts(params.APIKeyIDs),
@@ -423,6 +427,8 @@ func (s *Service) Overview(ctx context.Context, params OverviewParams) (Overview
 		Endpoints:   emptyStrings(consolerequests.InternalEndpoints(params.Endpoints)),
 		StreamTypes: emptyStrings(params.StreamTypes),
 		Q:           textNarg(params.Q),
+		SeriesFrom:  seriesFrom,
+		SeriesTo:    seriesTo,
 	})
 	if sqlErr != nil {
 		return Overview{}, consoleservice.RequestUnavailable("list usage timeseries", sqlErr)
