@@ -8,6 +8,9 @@
 //	POST   /channels/{id}/accounts/oauth/complete  OAuth 导入：回填 code 完成落库
 //	PATCH  /subscription-accounts/{id}             调度参数编辑（并发/优先级/代理/备注名/订阅到期）
 //	PUT    /subscription-accounts/{id}/usage-pause-threshold 账号用量暂停阈值（null 继承渠道，1~100 覆写；改后重算运行态）
+//	POST   /subscription-accounts/{id}/refresh       刷新状态（不发模型请求）：用量水位 + 重置卡 + 账号画像（套餐/订阅/上游状态/用户）
+//	POST   /subscription-accounts/{id}/reset-credit  手动使用一张重置卡（同时重置 5h/7d），随后回读用量
+//	PUT    /subscription-accounts/{id}/auto-reset-credit 自动用卡配置（开关 + 5h/7d 阈值）
 //	DELETE /subscription-accounts/{id}             物理删除（仅归档账号；有请求历史则拒绝）
 //	POST   /subscription-accounts/{id}/status      启停/归档/恢复（含供给联动确认门）
 //	POST   /subscription-accounts/{id}/refresh-token 手动令牌刷新
@@ -51,6 +54,9 @@ func Register(r chi.Router, service *subscriptionaccount.Service) {
 	r.Post("/channels/{id}/accounts/oauth/complete", h.oauthComplete)
 	r.Patch("/subscription-accounts/{id}", h.updateConfig)
 	r.Put("/subscription-accounts/{id}/usage-pause-threshold", h.updateUsagePauseThreshold)
+	r.Post("/subscription-accounts/{id}/refresh", h.refreshStatus)
+	r.Post("/subscription-accounts/{id}/reset-credit", h.resetCredit)
+	r.Put("/subscription-accounts/{id}/auto-reset-credit", h.updateAutoResetCredit)
 	r.Delete("/subscription-accounts/{id}", h.deleteAccount)
 	r.Post("/subscription-accounts/{id}/status", h.setStatus)
 	r.Post("/subscription-accounts/{id}/refresh-token", h.refreshToken)
@@ -273,6 +279,71 @@ func (h *Handler) updateUsagePauseThreshold(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	adminhttp.WriteData(w, http.StatusOK, result)
+}
+
+// refreshStatus 向上游拉取该账号的全部状态（不发模型请求），返回上游报告与刷新后的账号视图。
+func (h *Handler) refreshStatus(w http.ResponseWriter, r *http.Request) {
+	accountID, err := pathID(r, "id")
+	if err != nil {
+		adminhttp.WriteServiceError(w, err)
+		return
+	}
+	result, err := h.service.RefreshStatus(r.Context(), accountID)
+	if err != nil {
+		adminhttp.WriteServiceError(w, err)
+		return
+	}
+	adminhttp.WriteData(w, http.StatusOK, result)
+}
+
+// resetCredit 手动消费一张重置卡；上游拒绝（无可用卡 / 窗口未打满）以 502 带上游正文返回。
+func (h *Handler) resetCredit(w http.ResponseWriter, r *http.Request) {
+	accountID, err := pathID(r, "id")
+	if err != nil {
+		adminhttp.WriteServiceError(w, err)
+		return
+	}
+	result, err := h.service.ResetCredit(r.Context(), accountID)
+	if err != nil {
+		adminhttp.WriteServiceError(w, err)
+		return
+	}
+	adminhttp.WriteData(w, http.StatusOK, result)
+}
+
+// autoResetCreditRequest 是自动用卡配置体：enabled 必填；mode 为 any（任一达到）/ all（同时达到），缺省 any；
+// 阈值 null = 该窗口不参与触发，1~100 参与。开启时至少一个窗口参与。
+type autoResetCreditRequest struct {
+	Enabled            bool   `json:"enabled"`
+	Mode               string `json:"mode"`
+	Threshold5hPercent *int32 `json:"threshold_5h_percent"`
+	Threshold7dPercent *int32 `json:"threshold_7d_percent"`
+}
+
+func (h *Handler) updateAutoResetCredit(w http.ResponseWriter, r *http.Request) {
+	accountID, err := pathID(r, "id")
+	if err != nil {
+		adminhttp.WriteServiceError(w, err)
+		return
+	}
+	var req autoResetCreditRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		adminhttp.WriteServiceError(w, failure.New(
+			failure.CodeAdminInvalidArgument, failure.WithMessage("invalid json body"),
+		))
+		return
+	}
+	account, err := h.service.UpdateAutoResetCredit(r.Context(), accountID, subscriptionaccount.AutoResetCreditInput{
+		Enabled:            req.Enabled,
+		Mode:               req.Mode,
+		Threshold5hPercent: req.Threshold5hPercent,
+		Threshold7dPercent: req.Threshold7dPercent,
+	})
+	if err != nil {
+		adminhttp.WriteServiceError(w, err)
+		return
+	}
+	adminhttp.WriteData(w, http.StatusOK, account)
 }
 
 type setStatusRequest struct {

@@ -256,8 +256,8 @@ func TestTestStreamEmitsStartAndContentEvents(t *testing.T) {
 	if len(events) != 3 {
 		t.Fatalf("events = %d, want 3 (start + 2 content): %+v", len(events), events)
 	}
-	if events[0].Type != ProbeEventStart || events[0].Model != "gpt-test" {
-		t.Fatalf("first event must be probe_start with model: %+v", events[0])
+	if events[0].Type != ProbeEventStart || events[0].Model != "gpt-test" || events[0].Prompt != adapter.ProbeInputText {
+		t.Fatalf("first event must be probe_start with model and prompt: %+v", events[0])
 	}
 	if events[1].Type != ProbeEventContent || events[1].Text != "po" || events[2].Text != "ng" {
 		t.Fatalf("content deltas must be forwarded in order: %+v", events[1:])

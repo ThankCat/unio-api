@@ -320,7 +320,7 @@ INSERT INTO subscription_accounts (
     $6, $7, $8, $9, $10, $11,
     'disabled', $12
 )
-RETURNING id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id, fingerprint_mode, fingerprint_seed, response_timeout_ms, first_token_timeout_ms, usage_pause_threshold_percent
+RETURNING id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id, fingerprint_mode, fingerprint_seed, response_timeout_ms, first_token_timeout_ms, usage_pause_threshold_percent, reset_credits_snapshot, auto_reset_credit_enabled, auto_reset_credit_mode, auto_reset_credit_5h_threshold_percent, auto_reset_credit_7d_threshold_percent, auto_reset_credit_state, account_profile
 `
 
 type AdminCreateSubscriptionAccountParams struct {
@@ -382,6 +382,13 @@ func (q *Queries) AdminCreateSubscriptionAccount(ctx context.Context, arg AdminC
 		&i.ResponseTimeoutMs,
 		&i.FirstTokenTimeoutMs,
 		&i.UsagePauseThresholdPercent,
+		&i.ResetCreditsSnapshot,
+		&i.AutoResetCreditEnabled,
+		&i.AutoResetCreditMode,
+		&i.AutoResetCredit5hThresholdPercent,
+		&i.AutoResetCredit7dThresholdPercent,
+		&i.AutoResetCreditState,
+		&i.AccountProfile,
 	)
 	return i, err
 }
@@ -453,7 +460,7 @@ func (q *Queries) AdminDeleteSubscriptionAccountCascade(ctx context.Context, id 
 }
 
 const adminGetSubscriptionAccount = `-- name: AdminGetSubscriptionAccount :one
-SELECT id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id, fingerprint_mode, fingerprint_seed, response_timeout_ms, first_token_timeout_ms, usage_pause_threshold_percent
+SELECT id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id, fingerprint_mode, fingerprint_seed, response_timeout_ms, first_token_timeout_ms, usage_pause_threshold_percent, reset_credits_snapshot, auto_reset_credit_enabled, auto_reset_credit_mode, auto_reset_credit_5h_threshold_percent, auto_reset_credit_7d_threshold_percent, auto_reset_credit_state, account_profile
 FROM subscription_accounts
 WHERE id = $1
 `
@@ -488,6 +495,13 @@ func (q *Queries) AdminGetSubscriptionAccount(ctx context.Context, id int64) (Su
 		&i.ResponseTimeoutMs,
 		&i.FirstTokenTimeoutMs,
 		&i.UsagePauseThresholdPercent,
+		&i.ResetCreditsSnapshot,
+		&i.AutoResetCreditEnabled,
+		&i.AutoResetCreditMode,
+		&i.AutoResetCredit5hThresholdPercent,
+		&i.AutoResetCredit7dThresholdPercent,
+		&i.AutoResetCreditState,
+		&i.AccountProfile,
 	)
 	return i, err
 }
@@ -569,7 +583,14 @@ SELECT
     a.response_timeout_ms,
     a.first_token_timeout_ms,
     a.usage_pause_threshold_percent,
-    c.account_usage_pause_threshold_percent AS channel_usage_pause_threshold_percent
+    c.account_usage_pause_threshold_percent AS channel_usage_pause_threshold_percent,
+    a.reset_credits_snapshot,
+    a.auto_reset_credit_enabled,
+    a.auto_reset_credit_mode,
+    a.auto_reset_credit_5h_threshold_percent,
+    a.auto_reset_credit_7d_threshold_percent,
+    a.auto_reset_credit_state,
+    a.account_profile
 FROM subscription_accounts a
 JOIN channels c ON c.id = a.channel_id
 LEFT JOIN proxies apx ON apx.id = a.proxy_id
@@ -613,6 +634,13 @@ type AdminListSubscriptionAccountsRow struct {
 	FirstTokenTimeoutMs               pgtype.Int4
 	UsagePauseThresholdPercent        pgtype.Int4
 	ChannelUsagePauseThresholdPercent pgtype.Int4
+	ResetCreditsSnapshot              []byte
+	AutoResetCreditEnabled            bool
+	AutoResetCreditMode               string
+	AutoResetCredit5hThresholdPercent pgtype.Int4
+	AutoResetCredit7dThresholdPercent pgtype.Int4
+	AutoResetCreditState              []byte
+	AccountProfile                    []byte
 }
 
 // AdminListSubscriptionAccounts 列出渠道下全部账号（含已停用与归档），供渠道详情的账号页签。
@@ -658,6 +686,13 @@ func (q *Queries) AdminListSubscriptionAccounts(ctx context.Context, arg AdminLi
 			&i.FirstTokenTimeoutMs,
 			&i.UsagePauseThresholdPercent,
 			&i.ChannelUsagePauseThresholdPercent,
+			&i.ResetCreditsSnapshot,
+			&i.AutoResetCreditEnabled,
+			&i.AutoResetCreditMode,
+			&i.AutoResetCredit5hThresholdPercent,
+			&i.AutoResetCredit7dThresholdPercent,
+			&i.AutoResetCreditState,
+			&i.AccountProfile,
 		); err != nil {
 			return nil, err
 		}
@@ -792,7 +827,7 @@ SET credentials = $3,
     updated_at = now()
 WHERE platform = $1
   AND upstream_account_id = $2
-RETURNING id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id, fingerprint_mode, fingerprint_seed, response_timeout_ms, first_token_timeout_ms, usage_pause_threshold_percent
+RETURNING id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id, fingerprint_mode, fingerprint_seed, response_timeout_ms, first_token_timeout_ms, usage_pause_threshold_percent, reset_credits_snapshot, auto_reset_credit_enabled, auto_reset_credit_mode, auto_reset_credit_5h_threshold_percent, auto_reset_credit_7d_threshold_percent, auto_reset_credit_state, account_profile
 `
 
 type AdminReauthorizeSubscriptionAccountParams struct {
@@ -840,6 +875,13 @@ func (q *Queries) AdminReauthorizeSubscriptionAccount(ctx context.Context, arg A
 		&i.ResponseTimeoutMs,
 		&i.FirstTokenTimeoutMs,
 		&i.UsagePauseThresholdPercent,
+		&i.ResetCreditsSnapshot,
+		&i.AutoResetCreditEnabled,
+		&i.AutoResetCreditMode,
+		&i.AutoResetCredit5hThresholdPercent,
+		&i.AutoResetCredit7dThresholdPercent,
+		&i.AutoResetCreditState,
+		&i.AccountProfile,
 	)
 	return i, err
 }
@@ -851,7 +893,7 @@ SET fingerprint_mode = $2,
     config_revision = config_revision + 1,
     updated_at = now()
 WHERE id = $1
-RETURNING id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id, fingerprint_mode, fingerprint_seed, response_timeout_ms, first_token_timeout_ms, usage_pause_threshold_percent
+RETURNING id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id, fingerprint_mode, fingerprint_seed, response_timeout_ms, first_token_timeout_ms, usage_pause_threshold_percent, reset_credits_snapshot, auto_reset_credit_enabled, auto_reset_credit_mode, auto_reset_credit_5h_threshold_percent, auto_reset_credit_7d_threshold_percent, auto_reset_credit_state, account_profile
 `
 
 type AdminSetSubscriptionAccountFingerprintParams struct {
@@ -892,6 +934,13 @@ func (q *Queries) AdminSetSubscriptionAccountFingerprint(ctx context.Context, ar
 		&i.ResponseTimeoutMs,
 		&i.FirstTokenTimeoutMs,
 		&i.UsagePauseThresholdPercent,
+		&i.ResetCreditsSnapshot,
+		&i.AutoResetCreditEnabled,
+		&i.AutoResetCreditMode,
+		&i.AutoResetCredit5hThresholdPercent,
+		&i.AutoResetCredit7dThresholdPercent,
+		&i.AutoResetCreditState,
+		&i.AccountProfile,
 	)
 	return i, err
 }
@@ -903,7 +952,7 @@ SET status = $2,
     config_revision = config_revision + 1,
     updated_at = now()
 WHERE id = $1
-RETURNING id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id, fingerprint_mode, fingerprint_seed, response_timeout_ms, first_token_timeout_ms, usage_pause_threshold_percent
+RETURNING id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id, fingerprint_mode, fingerprint_seed, response_timeout_ms, first_token_timeout_ms, usage_pause_threshold_percent, reset_credits_snapshot, auto_reset_credit_enabled, auto_reset_credit_mode, auto_reset_credit_5h_threshold_percent, auto_reset_credit_7d_threshold_percent, auto_reset_credit_state, account_profile
 `
 
 type AdminSetSubscriptionAccountStatusParams struct {
@@ -943,6 +992,13 @@ func (q *Queries) AdminSetSubscriptionAccountStatus(ctx context.Context, arg Adm
 		&i.ResponseTimeoutMs,
 		&i.FirstTokenTimeoutMs,
 		&i.UsagePauseThresholdPercent,
+		&i.ResetCreditsSnapshot,
+		&i.AutoResetCreditEnabled,
+		&i.AutoResetCreditMode,
+		&i.AutoResetCredit5hThresholdPercent,
+		&i.AutoResetCredit7dThresholdPercent,
+		&i.AutoResetCreditState,
+		&i.AccountProfile,
 	)
 	return i, err
 }
@@ -960,7 +1016,7 @@ SET display_name = $2,
     config_revision = config_revision + 1,
     updated_at = now()
 WHERE id = $1
-RETURNING id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id, fingerprint_mode, fingerprint_seed, response_timeout_ms, first_token_timeout_ms, usage_pause_threshold_percent
+RETURNING id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id, fingerprint_mode, fingerprint_seed, response_timeout_ms, first_token_timeout_ms, usage_pause_threshold_percent, reset_credits_snapshot, auto_reset_credit_enabled, auto_reset_credit_mode, auto_reset_credit_5h_threshold_percent, auto_reset_credit_7d_threshold_percent, auto_reset_credit_state, account_profile
 `
 
 type AdminUpdateSubscriptionAccountConfigParams struct {
@@ -1019,6 +1075,13 @@ func (q *Queries) AdminUpdateSubscriptionAccountConfig(ctx context.Context, arg 
 		&i.ResponseTimeoutMs,
 		&i.FirstTokenTimeoutMs,
 		&i.UsagePauseThresholdPercent,
+		&i.ResetCreditsSnapshot,
+		&i.AutoResetCreditEnabled,
+		&i.AutoResetCreditMode,
+		&i.AutoResetCredit5hThresholdPercent,
+		&i.AutoResetCredit7dThresholdPercent,
+		&i.AutoResetCreditState,
+		&i.AccountProfile,
 	)
 	return i, err
 }
@@ -1029,7 +1092,7 @@ SET usage_pause_threshold_percent = $1,
     config_revision = config_revision + 1,
     updated_at = now()
 WHERE id = $2
-RETURNING id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id, fingerprint_mode, fingerprint_seed, response_timeout_ms, first_token_timeout_ms, usage_pause_threshold_percent
+RETURNING id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id, fingerprint_mode, fingerprint_seed, response_timeout_ms, first_token_timeout_ms, usage_pause_threshold_percent, reset_credits_snapshot, auto_reset_credit_enabled, auto_reset_credit_mode, auto_reset_credit_5h_threshold_percent, auto_reset_credit_7d_threshold_percent, auto_reset_credit_state, account_profile
 `
 
 type AdminUpdateSubscriptionAccountUsagePauseThresholdParams struct {
@@ -1069,6 +1132,13 @@ func (q *Queries) AdminUpdateSubscriptionAccountUsagePauseThreshold(ctx context.
 		&i.ResponseTimeoutMs,
 		&i.FirstTokenTimeoutMs,
 		&i.UsagePauseThresholdPercent,
+		&i.ResetCreditsSnapshot,
+		&i.AutoResetCreditEnabled,
+		&i.AutoResetCreditMode,
+		&i.AutoResetCredit5hThresholdPercent,
+		&i.AutoResetCredit7dThresholdPercent,
+		&i.AutoResetCreditState,
+		&i.AccountProfile,
 	)
 	return i, err
 }

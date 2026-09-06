@@ -81,6 +81,8 @@ type ProbeEvent struct {
 	Model string
 	// AccountName 是池型渠道本次被测账号名，credential 型为空（仅 probe_start）。
 	AccountName string
+	// Prompt 是本次发给模型的用户输入（仅 probe_start），检测弹窗据此展示「请求：…」。
+	Prompt string
 	// Text 是上游流式响应的文本增量（仅 content）。
 	Text string
 }
@@ -620,7 +622,7 @@ func (s *Service) executeProbeCandidatesStream(ctx context.Context, snapshot pro
 	for i, candidate := range candidates {
 		upstreamModel := candidate.UpstreamModel
 		if emit != nil {
-			emit(ProbeEvent{Type: ProbeEventStart, Model: upstreamModel, AccountName: snapshot.AccountDisplayName})
+			emit(ProbeEvent{Type: ProbeEventStart, Model: upstreamModel, AccountName: snapshot.AccountDisplayName, Prompt: adapter.ProbeInputText})
 		}
 		start := time.Now()
 		probeCtx, probeCancel := context.WithTimeout(ctx, probeTimeout)

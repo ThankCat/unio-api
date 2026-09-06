@@ -66,6 +66,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/runtimefacts"
 	"github.com/ThankCat/unio-gateway/internal/service/subscription"
 	subscriptionhealth "github.com/ThankCat/unio-gateway/internal/service/subscription/health"
+	subscriptionquota "github.com/ThankCat/unio-gateway/internal/service/subscription/quota"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -295,6 +296,13 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		channelTestService.WithAccountHealth(probeHealth)
 		channelTestService.WithAccountRuntime(sharedBreakerStore)
 		channelModelInventoryService.WithAccountHealth(probeHealth)
+		// Codex 用量面：主动查用量（不发模型请求）与手动使用重置卡。查到的水位走同一 Recorder 落快照并
+		// 评估暂停/恢复，所以「查用量」也能把暂停中的账号带回调度（自动用卡由 worker 承担）。
+		subscriptionAccountService.WithQuota(subscriptionquota.NewService(
+			queries, probeIdentity,
+			subscriptionquota.NewClient(accountProxyClients.ClientFor, codexVersion),
+			probeHealth, deps.Logger,
+		))
 	}
 	proxyAdminService := adminproxy.NewService(queries)
 	routingTraceService := routingtrace.NewService(queries)

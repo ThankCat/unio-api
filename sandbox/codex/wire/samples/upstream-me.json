@@ -1,0 +1,46 @@
+{
+  "_source": "定向 HTTP 探测（2026-09-06，dev 号池账号 rakes-hurried，以 codex-tui 出站身份 GET https://chatgpt.com/backend-api/me）",
+  "_what": "用户画像端点：邮箱、姓名、注册时间（Unix 秒）、MFA、邮箱类型、国家/地区，以及 orgs 列表（title / personal / is_default / role / banned）。banned 非空即视为组织被封禁，管理端状态列会标红",
+  "_caution": "phone_number / id / org id 不落库（Profile 只保留展示所需字段）。amr / groups / intercom_hash 等字段无业务价值，也不保存",
+  "status": 200,
+  "body": {
+    "object": "user",
+    "id": "<masked:user_id>",
+    "email": "<masked>@gmail.com",
+    "name": "<masked>",
+    "picture": null,
+    "created": 1788347687,
+    "phone_number": "<masked>",
+    "mfa_flag_enabled": true,
+    "amr": [],
+    "groups": [],
+    "orgs": {
+      "object": "list",
+      "data": [
+        {
+          "object": "organization",
+          "id": "<masked:org_id>",
+          "created": 1788347687,
+          "title": "Personal",
+          "name": "<masked>",
+          "description": "Personal org for <masked>@gmail.com",
+          "personal": true,
+          "settings": { "threads_ui_visibility": "NONE", "usage_dashboard_visibility": "ANY_ROLE", "disable_user_api_keys": false },
+          "parent_org_id": null,
+          "is_default": true,
+          "role": "owner",
+          "is_scale_tier_authorized_purchaser": null,
+          "is_scim_managed": false,
+          "projects": { "object": "list", "data": [] },
+          "groups": [],
+          "geography": null,
+          "banned": null
+        }
+      ]
+    },
+    "has_payg_project_spend_limit": true,
+    "email_domain_type": "social",
+    "country": "JP",
+    "region": "Tokyo"
+  }
+}

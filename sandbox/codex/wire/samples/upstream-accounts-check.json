@@ -1,0 +1,60 @@
+{
+  "_source": "定向 HTTP 探测（2026-09-06，dev 号池账号 rakes-hurried，以 codex-tui 出站身份 GET https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27，额外携带 Origin: https://chatgpt.com 与 Referer: https://chatgpt.com/，缺任一即 403）",
+  "_what": "账号台账端点：以 account_id 为键返回该令牌可见的所有账号；每项含 account（套餐、结构、停用标记、创建时间、算力驻留）、features（功能开关列表，只记数量）、entitlement（订阅有效性、到期/续订/取消、计费周期与币种、欠费与宽限、促销折扣）。刷新状态时按 upstream_account_id 取对应项，取不到且只有一项时兜底",
+  "_caution": "expires_at 是订阅到期，即管理端「订阅」列的权威来源：刷新成功会覆盖手工填写的 subscription_expires_at 并把来源标记为 upstream。features 只统计数量，不落库明细。subscription_id / account_id 已脱敏",
+  "status": 200,
+  "body": {
+    "accounts": {
+      "<masked:account_id>": {
+        "account": {
+          "account_user_role": "account-owner",
+          "account_user_id": "<masked>__<masked:account_id>",
+          "processor": { "a001": { "has_customer_object": true }, "b001": { "has_transaction_history": false }, "c001": { "has_transaction_history": false } },
+          "account_id": "<masked:account_id>",
+          "organization_id": null,
+          "is_most_recent_expired_subscription_gratis": false,
+          "has_previously_paid_subscription": true,
+          "name": null,
+          "profile_picture_id": null,
+          "profile_picture_url": null,
+          "structure": "personal",
+          "plan_type": "plus",
+          "plan_display_name": "Plus",
+          "is_deactivated": false,
+          "eligible_for_reactivation": true,
+          "promo_data": {},
+          "created_time": "2026-09-02T11:14:50.035328Z",
+          "account_compute_residency": "no_constraint",
+          "workspace_type": null
+        },
+        "features": ["<masked:64 个功能开关字符串>"],
+        "entitlement": {
+          "subscription_id": "<masked:sub_id>",
+          "has_active_subscription": true,
+          "is_active_subscription_gratis": false,
+          "subscription_plan": "chatgptplusplan",
+          "expires_at": "2026-10-02T17:53:17+00:00",
+          "renews_at": "2026-10-02T11:53:17+00:00",
+          "cancels_at": null,
+          "billing_period": "monthly",
+          "billing_currency": "VND",
+          "is_delinquent": false,
+          "grace_period_end_timestamp": null,
+          "discount": {
+            "discount_type": "percentage",
+            "amount": 100.0,
+            "discount_expires_at": "2026-10-02T11:53:17+00:00",
+            "promo_campaign_id": "plus-1-month-free"
+          }
+        },
+        "last_active_subscription": {
+          "subscription_id": "<masked:sub_id>",
+          "purchase_origin_platform": "chatgpt_web",
+          "will_renew": true
+        },
+        "is_eligible_for_yearly_plus_subscription": false
+      }
+    },
+    "account_ordering": ["<masked:account_id>"]
+  }
+}

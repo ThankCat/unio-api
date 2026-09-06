@@ -15,6 +15,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 	subscriptionhealth "github.com/ThankCat/unio-gateway/internal/service/subscription/health"
+	subscriptionquota "github.com/ThankCat/unio-gateway/internal/service/subscription/quota"
 )
 
 // fakeQueries 是 Queries 的可配置替身：只实现用例路径需要的查询，其余返回零值。
@@ -116,6 +117,54 @@ func (q *fakeQueries) AdminUpdateSubscriptionAccountUsagePauseThreshold(_ contex
 	q.accounts[arg.ID] = row
 	q.thresholdWrites++
 	return row, nil
+}
+
+func (q *fakeQueries) UpdateAccountAutoResetCreditConfig(_ context.Context, arg sqlc.UpdateAccountAutoResetCreditConfigParams) (sqlc.SubscriptionAccount, error) {
+	row, ok := q.accounts[arg.ID]
+	if !ok {
+		return sqlc.SubscriptionAccount{}, pgx.ErrNoRows
+	}
+	row.AutoResetCreditEnabled = arg.AutoResetCreditEnabled
+	row.AutoResetCreditMode = arg.AutoResetCreditMode
+	row.AutoResetCredit5hThresholdPercent = arg.Threshold5hPercent
+	row.AutoResetCredit7dThresholdPercent = arg.Threshold7dPercent
+	row.ConfigRevision++
+	q.accounts[arg.ID] = row
+	return row, nil
+}
+
+// fakeQuota 是 QuotaService 的替身：记录调用并返回预设结果。
+type fakeQuota struct {
+	report     subscriptionquota.RefreshReport
+	reportErr  error
+	outcome    subscriptionquota.ResetOutcome
+	outcomeErr error
+	queried    []int64
+	reset      []int64
+	// batches 由后台 goroutine 写入，测试端用 channel 同步读取。
+	batches chan []int64
+}
+
+func (f *fakeQuota) Refresh(_ context.Context, accountID int64) (subscriptionquota.RefreshReport, error) {
+	f.queried = append(f.queried, accountID)
+	if f.reportErr != nil {
+		return subscriptionquota.RefreshReport{}, f.reportErr
+	}
+	return f.report, nil
+}
+
+func (f *fakeQuota) RefreshMany(_ context.Context, accountIDs []int64, _ int) {
+	if f.batches != nil {
+		f.batches <- accountIDs
+	}
+}
+
+func (f *fakeQuota) ResetCredit(_ context.Context, accountID int64) (subscriptionquota.ResetOutcome, error) {
+	f.reset = append(f.reset, accountID)
+	if f.outcomeErr != nil {
+		return subscriptionquota.ResetOutcome{}, f.outcomeErr
+	}
+	return f.outcome, nil
 }
 
 // fakeReconciler 记录账号阈值变更后触发的重算。
@@ -520,5 +569,160 @@ func TestUpdateUsagePauseThresholdWritesAndReconcilesAccountOnly(t *testing.T) {
 	}
 	if failed.RuntimeRefresh != nil || failed.RuntimeRefreshError == "" {
 		t.Fatalf("reconcile failure must be surfaced, got %+v / %q", failed.RuntimeRefresh, failed.RuntimeRefreshError)
+	}
+}
+
+// 刷新状态 / 手动用卡：未注入用量面时 409；注入后透传结果并返回刷新后的账号视图（含卡快照与画像）。
+func TestRefreshStatusAndResetCreditGoThroughQuotaService(t *testing.T) {
+	acct := account(1, 3, "enabled")
+	acct.Platform = "openai"
+	acct.ResetCreditsSnapshot = []byte(`{"available_count":2,"applicable_available_count":0,"credits":[{"expires_at":"2026-10-04T02:31:51Z","title":"Full reset"}],"fetched_at":"2026-09-06T10:00:00Z"}`)
+	acct.AccountProfile = []byte(`{"fetched_at":"2026-09-06T10:00:00Z","account":{"plan_type":"plus","plan_display_name":"Plus","structure":"personal"},"subscription":{"has_active_subscription":true,"plan":"chatgptplusplan","expires_at":"2026-10-02T17:53:17Z","renews_at":"2026-10-02T11:53:17Z","billing_period":"monthly"},"user":{"country":"JP","region":"Tokyo","mfa_enabled":true}}`)
+	acct.SubscriptionExpiresAt = pgtype.Timestamptz{Time: time.Date(2026, 10, 2, 17, 53, 17, 0, time.UTC), Valid: true}
+	q := &fakeQueries{accounts: map[int64]sqlc.SubscriptionAccount{1: acct}, channel: poolChannel(3)}
+	svc := newTestService(q, &fakePublisher{}, nil)
+
+	if _, err := svc.RefreshStatus(context.Background(), 1); failure.CodeOf(err) != failure.CodeAdminConflict {
+		t.Fatalf("missing quota service must be conflict, got %v", err)
+	}
+	if _, err := svc.ResetCredit(context.Background(), 1); failure.CodeOf(err) != failure.CodeAdminConflict {
+		t.Fatalf("missing quota service must be conflict, got %v", err)
+	}
+
+	quota := &fakeQuota{
+		report:  subscriptionquota.RefreshReport{Report: subscriptionquota.Report{Credits: subscriptionquota.CreditsSnapshot{AvailableCount: 2}}},
+		outcome: subscriptionquota.ResetOutcome{Result: subscriptionquota.ConsumeResult{Code: "success", WindowsReset: 2}},
+	}
+	svc.WithQuota(quota)
+
+	refreshed, err := svc.RefreshStatus(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("RefreshStatus: %v", err)
+	}
+	if len(quota.queried) != 1 || refreshed.Report.Credits.AvailableCount != 2 {
+		t.Fatalf("refresh result = %+v (queried=%v)", refreshed.Report, quota.queried)
+	}
+	if refreshed.Account.ResetCredits == nil || refreshed.Account.ResetCredits.AvailableCount != 2 || len(refreshed.Account.ResetCredits.Credits) != 1 {
+		t.Fatalf("account view must expose the credits snapshot, got %+v", refreshed.Account.ResetCredits)
+	}
+	if refreshed.Account.AutoResetCredit.Enabled || refreshed.Account.AutoResetCredit.Mode != "any" {
+		t.Fatalf("auto reset view defaults = %+v", refreshed.Account.AutoResetCredit)
+	}
+	if refreshed.Account.Profile == nil || refreshed.Account.Profile.User == nil || refreshed.Account.Profile.User.Country != "JP" {
+		t.Fatalf("account view must expose the profile, got %+v", refreshed.Account.Profile)
+	}
+	if refreshed.Account.SubscriptionSource != "upstream" {
+		t.Fatalf("subscription source must be upstream when the profile carries entitlement expiry, got %q", refreshed.Account.SubscriptionSource)
+	}
+
+	result, err := svc.ResetCredit(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("ResetCredit: %v", err)
+	}
+	if len(quota.reset) != 1 || result.Outcome.Result.WindowsReset != 2 {
+		t.Fatalf("reset result = %+v (reset=%v)", result.Outcome, quota.reset)
+	}
+
+	archived := account(2, 3, "archived")
+	q.accounts[2] = archived
+	if _, err := svc.ResetCredit(context.Background(), 2); failure.CodeOf(err) != failure.CodeAdminConflict {
+		t.Fatalf("archived account must not consume credits, got %v", err)
+	}
+	quota.outcomeErr = failure.New(failure.CodeAdminUpstreamUnavailable, failure.WithMessage("upstream 409"))
+	if _, err := svc.ResetCredit(context.Background(), 1); failure.CodeOf(err) != failure.CodeAdminUpstreamUnavailable {
+		t.Fatalf("upstream failure must pass through, got %v", err)
+	}
+}
+
+// 自动用卡配置：阈值 1~100 校验、mode 校验、开启时至少一个窗口参与、非 OpenAI 账号不可开启；视图回显配置。
+func TestUpdateAutoResetCreditValidatesAndPersists(t *testing.T) {
+	acct := account(1, 3, "enabled")
+	acct.Platform = "openai"
+	anthropic := account(2, 3, "enabled")
+	anthropic.Platform = "anthropic"
+	q := &fakeQueries{accounts: map[int64]sqlc.SubscriptionAccount{1: acct, 2: anthropic}, channel: poolChannel(3)}
+	svc := newTestService(q, &fakePublisher{}, nil)
+
+	bad := int32(0)
+	ninety := int32(90)
+	if _, err := svc.UpdateAutoResetCredit(context.Background(), 1, AutoResetCreditInput{Enabled: true, Threshold5hPercent: &bad}); failure.CodeOf(err) != failure.CodeAdminInvalidArgument {
+		t.Fatalf("threshold 0 must be invalid, got %v", err)
+	}
+	if _, err := svc.UpdateAutoResetCredit(context.Background(), 1, AutoResetCreditInput{Enabled: true, Mode: "sometimes", Threshold7dPercent: &ninety}); failure.CodeOf(err) != failure.CodeAdminInvalidArgument {
+		t.Fatalf("unknown mode must be invalid, got %v", err)
+	}
+	if _, err := svc.UpdateAutoResetCredit(context.Background(), 1, AutoResetCreditInput{Enabled: true}); failure.CodeOf(err) != failure.CodeAdminInvalidArgument {
+		t.Fatalf("enabling without any participating window must be invalid, got %v", err)
+	}
+	if _, err := svc.UpdateAutoResetCredit(context.Background(), 2, AutoResetCreditInput{Enabled: true, Threshold7dPercent: &ninety}); failure.CodeOf(err) != failure.CodeAdminInvalidArgument {
+		t.Fatalf("non-openai account must not enable auto reset, got %v", err)
+	}
+	if _, err := svc.UpdateAutoResetCredit(context.Background(), 404, AutoResetCreditInput{}); failure.CodeOf(err) != failure.CodeAdminNotFound {
+		t.Fatalf("missing account must be not found, got %v", err)
+	}
+
+	// 只填 7d 90%：5h 留空 = 不参与；mode 缺省按 any。
+	view, err := svc.UpdateAutoResetCredit(context.Background(), 1, AutoResetCreditInput{Enabled: true, Threshold7dPercent: &ninety})
+	if err != nil {
+		t.Fatalf("UpdateAutoResetCredit: %v", err)
+	}
+	auto := view.AutoResetCredit
+	if !auto.Enabled || auto.Mode != "any" || auto.Threshold5hPercent != nil || auto.Threshold7dPercent == nil || *auto.Threshold7dPercent != 90 {
+		t.Fatalf("auto reset config = %+v", auto)
+	}
+	if q.accounts[1].ConfigRevision != 1 {
+		t.Fatalf("config revision must bump for audit, got %d", q.accounts[1].ConfigRevision)
+	}
+
+	// all 模式 + 两个窗口；关闭时允许两个都留空（保留配置）。
+	hundred := int32(100)
+	view, err = svc.UpdateAutoResetCredit(context.Background(), 1, AutoResetCreditInput{Enabled: true, Mode: "all", Threshold5hPercent: &hundred, Threshold7dPercent: &ninety})
+	if err != nil || view.AutoResetCredit.Mode != "all" || view.AutoResetCredit.Threshold5hPercent == nil {
+		t.Fatalf("all mode config = %+v err=%v", view.AutoResetCredit, err)
+	}
+	view, err = svc.UpdateAutoResetCredit(context.Background(), 1, AutoResetCreditInput{Enabled: false})
+	if err != nil || view.AutoResetCredit.Enabled {
+		t.Fatalf("disable must succeed without thresholds: %+v err=%v", view.AutoResetCredit, err)
+	}
+}
+
+// 订阅到期来源：无画像但有手工值 → manual；无画像无值 → 空。
+func TestProfileViewDerivesSubscriptionSource(t *testing.T) {
+	manualAt := pgtype.Timestamptz{Time: time.Now(), Valid: true}
+	if profile, source := profileView(nil, manualAt); profile != nil || source != "manual" {
+		t.Fatalf("manual expiry without profile = %v/%q", profile, source)
+	}
+	if profile, source := profileView(nil, pgtype.Timestamptz{}); profile != nil || source != "" {
+		t.Fatalf("no expiry without profile = %v/%q", profile, source)
+	}
+	raw := []byte(`{"fetched_at":"2026-09-06T10:00:00Z","subscription":{"has_active_subscription":true}}`)
+	if profile, source := profileView(raw, manualAt); profile == nil || source != "manual" {
+		t.Fatalf("profile without entitlement expiry must keep manual source, got %v/%q", profile, source)
+	}
+}
+
+// 导入后首刷：文件导入的账号后台批量刷新；OAuth 完成同步刷新。
+func TestImportTriggersInitialRefresh(t *testing.T) {
+	q := &fakeQueries{accounts: map[int64]sqlc.SubscriptionAccount{}, channel: poolChannel(3)}
+	quota := &fakeQuota{batches: make(chan []int64, 1)}
+	svc := newTestService(q, &fakePublisher{}, nil).WithQuota(quota)
+
+	svc.refreshAfterImport(context.Background(), []int64{5, 6}, false)
+	// 后台批量刷新在 goroutine 里执行：等它把批次送出来。
+	select {
+	case batch := <-quota.batches:
+		if len(batch) != 2 || len(quota.queried) != 0 {
+			t.Fatalf("file import must refresh in one background batch, got batch=%v queried=%v", batch, quota.queried)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("background batch refresh was not triggered")
+	}
+	svc.refreshAfterImport(context.Background(), []int64{7}, true)
+	if len(quota.queried) != 1 || quota.queried[0] != 7 {
+		t.Fatalf("oauth import must refresh synchronously, got %v", quota.queried)
+	}
+	svc.refreshAfterImport(context.Background(), nil, true)
+	if len(quota.queried) != 1 {
+		t.Fatal("empty id list must be a no-op")
 	}
 }

@@ -62,7 +62,24 @@ func (r *ProbeIdentityResolver) ResolveProbeIdentity(ctx context.Context, channe
 		}
 		accountID = picked
 	}
+	return r.resolveAccount(ctx, accountID, channelID)
+}
 
+// ResolveAccountIdentity 按账号 ID 解析出站身份（不校验所属渠道）：用量面（主动查用量 / 重置卡）
+// 只关心「这个号」，与渠道无关。选号规则与 ResolveProbeIdentity 一致：enabled 走真实出站解析，
+// disabled 用存量令牌直发，archived 拒绝。
+func (r *ProbeIdentityResolver) ResolveAccountIdentity(ctx context.Context, accountID int64) (ProbeIdentity, error) {
+	if accountID <= 0 {
+		return ProbeIdentity{}, failure.New(
+			failure.CodeAdminInvalidArgument,
+			failure.WithMessage("account id must be positive"),
+		)
+	}
+	return r.resolveAccount(ctx, accountID, 0)
+}
+
+// resolveAccount 加载账号并解析身份；channelID > 0 时校验账号归属。
+func (r *ProbeIdentityResolver) resolveAccount(ctx context.Context, accountID, channelID int64) (ProbeIdentity, error) {
 	account, err := r.queries.AdminGetSubscriptionAccount(ctx, accountID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ProbeIdentity{}, failure.New(
@@ -76,7 +93,7 @@ func (r *ProbeIdentityResolver) ResolveProbeIdentity(ctx context.Context, channe
 			failure.WithMessage("load probe account"),
 		)
 	}
-	if account.ChannelID != channelID {
+	if channelID > 0 && account.ChannelID != channelID {
 		return ProbeIdentity{}, failure.New(
 			failure.CodeAdminInvalidArgument,
 			failure.WithMessage("账号不属于该渠道"),

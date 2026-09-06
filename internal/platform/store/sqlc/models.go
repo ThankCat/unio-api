@@ -966,6 +966,20 @@ type SubscriptionAccount struct {
 	FirstTokenTimeoutMs pgtype.Int4
 	// 账号用量暂停阈值（%）。NULL 继承渠道（渠道再继承全局）；1~100 覆写；不接受 0。
 	UsagePauseThresholdPercent pgtype.Int4
+	// 最近一次主动查用量得到的重置卡快照：{available_count, applicable_available_count, credits:[{expires_at}], fetched_at}。展示缓存，不存卡 id。
+	ResetCreditsSnapshot []byte
+	// 自动使用重置卡：按 mode 与已设窗口阈值判定触发，账号持有可用卡时自动消费最早到期的一张。默认关闭。
+	AutoResetCreditEnabled bool
+	// 多窗口触发方式：any = 任一已设窗口达到阈值即用卡；all = 全部已设窗口同时达到才用卡。
+	AutoResetCreditMode string
+	// 自动用卡的 5h 窗口触发阈值（%）。NULL = 5h 不作为触发条件；1~100。
+	AutoResetCredit5hThresholdPercent pgtype.Int4
+	// 自动用卡的 7d 窗口触发阈值（%）。NULL = 7d 不作为触发条件；1~100。
+	AutoResetCredit7dThresholdPercent pgtype.Int4
+	// 自动用卡运行态（脱敏）：{status, trigger_window, available_count, checked_at, last_result_at, error_code, attempt_cycle_hash, attempt_credit_hash}。
+	AutoResetCreditState []byte
+	// 上游账号画像快照（accounts/check + me + wham/usage 的 credits）：套餐/订阅/状态/用户/组织/地区，含 fetched_at 与分项错误。展示缓存。
+	AccountProfile []byte
 }
 
 type SubscriptionAccountStat struct {

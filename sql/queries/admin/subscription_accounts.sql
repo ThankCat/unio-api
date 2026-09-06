@@ -30,7 +30,14 @@ SELECT
     a.response_timeout_ms,
     a.first_token_timeout_ms,
     a.usage_pause_threshold_percent,
-    c.account_usage_pause_threshold_percent AS channel_usage_pause_threshold_percent
+    c.account_usage_pause_threshold_percent AS channel_usage_pause_threshold_percent,
+    a.reset_credits_snapshot,
+    a.auto_reset_credit_enabled,
+    a.auto_reset_credit_mode,
+    a.auto_reset_credit_5h_threshold_percent,
+    a.auto_reset_credit_7d_threshold_percent,
+    a.auto_reset_credit_state,
+    a.account_profile
 FROM subscription_accounts a
 JOIN channels c ON c.id = a.channel_id
 LEFT JOIN proxies apx ON apx.id = a.proxy_id

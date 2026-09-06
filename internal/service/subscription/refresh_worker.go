@@ -54,8 +54,17 @@ type RefreshWorker struct {
 	logger   *zap.Logger
 	options  RefreshWorkerOptions
 	now      func() time.Time
+	// afterRefresh 在一次成功刷新后被调用（best-effort）：令牌刷新每约 10 天一次，是顺带刷新账号
+	// 画像（套餐 / 订阅到期 / 上游状态）的自然时机，不用另起周期任务打上游。
+	afterRefresh func(ctx context.Context, accountID int64)
 
 	nextSweep time.Time
+}
+
+// WithAfterRefresh 注入刷新成功后的回调（生产注入 quota.Service.Refresh）。
+func (w *RefreshWorker) WithAfterRefresh(fn func(ctx context.Context, accountID int64)) *RefreshWorker {
+	w.afterRefresh = fn
+	return w
 }
 
 // NewRefreshWorker 创建保活 worker。
@@ -99,6 +108,8 @@ func (w *RefreshWorker) RunOnce(ctx context.Context) (bool, error) {
 		if _, err := w.outbound.refreshWithLock(ctx, row.ID, effectiveProxyURL(row.ProxyEntityUrl, row.ProxyUrl)); err != nil {
 			logging.Warn(w.logger, "subscription", "refresh", "background refresh failed",
 				zap.Int64("account_id", row.ID), zap.String("error_message", err.Error()))
+		} else if w.afterRefresh != nil {
+			w.afterRefresh(ctx, row.ID)
 		}
 		if index+1 < len(rows) {
 			select {

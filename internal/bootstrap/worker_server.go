@@ -27,6 +27,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 	"github.com/ThankCat/unio-gateway/internal/service/subscription"
 	subscriptionhealth "github.com/ThankCat/unio-gateway/internal/service/subscription/health"
+	subscriptionquota "github.com/ThankCat/unio-gateway/internal/service/subscription/quota"
 )
 
 // WorkerServerAppDB 定义 worker server app 构建时需要的数据库能力。
@@ -161,6 +162,21 @@ func NewWorkerServerApp(ctx context.Context, deps WorkerServerAppDeps) (*WorkerS
 	channelTestService.WithAccountHealth(probeHealth)
 	channelTestService.WithAccountRuntime(permitStore)
 	channelModelInventoryService.WithAccountHealth(probeHealth)
+	// 自动使用重置卡：按账号阈值主动查用量（/wham/usage，同一 Recorder 落快照并评估暂停），
+	// 触顶且有卡时消费最早到期的一张。单实例 worker，幂等由确定性 redeem id + 状态指纹保证。
+	quotaService := subscriptionquota.NewService(
+		queries, probeIdentity,
+		subscriptionquota.NewClient(accountProxyClients.ClientFor, codexVersion),
+		probeHealth, deps.Logger,
+	)
+	units = append(units, subscriptionquota.NewAutoResetWorker(queries, quotaService, deps.Logger, subscriptionquota.AutoResetOptions{}))
+	// 令牌刷新成功后顺带刷新账号画像（套餐 / 订阅到期 / 上游状态），让手工录入的到期日随之自动更正。
+	tokenRefreshWorker.WithAfterRefresh(func(ctx context.Context, accountID int64) {
+		if _, err := quotaService.Refresh(ctx, accountID); err != nil {
+			deps.Logger.Warn("account profile refresh after token refresh failed",
+				zap.Int64("account_id", accountID), zap.String("error_message", err.Error()))
+		}
+	})
 	permissionStore := permitStore
 	if err := permissionStore.VerifySingleNodeDeployment(ctx); err != nil {
 		return nil, err

@@ -124,6 +124,7 @@ type channelTestStreamEvent struct {
 	Type        string                `json:"type"`
 	Model       string                `json:"model,omitempty"`
 	AccountName string                `json:"account_name,omitempty"`
+	Prompt      string                `json:"prompt,omitempty"`
 	Text        string                `json:"text,omitempty"`
 	Error       string                `json:"error,omitempty"`
 	Result      *channelTestResultDTO `json:"result,omitempty"`
@@ -185,7 +186,7 @@ func (h *channelTestHandler) testStream(w http.ResponseWriter, r *http.Request) 
 	}, func(ev channeltest.ProbeEvent) {
 		switch ev.Type {
 		case channeltest.ProbeEventStart:
-			writeEvent(channelTestStreamEvent{Type: "test_start", Model: ev.Model, AccountName: ev.AccountName})
+			writeEvent(channelTestStreamEvent{Type: "test_start", Model: ev.Model, AccountName: ev.AccountName, Prompt: ev.Prompt})
 		case channeltest.ProbeEventContent:
 			writeEvent(channelTestStreamEvent{Type: "content", Text: ev.Text})
 		}

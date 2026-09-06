@@ -25,6 +25,10 @@
 | `upstream-usage-completed.json` | `response.completed` 的 `service_tier`、`usage`、缓存选项 | 结算、档位权威性、缓存归因 |
 | `upstream-response-metadata.json` | 原生 WS 承载响应头的事件（含 `x-codex-turn-state`） | 回合状态处理 |
 | `upstream-models.json` | 模型清单端点响应与该账号可见的 slug | 模型发现流程 |
+| `upstream-wham-usage.json` | 主动查用量端点 `GET /backend-api/wham/usage`：5h/7d 窗口 + 重置卡计数 | 主动查用量、自动用卡判定 |
+| `upstream-wham-reset-credits.json` | 重置卡明细端点 `GET /backend-api/wham/rate-limit-reset-credits`：每张卡的状态与到期 | 重置卡展示、自动用卡选卡 |
+| `upstream-accounts-check.json` | 账号台账端点 `GET /backend-api/accounts/check/v4-2023-04-27`（需 `Origin`/`Referer`）：套餐、停用标记、订阅到期/续订/取消、计费、欠费、促销 | 刷新状态、订阅到期回写、异常账号标记 |
+| `upstream-me.json` | 用户画像端点 `GET /backend-api/me`：邮箱、MFA、国家/地区、注册时间、组织与封禁标记 | 刷新状态、账号详情展示 |
 | `upstream-ws-handshake.json` | 原生 WS 握手头与完整事件序列 | 仅参考，号池出站不用 WS |
 
 ## 使用纪律

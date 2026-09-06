@@ -1,0 +1,42 @@
+{
+  "_source": "定向 HTTP 探测（2026-09-06，dev 号池账号 rakes-hurried，以 codex-tui 出站身份 GET https://chatgpt.com/backend-api/wham/rate-limit-reset-credits）",
+  "_what": "重置卡明细端点的响应：每张卡的 id / reset_type / status / granted_at / expires_at，以及 available_count。自动用卡按 expires_at 最早的可用卡消费（POST /wham/rate-limit-reset-credits/consume，body {redeem_request_id, credit_id?}）",
+  "_caution": "卡 id 是 53 字节的上游标识，只在消费时现取，不落库、不进管理端响应（与 sub2api 同纪律）。reset_type=codex_rate_limits 且 status=available 才算可用；title 说明一张卡同时重置 7d 与 5h 两个窗口",
+  "status": 200,
+  "body": {
+    "credits": [
+      {
+        "id": "<masked:53>",
+        "reset_type": "codex_rate_limits",
+        "is_supported_by_plan": true,
+        "status": "available",
+        "granted_at": "2026-09-04T02:31:51.152383Z",
+        "expires_at": "2026-10-04T02:31:51.152383Z",
+        "redeem_started_at": null,
+        "redeemed_at": null,
+        "profile_image_url": "https://openaiassets.blob.core.windows.net/$web/codex/codex-icon-200.png",
+        "profile_user_id": "Codex Team",
+        "title": "Full reset (Weekly + 5 hr)",
+        "description": "Thanks for using Codex! You've been granted one free rate limit reset."
+      },
+      {
+        "id": "<masked:53>",
+        "reset_type": "codex_rate_limits",
+        "is_supported_by_plan": true,
+        "status": "available",
+        "granted_at": "2026-09-04T22:53:26.927598Z",
+        "expires_at": "2026-10-04T22:53:26.927598Z",
+        "redeem_started_at": null,
+        "redeemed_at": null,
+        "profile_image_url": "https://openaiassets.blob.core.windows.net/$web/codex/codex-icon-200.png",
+        "profile_user_id": "Codex Team",
+        "title": "Full reset (Weekly + 5 hr)",
+        "description": "Thanks for using Codex! You've been granted one free rate limit reset."
+      }
+    ],
+    "available_count": 2,
+    "total_earned_count": 0,
+    "immediate_reset_purchase_eligible": false,
+    "history_enabled": false
+  }
+}

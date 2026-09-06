@@ -76,6 +76,13 @@ func (id Identity) ApplyInferenceHeaders(h http.Header) {
 	h.Set("version", id.Version)
 }
 
+// ApplyUsageHeaders 写用量面身份头（/backend-api/wham/*：主动查用量、重置卡明细与消费）。
+// 与推理面同一组三头：2026-09-06 以 codex-tui 身份实测 200（sandbox/codex/wire/samples/upstream-wham-*.json），
+// 不需要 Codex Desktop 那套 openai-beta 头。单独命名是为了让第四个出站面也从本包取身份，而不是各自拼。
+func (id Identity) ApplyUsageHeaders(h http.Header) {
+	id.ApplyInferenceHeaders(h)
+}
+
 // ApplyCredentialHeaders 写凭据面身份对（auth.openai.com 换码/刷新）。
 //
 // 真实客户端在该面只带 originator 与 User-Agent（codex-rs login/default_client.rs），

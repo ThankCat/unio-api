@@ -33,6 +33,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/service/admin/supply"
 	"github.com/ThankCat/unio-gateway/internal/service/subscription"
 	subscriptionhealth "github.com/ThankCat/unio-gateway/internal/service/subscription/health"
+	subscriptionquota "github.com/ThankCat/unio-gateway/internal/service/subscription/quota"
 )
 
 // Queries 是账号管理所需的数据库能力（读侧直连 pool；写侧经 Publisher 的 BusinessCommit 事务）。
@@ -56,11 +57,20 @@ type Queries interface {
 	AdminChannelAccountsLastFailure24h(ctx context.Context, channelID int64) ([]sqlc.AdminChannelAccountsLastFailure24hRow, error)
 	AdminChannelAccountsLifetimeStats(ctx context.Context, channelID int64) ([]sqlc.AdminChannelAccountsLifetimeStatsRow, error)
 	AdminUpdateSubscriptionAccountUsagePauseThreshold(ctx context.Context, arg sqlc.AdminUpdateSubscriptionAccountUsagePauseThresholdParams) (sqlc.SubscriptionAccount, error)
+	UpdateAccountAutoResetCreditConfig(ctx context.Context, arg sqlc.UpdateAccountAutoResetCreditConfigParams) (sqlc.SubscriptionAccount, error)
 }
 
 // UsagePauseReconciler 在账号阈值变更后按该账号最近快照重算 Redis 暂停标记（生产实现 subscription/health.Reconciler）。
 type UsagePauseReconciler interface {
 	ReconcileAccount(ctx context.Context, accountID int64) (subscriptionhealth.ReconcileResult, error)
+}
+
+// QuotaService 是 Codex 用量面能力：刷新整个账号状态（用量 + 重置卡 + 画像）、批量首刷、手动消费重置卡
+// （生产实现 subscription/quota.Service）。
+type QuotaService interface {
+	Refresh(ctx context.Context, accountID int64) (subscriptionquota.RefreshReport, error)
+	RefreshMany(ctx context.Context, accountIDs []int64, concurrency int)
+	ResetCredit(ctx context.Context, accountID int64) (subscriptionquota.ResetOutcome, error)
 }
 
 // AccountRuntimeReader 读取账号运行态（冷却/隔离/暂停/在途），供列表页展示。
@@ -93,8 +103,16 @@ type Service struct {
 	// nil 时按代码默认 90。usagePause 在账号阈值改动后重算该账号的 Redis 暂停标记；nil 不重算。
 	globalUsagePauseThreshold func(ctx context.Context) int32
 	usagePause                UsagePauseReconciler
+	// quota 是 Codex 用量面（主动查用量 / 重置卡）；nil 时相关接口返回 409 说明未启用。
+	quota QuotaService
 
 	oauthSessions sync.Map // session id -> oauthSession
+}
+
+// WithQuota 注入 Codex 用量面服务。
+func (s *Service) WithQuota(quota QuotaService) *Service {
+	s.quota = quota
+	return s
 }
 
 // WithSupplyPreview 接入供给影响预览（bootstrap 注入 *sqlc.Queries 供 supply.ChannelImpact 反查）。
@@ -162,10 +180,18 @@ type Account struct {
 	UsagePauseThresholdPercent *int32 `json:"usage_pause_threshold_percent"`
 	// EffectiveUsagePauseThresholdPercent / UsagePauseThresholdSource 是三层继承解析后的生效阈值与来源
 	//（account / channel / global），供管理端水位条与「继承自」提示直接使用。
-	EffectiveUsagePauseThresholdPercent int32     `json:"effective_usage_pause_threshold_percent"`
-	UsagePauseThresholdSource           string    `json:"usage_pause_threshold_source"`
-	CreatedAt                           time.Time `json:"created_at"`
-	UpdatedAt                           time.Time `json:"updated_at"`
+	EffectiveUsagePauseThresholdPercent int32  `json:"effective_usage_pause_threshold_percent"`
+	UsagePauseThresholdSource           string `json:"usage_pause_threshold_source"`
+	// ResetCredits 是最近一次刷新得到的重置卡快照（nil = 从未刷新）。
+	ResetCredits *ResetCreditsView `json:"reset_credits,omitempty"`
+	// AutoResetCredit 是自动用卡的配置与运行态。
+	AutoResetCredit AutoResetCreditView `json:"auto_reset_credit"`
+	// Profile 是最近一次刷新得到的上游账号画像（套餐 / 订阅 / 状态 / 用户 / 组织 / credits；nil = 从未刷新）。
+	Profile *subscriptionquota.Profile `json:"profile,omitempty"`
+	// SubscriptionSource 标出 subscription_expires_at 的来源：upstream（刷新回写的 entitlement）/ manual（手工录入）/ 空（未知）。
+	SubscriptionSource string    `json:"subscription_source,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 
 	// Runtime 是 Redis 运行态（冷却/临时不可调度/用量暂停/在途），列表读取时批量拉取。
 	Runtime *AccountRuntimeView `json:"runtime,omitempty"`
@@ -174,6 +200,30 @@ type Account struct {
 	// UsageLifetime 是生命周期累计（结算路径增量累加进 subscription_account_stats；「用量」列）。
 	// 从未产生结算终态的账号为 nil。
 	UsageLifetime *AccountUsageLifetimeView `json:"usage_lifetime,omitempty"`
+}
+
+// ResetCreditsView 是重置卡快照的展示形态：可用卡数、每张卡的到期时刻与采集时间。
+type ResetCreditsView struct {
+	AvailableCount int               `json:"available_count"`
+	Credits        []ResetCreditView `json:"credits"`
+	FetchedAt      time.Time         `json:"fetched_at"`
+}
+
+// ResetCreditView 是一张卡（不含上游 id）。
+type ResetCreditView struct {
+	GrantedAt *time.Time `json:"granted_at,omitempty"`
+	ExpiresAt time.Time  `json:"expires_at"`
+	Title     string     `json:"title,omitempty"`
+}
+
+// AutoResetCreditView 是自动用卡的配置与脱敏运行态：
+// 开关、多窗口触发方式（any 任一 / all 同时）、5h/7d 各自阈值（nil = 该窗口不参与触发）。
+type AutoResetCreditView struct {
+	Enabled            bool                              `json:"enabled"`
+	Mode               string                            `json:"mode"`
+	Threshold5hPercent *int32                            `json:"threshold_5h_percent"`
+	Threshold7dPercent *int32                            `json:"threshold_7d_percent"`
+	State              *subscriptionquota.AutoResetState `json:"state,omitempty"`
 }
 
 // AccountUsageLifetimeView 是「用量」列的数据（建号至今累计，非 24H）。
@@ -490,6 +540,13 @@ func (s *Service) ImportFile(ctx context.Context, channelID int64, raw []byte) (
 	if err != nil {
 		return results, err
 	}
+	imported := make([]int64, 0, len(results))
+	for _, item := range results {
+		if item.Imported && item.AccountID > 0 {
+			imported = append(imported, item.AccountID)
+		}
+	}
+	s.refreshAfterImport(ctx, imported, false)
 	return results, nil
 }
 
@@ -611,6 +668,10 @@ func (s *Service) CompleteOAuth(ctx context.Context, sessionID, code, state stri
 		if reauthErr != nil {
 			return CompleteOAuthResult{}, storeFailed(reauthErr, "reauthorize subscription account")
 		}
+		s.refreshAfterImport(ctx, []int64{row.ID}, true)
+		if refreshed, loadErr := s.queries.AdminGetSubscriptionAccount(ctx, row.ID); loadErr == nil {
+			row = refreshed
+		}
 		return CompleteOAuthResult{Account: s.accountView(ctx, row), Reauthorized: true}, nil
 	case err == nil:
 		return CompleteOAuthResult{}, conflict(
@@ -631,6 +692,7 @@ func (s *Service) CompleteOAuth(ctx context.Context, sessionID, code, state stri
 		}
 		return CompleteOAuthResult{}, conflict(reason)
 	}
+	s.refreshAfterImport(ctx, []int64{results[0].AccountID}, true)
 	row, err := s.queries.AdminGetSubscriptionAccount(ctx, results[0].AccountID)
 	if err != nil {
 		return CompleteOAuthResult{}, storeFailed(err, "load imported account")
@@ -786,6 +848,133 @@ func (s *Service) UpdateUsagePauseThreshold(ctx context.Context, accountID int64
 		}
 	}
 	return result, nil
+}
+
+// StatusRefreshResult 是「刷新状态」的结果：上游用量 / 重置卡 / 账号画像 + 刷新后的账号视图。
+type StatusRefreshResult struct {
+	Report  subscriptionquota.RefreshReport `json:"report"`
+	Account Account                         `json:"account"`
+}
+
+// RefreshStatus 向上游拉取该账号的全部状态（不发模型请求）：窗口水位经观测链路落快照并评估暂停/恢复，
+// 重置卡计数与到期明细、accounts/check 与 me 的画像写入快照，套餐与订阅到期回写为上游权威值。
+// 检测（真实模型请求）仍是判断「模型能不能用」的手段，两者互补。
+func (s *Service) RefreshStatus(ctx context.Context, accountID int64) (StatusRefreshResult, error) {
+	if accountID <= 0 {
+		return StatusRefreshResult{}, invalidArgument("id", "account id must be positive")
+	}
+	if s.quota == nil {
+		return StatusRefreshResult{}, conflict("Codex 用量面未启用（需要 Redis 与账号出站链路）")
+	}
+	report, err := s.quota.Refresh(ctx, accountID)
+	if err != nil {
+		return StatusRefreshResult{}, err
+	}
+	row, err := s.queries.AdminGetSubscriptionAccount(ctx, accountID)
+	if err != nil {
+		return StatusRefreshResult{}, accountLoadError(err)
+	}
+	return StatusRefreshResult{Report: report, Account: s.accountView(ctx, row)}, nil
+}
+
+// refreshAfterImport 让新导入的账号立刻拿到上游状态（水位 / 重置卡 / 套餐 / 订阅到期 / 用户画像），
+// 而不是等第一次请求或人工刷新。批量导入在后台有限并发进行，不拖长导入请求；单账号（OAuth）同步等待。
+func (s *Service) refreshAfterImport(ctx context.Context, accountIDs []int64, wait bool) {
+	if s.quota == nil || len(accountIDs) == 0 {
+		return
+	}
+	if wait {
+		for _, id := range accountIDs {
+			if _, err := s.quota.Refresh(ctx, id); err != nil {
+				s.logger.Warn("initial account refresh failed", zap.Int64("account_id", id), zap.String("error_message", err.Error()))
+			}
+		}
+		return
+	}
+	go s.quota.RefreshMany(context.WithoutCancel(ctx), accountIDs, 2)
+}
+
+// ResetCreditResult 是「手动使用重置卡」的结果：消费结果、回读到的用量/卡数 + 账号视图。
+type ResetCreditResult struct {
+	Outcome subscriptionquota.ResetOutcome `json:"outcome"`
+	Account Account                        `json:"account"`
+}
+
+// ResetCredit 手动消费一张重置卡（上游同时重置 5h 与 7d 窗口），随后回读用量解除暂停。
+// 只允许启用/停用中的账号；归档账号不再持有调度资格，不该继续动上游额度。
+func (s *Service) ResetCredit(ctx context.Context, accountID int64) (ResetCreditResult, error) {
+	if accountID <= 0 {
+		return ResetCreditResult{}, invalidArgument("id", "account id must be positive")
+	}
+	if s.quota == nil {
+		return ResetCreditResult{}, conflict("Codex 用量面未启用（需要 Redis 与账号出站链路）")
+	}
+	account, err := s.queries.AdminGetSubscriptionAccount(ctx, accountID)
+	if err != nil {
+		return ResetCreditResult{}, accountLoadError(err)
+	}
+	if account.Status == "archived" {
+		return ResetCreditResult{}, conflict("归档账号不使用重置卡；如需续用请先恢复为停用")
+	}
+	outcome, err := s.quota.ResetCredit(ctx, accountID)
+	if err != nil {
+		return ResetCreditResult{}, err
+	}
+	row, err := s.queries.AdminGetSubscriptionAccount(ctx, accountID)
+	if err != nil {
+		return ResetCreditResult{}, accountLoadError(err)
+	}
+	return ResetCreditResult{Outcome: outcome, Account: s.accountView(ctx, row)}, nil
+}
+
+// AutoResetCreditInput 是自动用卡配置：开关、多窗口触发方式（any 任一 / all 同时，空串按 any）、
+// 5h/7d 触发阈值（nil = 该窗口不参与触发，1~100）。开启时至少一个窗口参与。
+type AutoResetCreditInput struct {
+	Enabled            bool
+	Mode               string
+	Threshold5hPercent *int32
+	Threshold7dPercent *int32
+}
+
+// UpdateAutoResetCredit 修改账号的自动用卡配置。普通列更新，不经容量发布（不是调度围栏参数）。
+func (s *Service) UpdateAutoResetCredit(ctx context.Context, accountID int64, in AutoResetCreditInput) (Account, error) {
+	if accountID <= 0 {
+		return Account{}, invalidArgument("id", "account id must be positive")
+	}
+	mode := strings.TrimSpace(in.Mode)
+	if mode == "" {
+		mode = subscriptionquota.AutoResetModeAny
+	}
+	if !subscriptionquota.ValidAutoResetMode(mode) {
+		return Account{}, invalidArgument("mode", "触发方式只能是 any（任一达到）或 all（同时达到）")
+	}
+	if in.Threshold5hPercent != nil && !accountusage.ValidThreshold(*in.Threshold5hPercent) {
+		return Account{}, invalidArgument("threshold_5h_percent", "5h 自动用卡阈值须为 1~100 的整数（留空 = 5h 不参与触发）")
+	}
+	if in.Threshold7dPercent != nil && !accountusage.ValidThreshold(*in.Threshold7dPercent) {
+		return Account{}, invalidArgument("threshold_7d_percent", "7d 自动用卡阈值须为 1~100 的整数（留空 = 7d 不参与触发）")
+	}
+	if in.Enabled && in.Threshold5hPercent == nil && in.Threshold7dPercent == nil {
+		return Account{}, invalidArgument("enabled", "开启自动用卡至少要设置一个窗口的触发阈值")
+	}
+	account, err := s.queries.AdminGetSubscriptionAccount(ctx, accountID)
+	if err != nil {
+		return Account{}, accountLoadError(err)
+	}
+	if in.Enabled && account.Platform != "openai" {
+		return Account{}, invalidArgument("enabled", "只有 OpenAI/Codex 订阅账号支持自动使用重置卡")
+	}
+	updated, err := s.queries.UpdateAccountAutoResetCreditConfig(ctx, sqlc.UpdateAccountAutoResetCreditConfigParams{
+		ID:                     accountID,
+		AutoResetCreditEnabled: in.Enabled,
+		AutoResetCreditMode:    mode,
+		Threshold5hPercent:     optionalInt4From32(in.Threshold5hPercent),
+		Threshold7dPercent:     optionalInt4From32(in.Threshold7dPercent),
+	})
+	if err != nil {
+		return Account{}, storeFailed(err, "update subscription account auto reset credit config")
+	}
+	return s.accountView(ctx, updated), nil
 }
 
 // Delete 物理删除账号，用于清理录错/试错的脏数据。
@@ -1170,6 +1359,62 @@ func thresholdOverride(v pgtype.Int4) *int32 {
 	return &percent
 }
 
+// resetCreditsView 解析重置卡快照列；从未查过或损坏返回 nil。
+func resetCreditsView(raw []byte) *ResetCreditsView {
+	snapshot, ok := subscriptionquota.ParseCreditsSnapshot(raw)
+	if !ok {
+		return nil
+	}
+	view := &ResetCreditsView{
+		AvailableCount: snapshot.AvailableCount,
+		Credits:        make([]ResetCreditView, 0, len(snapshot.Credits)),
+		FetchedAt:      snapshot.FetchedAt,
+	}
+	for _, credit := range snapshot.Credits {
+		item := ResetCreditView{ExpiresAt: credit.ExpiresAt, Title: credit.Title}
+		if !credit.GrantedAt.IsZero() {
+			granted := credit.GrantedAt
+			item.GrantedAt = &granted
+		}
+		view.Credits = append(view.Credits, item)
+	}
+	return view
+}
+
+// profileView 解析画像列并判定订阅到期日的来源：画像里有 entitlement 到期即为上游回写（upstream），
+// 否则有值就是手工录入（manual）。
+func profileView(raw []byte, expiresAt pgtype.Timestamptz) (*subscriptionquota.Profile, string) {
+	profile, ok := subscriptionquota.ParseProfile(raw)
+	if !ok {
+		if expiresAt.Valid {
+			return nil, "manual"
+		}
+		return nil, ""
+	}
+	source := ""
+	switch {
+	case profile.Subscription != nil && !profile.Subscription.ExpiresAt.IsZero():
+		source = "upstream"
+	case expiresAt.Valid:
+		source = "manual"
+	}
+	return &profile, source
+}
+
+// autoResetCreditView 组装自动用卡配置与运行态。
+func autoResetCreditView(enabled bool, mode string, threshold5h, threshold7d pgtype.Int4, state []byte) AutoResetCreditView {
+	if !subscriptionquota.ValidAutoResetMode(mode) {
+		mode = subscriptionquota.AutoResetModeAny
+	}
+	return AutoResetCreditView{
+		Enabled:            enabled,
+		Mode:               mode,
+		Threshold5hPercent: thresholdOverride(threshold5h),
+		Threshold7dPercent: thresholdOverride(threshold7d),
+		State:              subscriptionquota.ParseAutoResetState(state),
+	}
+}
+
 func accountFromListRow(row sqlc.AdminListSubscriptionAccountsRow) Account {
 	account := Account{
 		ID: row.ID, ChannelID: row.ChannelID, Platform: row.Platform,
@@ -1179,8 +1424,14 @@ func accountFromListRow(row sqlc.AdminListSubscriptionAccountsRow) Account {
 		ResponseTimeoutMs:          timeoutOverrideResult(row.ResponseTimeoutMs),
 		FirstTokenTimeoutMs:        timeoutOverrideResult(row.FirstTokenTimeoutMs),
 		UsagePauseThresholdPercent: thresholdOverride(row.UsagePauseThresholdPercent),
-		CreatedAt:                  row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time,
+		ResetCredits:               resetCreditsView(row.ResetCreditsSnapshot),
+		AutoResetCredit: autoResetCreditView(
+			row.AutoResetCreditEnabled, row.AutoResetCreditMode,
+			row.AutoResetCredit5hThresholdPercent, row.AutoResetCredit7dThresholdPercent, row.AutoResetCreditState,
+		),
+		CreatedAt: row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time,
 	}
+	account.Profile, account.SubscriptionSource = profileView(row.AccountProfile, row.SubscriptionExpiresAt)
 	if has, ok := row.HasRefreshToken.(bool); ok {
 		account.HasRefreshToken = has
 	}
@@ -1237,8 +1488,14 @@ func accountFromRow(row sqlc.SubscriptionAccount) Account {
 		ResponseTimeoutMs:          timeoutOverrideResult(row.ResponseTimeoutMs),
 		FirstTokenTimeoutMs:        timeoutOverrideResult(row.FirstTokenTimeoutMs),
 		UsagePauseThresholdPercent: thresholdOverride(row.UsagePauseThresholdPercent),
-		CreatedAt:                  row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time,
+		ResetCredits:               resetCreditsView(row.ResetCreditsSnapshot),
+		AutoResetCredit: autoResetCreditView(
+			row.AutoResetCreditEnabled, row.AutoResetCreditMode,
+			row.AutoResetCredit5hThresholdPercent, row.AutoResetCredit7dThresholdPercent, row.AutoResetCreditState,
+		),
+		CreatedAt: row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time,
 	}
+	account.Profile, account.SubscriptionSource = profileView(row.AccountProfile, row.SubscriptionExpiresAt)
 	if credsErr == nil {
 		account.HasRefreshToken = creds.RefreshToken != ""
 		account.Email = creds.Email

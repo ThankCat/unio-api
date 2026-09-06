@@ -1,0 +1,63 @@
+{
+  "_source": "定向 HTTP 探测（2026-09-06，dev 号池账号 rakes-hurried，以 codex-tui 出站身份 GET https://chatgpt.com/backend-api/wham/usage）",
+  "_what": "主动查用量端点的响应：与推理响应头同源的 5h/7d 窗口（primary=5h、secondary=7d，含绝对 reset_at 与相对 reset_after_seconds），以及重置卡计数 rate_limit_reset_credits。这是号池「主动查用量」与自动用卡判定读取的形状",
+  "_caution": "available_count 是账号持有的可用卡数；applicable_available_count 实测无参考价值（为 0 时消费照样成功，窗口 0%/71% 下仍被完整重置），因此不解析、不展示。user_id / email 已脱敏。codex-tui 身份头（originator / User-Agent / version）+ chatgpt-account-id 即可 200，无需 Codex Desktop 的 openai-beta 头",
+  "request_headers": [
+    "authorization: Bearer <access_token>",
+    "chatgpt-account-id: <upstream_account_id>",
+    "originator: codex-tui",
+    "user-agent: codex-tui/0.152.1 (Mac OS 15.2.0; arm64) tmux/3.7c (codex-tui; 0.152.1)",
+    "version: 0.152.1",
+    "accept: application/json"
+  ],
+  "status": 200,
+  "body": {
+    "user_id": "<masked>",
+    "account_id": "b396c2bc-d4e2-4aab-99f4-3e34aff25a41",
+    "email": "<masked>",
+    "plan_type": "plus",
+    "rate_limit": {
+      "allowed": true,
+      "limit_reached": false,
+      "primary_window": {
+        "used_percent": 0,
+        "limit_window_seconds": 18000,
+        "reset_after_seconds": 18000,
+        "reset_at": 1788708783
+      },
+      "secondary_window": {
+        "used_percent": 71,
+        "limit_window_seconds": 604800,
+        "reset_after_seconds": 271601,
+        "reset_at": 1788962383
+      }
+    },
+    "code_review_rate_limit": null,
+    "additional_rate_limits": null,
+    "model_usage": {
+      "gpt-6-astra": {
+        "available": true,
+        "available_at": null,
+        "credits_would_enable": false
+      }
+    },
+    "credits": {
+      "has_credits": false,
+      "unlimited": false,
+      "overage_limit_reached": false,
+      "balance": "0",
+      "approx_local_messages": [0, 0],
+      "approx_cloud_messages": [0, 0]
+    },
+    "spend_control": {
+      "reached": false,
+      "individual_limit": null
+    },
+    "rate_limit_reached_type": null,
+    "promo": null,
+    "rate_limit_reset_credits": {
+      "available_count": 2,
+      "applicable_available_count": 0
+    }
+  }
+}

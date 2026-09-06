@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	messagesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/anthropic/messages"
@@ -17,9 +18,9 @@ import (
 // probeMaxTokens 是检测请求的最大输出 token：足够拿到一个合法的最小响应，成本可忽略（约十几 token）。
 const probeMaxTokens = 16
 
-// probeUserContent 是检测请求的用户消息内容（最小 "hi"，OpenAI/Anthropic 通用的 JSON string content）。
-// adapter 只读取它，跨请求共享安全。
-var probeUserContent = json.RawMessage(`"hi"`)
+// probeUserContent 是检测请求的用户消息内容（adapter.ProbeInputText 的 JSON string 形式，
+// OpenAI/Anthropic 通用）。adapter 只读取它，跨请求共享安全。
+var probeUserContent = json.RawMessage(strconv.Quote(adapter.ProbeInputText))
 
 // ProbeChannel 用 (protocol, adapter_key) 对应的 adapter，向 rt 描述的真实上游发一个最小 "hi"
 // 请求，验证「连得上 + 凭据有效 + 模型可用」。它走的是与网关完全相同的 adapter/HTTP client 代码路径，
@@ -113,7 +114,7 @@ func probeStreamResponses(
 		"input": []map[string]any{{
 			"role": "user",
 			"content": []map[string]any{
-				{"type": "input_text", "text": "hi"},
+				{"type": "input_text", "text": adapter.ProbeInputText},
 			},
 		}},
 		"store":  false,
