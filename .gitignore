@@ -18,6 +18,9 @@ logs/
 
 # go build ./cmd/<x> 在仓库根产生的可执行产物
 /e2e-realtest
+# go build ./sandbox/codex/e2e/<x> 在仓库根产生的可执行产物（源码在 sandbox 下，产物不入库）
+/seed
+/seedfake
 
 # delve 调试二进制（VS Code launch）
 **/__debug_bin*
