@@ -215,6 +215,58 @@ func TestAuthenticateAPIKeyValidUpdatesLastUsedAt(t *testing.T) {
 	}
 }
 
+// last_used_at 只是观测字段：窗口内的重复认证不再写库，超过窗口或从未记录时才写。
+func TestAuthenticateAPIKeyThrottlesLastUsedAtWrites(t *testing.T) {
+	now := time.Date(2026, 5, 7, 10, 30, 0, 0, time.UTC)
+	key := validAPIKey()
+	key.LastUsedAt = pgtype.Timestamptz{Time: now.Add(-20 * time.Second), Valid: true}
+	store := &fakeAPIKeyStore{key: key}
+	authenticator := NewAPIKeyAuthenticator(store)
+	authenticator.now = func() time.Time { return now }
+
+	if _, err := authenticator.AuthenticateAPIKey(context.Background(), "valid-key"); err != nil {
+		t.Fatalf("authenticate api key: %v", err)
+	}
+	if store.updated {
+		t.Fatal("recent last_used_at must not be rewritten within the throttle window")
+	}
+
+	store.key.LastUsedAt = pgtype.Timestamptz{Time: now.Add(-2 * time.Minute), Valid: true}
+	if _, err := authenticator.AuthenticateAPIKey(context.Background(), "valid-key"); err != nil {
+		t.Fatalf("authenticate api key: %v", err)
+	}
+	if !store.updated || !store.updatedArg.LastUsedAt.Time.Equal(now) {
+		t.Fatalf("stale last_used_at must be refreshed, updated=%v arg=%+v", store.updated, store.updatedArg)
+	}
+
+	store.updated = false
+	store.key.LastUsedAt = pgtype.Timestamptz{Time: now.Add(-20 * time.Second), Valid: true}
+	authenticator.WithLastUsedAtWriteInterval(0)
+	if _, err := authenticator.AuthenticateAPIKey(context.Background(), "valid-key"); err != nil {
+		t.Fatalf("authenticate api key: %v", err)
+	}
+	if !store.updated {
+		t.Fatal("interval <= 0 must write on every authentication")
+	}
+}
+
+// 观测字段写失败不能把可服务的请求变成 500：认证照常放行，只留日志。
+func TestAuthenticateAPIKeyLastUsedAtWriteFailureDoesNotRejectRequest(t *testing.T) {
+	store := &fakeAPIKeyStore{key: validAPIKey(), updateErr: errors.New("read-only transaction")}
+	authenticator := NewAPIKeyAuthenticator(store)
+
+	principal, err := authenticator.AuthenticateAPIKey(context.Background(), "valid-key")
+	if err != nil {
+		t.Fatalf("last_used_at write failure must degrade, got %v", err)
+	}
+	if principal == nil || principal.APIKeyID != 1 {
+		t.Fatalf("principal = %+v", principal)
+	}
+	if !store.updated {
+		t.Fatal("expected the write to be attempted once")
+	}
+}
+
 func TestAuthenticateAPIKeyInvalidDoesNotUpdateLastUsedAt(t *testing.T) {
 	store := &fakeAPIKeyStore{
 		err: pgx.ErrNoRows,

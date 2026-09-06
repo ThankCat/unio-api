@@ -5,12 +5,19 @@ import (
 	"errors"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
+	"go.uber.org/zap"
+
 	"github.com/ThankCat/unio-gateway/internal/core/apikey"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 )
+
+// defaultLastUsedAtWriteInterval 是 last_used_at 的最小写入间隔。该字段只是观测值（Console/Admin 展示
+// 「最近使用」），认证热路径上每请求同步写会形成热点行写放大；同一 Key 在窗口内的重复认证跳过写入，
+// 展示精度退化为分钟级。窗口判定用行上已有的 last_used_at，多实例之间天然一致，无需进程内状态。
+const defaultLastUsedAtWriteInterval = time.Minute
 
 var (
 	// ErrMissingAPIKey 表示请求没有提供 API Key。
@@ -50,16 +57,36 @@ type APIKeyStore interface {
 
 // APIKeyAuthenticator 负责校验 API Key 并生成认证身份。
 type APIKeyAuthenticator struct {
-	store APIKeyStore
-	now   func() time.Time
+	store                   APIKeyStore
+	now                     func() time.Time
+	logger                  *zap.Logger
+	lastUsedAtWriteInterval time.Duration
 }
 
 // NewAPIKeyAuthenticator 创建 APIKeyAuthenticator。
 func NewAPIKeyAuthenticator(store APIKeyStore) *APIKeyAuthenticator {
 	return &APIKeyAuthenticator{
-		store: store,
-		now:   time.Now,
+		store:                   store,
+		now:                     time.Now,
+		logger:                  zap.NewNop(),
+		lastUsedAtWriteInterval: defaultLastUsedAtWriteInterval,
 	}
+}
+
+// WithLogger 注入日志器，用于记录 last_used_at 降级放行等非致命事件。
+func (a *APIKeyAuthenticator) WithLogger(logger *zap.Logger) *APIKeyAuthenticator {
+	if a != nil && logger != nil {
+		a.logger = logger
+	}
+	return a
+}
+
+// WithLastUsedAtWriteInterval 覆盖 last_used_at 最小写入间隔；<= 0 表示每次认证都写。
+func (a *APIKeyAuthenticator) WithLastUsedAtWriteInterval(interval time.Duration) *APIKeyAuthenticator {
+	if a != nil {
+		a.lastUsedAtWriteInterval = interval
+	}
+	return a
 }
 
 // AuthenticateAPIKey 校验明文 API Key，并返回认证后的请求身份。
@@ -125,18 +152,17 @@ func (a *APIKeyAuthenticator) AuthenticateAPIKey(ctx context.Context, plaintext 
 		)
 	}
 
-	// TODO(阶段3/production): [GAP-3-001] 每次认证同步更新 last_used_at 会放大数据库写入；后续评估节流、异步或批量更新策略。
-	// 更新最后使用时间
+	// 更新最后使用时间：按写入间隔节流；写失败只记日志不拒绝请求——
+	// 一个纯观测字段的写失败不应把本可正常服务的请求变成 500（数据库只读降级时尤其如此）。
 	usedAt := a.now()
-	if err := a.store.UpdateAPIKeyLastUsedAt(ctx, sqlc.UpdateAPIKeyLastUsedAtParams{
-		LastUsedAt: pgtype.Timestamptz{Time: usedAt, Valid: true},
-		ID:         key.ID,
-	}); err != nil {
-		return nil, failure.Wrap(
-			failure.CodeAuthStoreFailed,
-			err,
-			failure.WithMessage("update api key last used at"),
-		)
+	if a.shouldWriteLastUsedAt(key.LastUsedAt, usedAt) {
+		if err := a.store.UpdateAPIKeyLastUsedAt(ctx, sqlc.UpdateAPIKeyLastUsedAtParams{
+			LastUsedAt: pgtype.Timestamptz{Time: usedAt, Valid: true},
+			ID:         key.ID,
+		}); err != nil {
+			a.logger.Warn("api key last_used_at update skipped",
+				append([]zap.Field{zap.Int64("api_key_id", key.ID)}, failure.LogFields(err)...)...)
+		}
 	}
 
 	return &APIKeyPrincipal{
@@ -147,6 +173,14 @@ func (a *APIKeyAuthenticator) AuthenticateAPIKey(ctx context.Context, plaintext 
 		RPDLimit:         int4Ptr(key.UserRpdLimit),
 		ConcurrencyLimit: int4Ptr(key.UserConcurrencyLimit),
 	}, nil
+}
+
+// shouldWriteLastUsedAt 判断本次认证是否需要刷新 last_used_at：从未记录、或距上次记录已超过写入间隔。
+func (a *APIKeyAuthenticator) shouldWriteLastUsedAt(last pgtype.Timestamptz, now time.Time) bool {
+	if a.lastUsedAtWriteInterval <= 0 || !last.Valid {
+		return true
+	}
+	return now.Sub(last.Time) >= a.lastUsedAtWriteInterval
 }
 
 // int4Ptr 把可空用户限流上限转成 *int64（nil=继承全局默认限流）。
