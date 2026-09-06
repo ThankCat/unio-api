@@ -84,26 +84,6 @@ WHERE (cardinality(sqlc.arg(statuses)::text[]) = 0 OR c.status = ANY(sqlc.arg(st
   AND (sqlc.narg(from_time)::timestamptz IS NULL OR c.created_at >= sqlc.narg(from_time)::timestamptz)
   AND (sqlc.narg(to_time)::timestamptz IS NULL OR c.created_at < sqlc.narg(to_time)::timestamptz);
 
--- name: ListCDKeyIDsByFilter :many
--- Resolve select-all mutations on the server; no plaintext is selected.
-SELECT c.id
-FROM cdkeys c
-LEFT JOIN cdkey_redemptions r ON r.cdkey_id = c.id
-LEFT JOIN users u ON u.id = r.user_id
-WHERE (cardinality(sqlc.arg(statuses)::text[]) = 0 OR c.status = ANY(sqlc.arg(statuses)::text[]))
-  AND (sqlc.narg(amount)::numeric IS NULL OR c.amount = sqlc.narg(amount)::numeric)
-  AND (sqlc.narg(batch_id)::uuid IS NULL OR c.batch_id = sqlc.narg(batch_id)::uuid)
-  AND (sqlc.narg(search)::text IS NULL OR (
-      c.code_prefix ILIKE '%' || sqlc.narg(search)::text || '%'
-      OR c.code_suffix ILIKE '%' || sqlc.narg(search)::text || '%'
-      OR c.batch_id::text ILIKE '%' || sqlc.narg(search)::text || '%'
-      OR COALESCE(u.email, '') ILIKE '%' || sqlc.narg(search)::text || '%'
-      OR COALESCE(r.user_id::text, '') ILIKE '%' || sqlc.narg(search)::text || '%'
-  ))
-  AND (sqlc.narg(from_time)::timestamptz IS NULL OR c.created_at >= sqlc.narg(from_time)::timestamptz)
-  AND (sqlc.narg(to_time)::timestamptz IS NULL OR c.created_at < sqlc.narg(to_time)::timestamptz)
-ORDER BY c.id;
-
 -- name: GetCDKeySummary :many
 SELECT c.amount,
        c.status,

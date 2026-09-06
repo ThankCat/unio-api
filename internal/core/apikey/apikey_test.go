@@ -1,6 +1,8 @@
 package apikey_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"strings"
 	"testing"
 
@@ -29,8 +31,8 @@ func TestGenerate(t *testing.T) {
 		t.Fatal("expected hash to differ from plaintext")
 	}
 
-	if !apikey.Verify(key.Plaintext, key.Hash) {
-		t.Fatal("expected generated key to verify")
+	if apikey.Hash(key.Plaintext) != key.Hash {
+		t.Fatal("expected generated key hash to match its plaintext")
 	}
 }
 
@@ -101,10 +103,10 @@ func TestGenerateUniqueKeys(t *testing.T) {
 	}
 }
 
-func TestVerifyWrongKey(t *testing.T) {
+func TestHashWrongKey(t *testing.T) {
 	key, _ := apikey.Generate()
-	if apikey.Verify("something", key.Hash) == true {
-		t.Fatal("expected wrong key to fail verification")
+	if apikey.Hash("something") == key.Hash {
+		t.Fatal("expected wrong key hash to differ")
 	}
 }
 
@@ -114,12 +116,13 @@ func TestPrefixShortPlaintext(t *testing.T) {
 	}
 }
 
-// 旧格式 key 的 hash 不变，认证仍要放行；只是明文再也拿不回来。
-func TestVerifyLegacyFormatKey(t *testing.T) {
+// 旧格式 key 的 hash 算法不变（无盐 SHA-256 hex），认证按 hash 查表仍要命中；只是明文再也拿不回来。
+func TestHashLegacyFormatKeyIsStable(t *testing.T) {
 	const legacy = "unio_sk_XhE8wL5DqR2mNvT7cB4jY9kZ6pA3sF1u"
 
-	if !apikey.Verify(legacy, apikey.Hash(legacy)) {
-		t.Fatal("expected legacy-format key to still verify against its hash")
+	sum := sha256.Sum256([]byte(legacy))
+	if got := apikey.Hash(legacy); got != hex.EncodeToString(sum[:]) {
+		t.Fatalf("legacy-format key hash = %s, want unsalted sha256 hex", got)
 	}
 }
 

@@ -394,7 +394,8 @@ type MarkRuntimeControlOperationCommittedParams struct {
 	PayloadHash string
 }
 
-// db_committed/legacy awaiting_release -> committed（Redis Commit 成功后终结）。
+// db_committed -> committed（Redis Commit 成功后终结）。awaiting_release 是历史兼容态：
+// 从零建库的部署不会再写出该状态，保留在 IN 列表只为兼容旧行。
 func (q *Queries) MarkRuntimeControlOperationCommitted(ctx context.Context, arg MarkRuntimeControlOperationCommittedParams) (int64, error) {
 	result, err := q.db.Exec(ctx, markRuntimeControlOperationCommitted, arg.Token, arg.PayloadHash)
 	if err != nil {

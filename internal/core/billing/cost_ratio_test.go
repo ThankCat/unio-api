@@ -27,9 +27,9 @@ func TestProviderCostToSaleRatioSelectsMaximumAcrossAllComponents(t *testing.T) 
 			cost := allComponentProviderCost(1)
 			component.set(&cost)
 
-			ratio, err := ProviderCostToSaleRatio(sale, cost)
+			ratio, err := ProviderCostToSaleRatioFX(sale, cost, nil)
 			if err != nil {
-				t.Fatalf("ProviderCostToSaleRatio returned error: %v", err)
+				t.Fatalf("ProviderCostToSaleRatioFX returned error: %v", err)
 			}
 			if math.Abs(ratio-0.9) > 1e-12 {
 				t.Fatalf("ratio = %v, want 0.9", ratio)
@@ -54,9 +54,9 @@ func TestProviderCostToSaleRatioUsesBillingFallbacks(t *testing.T) {
 		FormulaVersion:    FormulaVersionV1,
 	}
 
-	ratio, err := ProviderCostToSaleRatio(sale, cost)
+	ratio, err := ProviderCostToSaleRatioFX(sale, cost, nil)
 	if err != nil {
-		t.Fatalf("ProviderCostToSaleRatio returned error: %v", err)
+		t.Fatalf("ProviderCostToSaleRatioFX returned error: %v", err)
 	}
 	// Missing cache prices fall back to uncached input; missing reasoning falls back to output.
 	if math.Abs(ratio-0.5) > 1e-12 {
@@ -65,9 +65,9 @@ func TestProviderCostToSaleRatioUsesBillingFallbacks(t *testing.T) {
 }
 
 func TestProviderCostToSaleRatioTreatsZeroOverZeroAsZero(t *testing.T) {
-	ratio, err := ProviderCostToSaleRatio(allComponentSalePrice(0), allComponentProviderCost(0))
+	ratio, err := ProviderCostToSaleRatioFX(allComponentSalePrice(0), allComponentProviderCost(0), nil)
 	if err != nil {
-		t.Fatalf("ProviderCostToSaleRatio returned error: %v", err)
+		t.Fatalf("ProviderCostToSaleRatioFX returned error: %v", err)
 	}
 	if ratio != 0 {
 		t.Fatalf("ratio = %v, want 0", ratio)
@@ -78,7 +78,7 @@ func TestProviderCostToSaleRatioRejectsPositiveCostOverZeroSale(t *testing.T) {
 	sale := allComponentSalePrice(0)
 	cost := allComponentProviderCost(0)
 	cost.CacheCreation30mInputCost = numeric(1, 0)
-	if _, err := ProviderCostToSaleRatio(sale, cost); err == nil {
+	if _, err := ProviderCostToSaleRatioFX(sale, cost, nil); err == nil {
 		t.Fatal("positive cost over zero sale must fail closed")
 	}
 }
@@ -96,7 +96,7 @@ func TestProviderCostToSaleRatioRejectsSnapshotMismatch(t *testing.T) {
 			sale := allComponentSalePrice(10)
 			cost := allComponentProviderCost(1)
 			tt.mutate(&cost)
-			if _, err := ProviderCostToSaleRatio(sale, cost); err == nil {
+			if _, err := ProviderCostToSaleRatioFX(sale, cost, nil); err == nil {
 				t.Fatal("mismatched snapshots must fail closed")
 			}
 		})
@@ -123,7 +123,7 @@ func TestProviderCostToSaleRatioRejectsInvalidNumeric(t *testing.T) {
 			sale := allComponentSalePrice(10)
 			cost := allComponentProviderCost(1)
 			tt.mutate(&sale, &cost)
-			if _, err := ProviderCostToSaleRatio(sale, cost); err == nil {
+			if _, err := ProviderCostToSaleRatioFX(sale, cost, nil); err == nil {
 				t.Fatal("invalid numeric must fail closed")
 			}
 		})

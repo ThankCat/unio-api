@@ -173,32 +173,6 @@ func insertChannelModel(t *testing.T, ctx context.Context, tx pgx.Tx, channelID 
 	}
 }
 
-// createUserForModelPolicy 创建模型策略测试专用 user。
-func createUserForModelPolicy(t *testing.T, ctx context.Context, queries *sqlc.Queries, suffix int64) int64 {
-	t.Helper()
-
-	user, err := queries.CreateUser(ctx, sqlc.CreateUserParams{
-		Email:        fmt.Sprintf("model-policy-user-%d@example.test", suffix),
-		PasswordHash: pgtype.Text{String: "hash", Valid: true},
-		DisplayName:  "model policy user",
-	})
-	if err != nil {
-		t.Fatalf("create model policy user: %v", err)
-	}
-
-	return user.ID
-}
-
-func listContainsModel(rows []sqlc.ListAvailableModelsRow, modelID string) bool {
-	for _, row := range rows {
-		if row.ModelID == modelID {
-			return true
-		}
-	}
-
-	return false
-}
-
 func TestListAvailableModelsListsEnabledModelsAndDerivesProtocols(t *testing.T) {
 	ctx, tx, queries, cleanup := newModelChannelTestTx(t)
 	defer cleanup()
@@ -480,10 +454,10 @@ func createModelPriceForTest(t *testing.T, ctx context.Context, queries *sqlc.Qu
 		OutputPrice:        numeric(400),
 		// 倍率随价格行走，不再取自环境设置：按 1.0 卖即等于基准价。
 		// 需要别的倍率时由用例自己 UPDATE，环境不再影响结果。
-		SaleDiscount: numeric(1),
-		Status:         "enabled",
-		EffectiveFrom:  timestamptz(at.Add(-time.Hour)),
-		EffectiveTo:    nullTimestamptz(),
+		SaleDiscount:  numeric(1),
+		Status:        "enabled",
+		EffectiveFrom: timestamptz(at.Add(-time.Hour)),
+		EffectiveTo:   nullTimestamptz(),
 	}); err != nil {
 		t.Fatalf("create model price: %v", err)
 	}

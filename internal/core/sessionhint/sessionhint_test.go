@@ -7,31 +7,31 @@ import (
 	"testing"
 )
 
-// TestOpenAISessionKeyPrecedence 验证 OpenAI 提取顺序：body prompt_cache_key 优先，header 回退。
-func TestOpenAISessionKeyPrecedence(t *testing.T) {
+// TestOpenAISessionHintPrecedence 验证 OpenAI 提取顺序：body prompt_cache_key 优先，header 回退。
+func TestOpenAISessionHintPrecedence(t *testing.T) {
 	ctx := WithClientSessionID(context.Background(), "header-session")
 
 	bodyKey := "body-cache-key"
-	if got := OpenAISessionKey(ctx, &bodyKey); got != "body-cache-key" {
+	if got := OpenAISessionHint(ctx, &bodyKey).Key; got != "body-cache-key" {
 		t.Fatalf("expected body key to win, got %q", got)
 	}
 
-	if got := OpenAISessionKey(ctx, nil); got != "header-session" {
+	if got := OpenAISessionHint(ctx, nil).Key; got != "header-session" {
 		t.Fatalf("expected header fallback, got %q", got)
 	}
 
 	empty := "   "
-	if got := OpenAISessionKey(ctx, &empty); got != "header-session" {
+	if got := OpenAISessionHint(ctx, &empty).Key; got != "header-session" {
 		t.Fatalf("expected blank body key to fall back to header, got %q", got)
 	}
 
-	if got := OpenAISessionKey(context.Background(), nil); got != "" {
+	if got := OpenAISessionHint(context.Background(), nil).Key; got != "" {
 		t.Fatalf("expected empty without any signal, got %q", got)
 	}
 
 	// 超长键拒绝（R6 第一道闸）。
 	oversized := strings.Repeat("x", 600)
-	if got := OpenAISessionKey(context.Background(), &oversized); got != "" {
+	if got := OpenAISessionHint(context.Background(), &oversized).Key; got != "" {
 		t.Fatalf("expected oversized key rejected, got %q", got)
 	}
 }
@@ -64,16 +64,16 @@ func TestOpenAISessionHintReportsSelectedSource(t *testing.T) {
 	}
 }
 
-// TestAnthropicSessionKeyPrecedence 验证 Anthropic 提取顺序：会话头优先，metadata.user_id 严格回退（R9）。
-func TestAnthropicSessionKeyPrecedence(t *testing.T) {
+// TestAnthropicSessionHintPrecedence 验证 Anthropic 提取顺序：会话头优先，metadata.user_id 严格回退（R9）。
+func TestAnthropicSessionHintPrecedence(t *testing.T) {
 	meta := json.RawMessage(`{"user_id":"user_abc123_account_11111111-2222-3333-4444-555555555555_session_d81712fa-1111-2222-3333-44445555bca9"}`)
 
 	ctx := WithClientSessionID(context.Background(), "d81712fa-head")
-	if got := AnthropicSessionKey(ctx, meta); got != "d81712fa-head" {
+	if got := AnthropicSessionHint(ctx, meta).Key; got != "d81712fa-head" {
 		t.Fatalf("expected header to win, got %q", got)
 	}
 
-	if got := AnthropicSessionKey(context.Background(), meta); got != "d81712fa-1111-2222-3333-44445555bca9" {
+	if got := AnthropicSessionHint(context.Background(), meta).Key; got != "d81712fa-1111-2222-3333-44445555bca9" {
 		t.Fatalf("expected metadata session suffix, got %q", got)
 	}
 }
@@ -89,12 +89,12 @@ func TestAnthropicSessionHintReportsSelectedSource(t *testing.T) {
 	}
 }
 
-// TestAnthropicSessionKeyEmbeddedJSONMetadata 验证 Claude Code 2.1.104 起的
+// TestAnthropicSessionHintEmbeddedJSONMetadata 验证 Claude Code 2.1.104 起的
 // user_id 内嵌 JSON 形态（抓包实测：account_uuid 为空串）也能回退出会话键。
-func TestAnthropicSessionKeyEmbeddedJSONMetadata(t *testing.T) {
+func TestAnthropicSessionHintEmbeddedJSONMetadata(t *testing.T) {
 	meta := json.RawMessage(`{"user_id":"{\"device_id\":\"a7ce301933cdf60596384ad006f6ad6c80fd27a968af1ab0043c7ff20a5151ea\",\"account_uuid\":\"\",\"session_id\":\"1adb4182-525a-4f47-95ec-a02595470274\"}"}`)
 
-	if got := AnthropicSessionKey(context.Background(), meta); got != "1adb4182-525a-4f47-95ec-a02595470274" {
+	if got := AnthropicSessionHint(context.Background(), meta).Key; got != "1adb4182-525a-4f47-95ec-a02595470274" {
 		t.Fatalf("expected embedded json session_id, got %q", got)
 	}
 
@@ -106,13 +106,13 @@ func TestAnthropicSessionKeyEmbeddedJSONMetadata(t *testing.T) {
 
 	// 头仍然优先于 body 回退。
 	ctx := WithClientSessionID(context.Background(), "1adb4182-head")
-	if got := AnthropicSessionKey(ctx, meta); got != "1adb4182-head" {
+	if got := AnthropicSessionHint(ctx, meta).Key; got != "1adb4182-head" {
 		t.Fatalf("expected header to win over embedded json, got %q", got)
 	}
 }
 
-// TestAnthropicSessionKeyStrictParse 验证严格解析：格式不符即不粘、绝不猜（R9）。
-func TestAnthropicSessionKeyStrictParse(t *testing.T) {
+// TestAnthropicSessionHintStrictParse 验证严格解析：格式不符即不粘、绝不猜（R9）。
+func TestAnthropicSessionHintStrictParse(t *testing.T) {
 	cases := []struct {
 		name string
 		meta string
@@ -134,7 +134,7 @@ func TestAnthropicSessionKeyStrictParse(t *testing.T) {
 			if tc.meta != "" {
 				meta = json.RawMessage(tc.meta)
 			}
-			if got := AnthropicSessionKey(context.Background(), meta); got != "" {
+			if got := AnthropicSessionHint(context.Background(), meta).Key; got != "" {
 				t.Fatalf("expected strict parse failure to yield empty key, got %q", got)
 			}
 		})

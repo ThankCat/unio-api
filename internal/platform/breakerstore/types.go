@@ -198,25 +198,6 @@ type Config struct {
 	ProviderAmbiguousDistinctModels   int
 }
 
-// DefaultConfig 返回 §4.8 的目标默认配置。
-func DefaultConfig() Config {
-	return Config{
-		Enabled:                           true,
-		WindowMs:                          30000,
-		MinRequests:                       20,
-		FailureRatio:                      0.5,
-		ConsecutiveFailures:               3,
-		ConsecutiveWindowMs:               10000,
-		HalfOpenSuccesses:                 2,
-		AttemptPermitTTLMs:                30000,
-		AttemptRenewMs:                    10000,
-		AttemptTerminalTTLMs:              300000,
-		OpenDurationsMs:                   []int64{15000, 30000, 60000, 120000, 300000},
-		ProviderAmbiguousDistinctChannels: 2,
-		ProviderAmbiguousDistinctModels:   2,
-	}
-}
-
 // AttemptPermit 是一次真实上游调用前取得的不可伪造、不可复用准入凭据（§2.2）。
 //
 // 服务端记录为权威；调用方不得自行声明 resource token。permit_id/request_admission_id 不进入公开

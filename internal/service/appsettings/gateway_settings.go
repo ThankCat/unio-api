@@ -256,7 +256,7 @@ type rateLimitDefaultsDoc struct {
 }
 
 func encodeRateLimitDefaultsSettings(s RateLimitDefaultsSettings) json.RawMessage {
-	raw, err := json.Marshal(rateLimitDefaultsDoc{RPM: s.RPM, RPD: s.RPD})
+	raw, err := json.Marshal(rateLimitDefaultsDoc(s))
 	if err != nil {
 		panic(fmt.Sprintf("appsettings: encode rate limit defaults: %v", err))
 	}
@@ -269,7 +269,7 @@ func DecodeRateLimitDefaultsSettings(raw []byte) (RateLimitDefaultsSettings, err
 	if err := strictUnmarshal(raw, &doc); err != nil {
 		return RateLimitDefaultsSettings{}, err
 	}
-	s := RateLimitDefaultsSettings{RPM: doc.RPM, RPD: doc.RPD}
+	s := RateLimitDefaultsSettings(doc)
 	if s.RPM < 0 || s.RPD < 0 {
 		return RateLimitDefaultsSettings{}, errors.New("rpm/rpd must be zero or positive")
 	}

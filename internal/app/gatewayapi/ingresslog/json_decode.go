@@ -51,13 +51,6 @@ func RecordRequestBodyFailure(r *http.Request, err error) {
 	logfields.SetCompletion(r.Context(), "warning", string(code))
 }
 
-// RecordInvalidJSON 保留旧调用语义，仅记录真实 invalid JSON。
-func RecordInvalidJSON(r *http.Request, err error) {
-	if failure.CodeOf(err) == failure.CodeHTTPInvalidJSONBody {
-		RecordRequestBodyFailure(r, err)
-	}
-}
-
 func bodyCompletionStatus(bytesRead int64, contentLength int64) string {
 	if contentLength < 0 {
 		return "unknown"

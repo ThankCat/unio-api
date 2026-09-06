@@ -377,6 +377,7 @@ FROM provider_ledger_entries
 WHERE cost_snapshot_id = $1
 `
 
+// 仅测试使用：生产路径不调用（sqlc 层 DB 用例夹具）。
 func (q *Queries) GetProviderLedgerEntryByCostSnapshotID(ctx context.Context, costSnapshotID pgtype.Int8) (ProviderLedgerEntry, error) {
 	row := q.db.QueryRow(ctx, getProviderLedgerEntryByCostSnapshotID, costSnapshotID)
 	var i ProviderLedgerEntry

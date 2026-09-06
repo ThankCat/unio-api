@@ -205,20 +205,6 @@ const (
 )
 
 const (
-	// CodeAPIKeyInvalidUserID 表示创建 API Key 时 user_id 非法。
-	CodeAPIKeyInvalidUserID Code = "apikey_invalid_user_id"
-
-	// CodeAPIKeyInvalidName 表示创建 API Key 时 name 非法。
-	CodeAPIKeyInvalidName Code = "apikey_invalid_name"
-
-	// CodeAPIKeyGenerateFailed 表示 API Key 随机密钥生成失败。
-	CodeAPIKeyGenerateFailed Code = "apikey_generate_failed"
-
-	// CodeAPIKeyStoreFailed 表示 API Key 管理存储访问失败。
-	CodeAPIKeyStoreFailed Code = "apikey_store_failed"
-)
-
-const (
 	// CodeRateLimitInvalidSubject 表示限流 subject 非法。
 	CodeRateLimitInvalidSubject Code = "ratelimit_invalid_subject"
 
@@ -385,6 +371,9 @@ const (
 
 	// CodeLedgerReservationNotFound 表示请求没有可结算的余额冻结记录。
 	CodeLedgerReservationNotFound Code = "ledger_reservation_not_found"
+
+	// CodeLedgerCurrencyMismatch 表示结算金额币种与冻结记录币种不一致（结算不得跨币种入账）。
+	CodeLedgerCurrencyMismatch Code = "ledger_currency_mismatch"
 )
 
 const (

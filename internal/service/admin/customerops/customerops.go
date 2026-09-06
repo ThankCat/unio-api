@@ -283,11 +283,3 @@ func numericPtr(n pgtype.Numeric) *string {
 	s := opsutil.NumericString(n)
 	return &s
 }
-
-func textPtr(t pgtype.Text) *string {
-	if !t.Valid {
-		return nil
-	}
-	s := t.String
-	return &s
-}

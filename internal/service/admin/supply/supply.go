@@ -182,21 +182,6 @@ func BindingImpact(ctx context.Context, q *sqlc.Queries, channelID, modelID int6
 	}, nil
 }
 
-// ChannelBulkImpact 在锁内计算解除/停用某 Channel 全部 enabled Binding 的影响。
-// 与 BindingImpact 的区别只在范围：这里目标渠道上所有绑定同时失效。
-func ChannelBulkImpact(ctx context.Context, q *sqlc.Queries, channelID int64) (Impact, error) {
-	rows, err := q.ListModelsLosingConfiguredSupply(ctx, sqlc.ListModelsLosingConfiguredSupplyParams{
-		ChannelID: channelID,
-	})
-	if err != nil {
-		return Impact{}, fmt.Errorf("compute channel binding supply impact: %w", err)
-	}
-	return Impact{
-		Kind:           "channel_bindings_disable",
-		AffectedModels: affectedFromLosingConfigured(rows),
-	}, nil
-}
-
 // ChannelImpact 在锁内计算暂停 Channel 流量后可能失去最后运行候选的模型。
 // Binding 与 Model 配置行均不改写。
 func ChannelImpact(ctx context.Context, q *sqlc.Queries, channelID int64) (Impact, error) {

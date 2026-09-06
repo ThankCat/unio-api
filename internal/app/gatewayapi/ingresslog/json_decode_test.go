@@ -29,7 +29,7 @@ func TestRecordInvalidJSONEnrichesSingleWarningCompletionLog(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected invalid JSON")
 		}
-		ingresslog.RecordInvalidJSON(r, err)
+		ingresslog.RecordRequestBodyFailure(r, err)
 		_ = httpx.WriteOpenAIError(w, http.StatusBadRequest, "invalid_request", "invalid json body", "invalid_request_error", nil)
 	})))
 

@@ -4,7 +4,6 @@ package cdkey
 import (
 	"context"
 	"errors"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -231,10 +230,6 @@ func formatInt64(value int64) string {
 		buf[i] = '-'
 	}
 	return string(buf[i:])
-}
-
-func normalizeCodeForTest(raw string) string {
-	return strings.ToUpper(strings.TrimSpace(raw))
 }
 
 const (

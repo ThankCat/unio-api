@@ -1,4 +1,5 @@
 -- name: CreateUserBalance :one
+-- 仅测试使用：生产路径不调用（sqlc 层 DB 用例夹具）。
 -- CreateUserBalance 创建用户指定币种的余额投影。
 INSERT INTO
     user_balances (user_id, currency, balance)
@@ -62,6 +63,7 @@ WHERE
     FOR UPDATE;
 
 -- name: UpdateUserBalance :one
+-- 仅测试使用：生产路径不调用（sqlc 层 DB 用例夹具）。
 -- UpdateUserBalance 直接更新用户余额投影的 balance 字段。
 UPDATE user_balances
 SET
@@ -122,6 +124,7 @@ RETURNING
     updated_at;
 
 -- name: ReserveUserBalance :one
+-- 仅测试使用：生产路径不调用（sqlc 层 DB 用例夹具）。
 -- ReserveUserBalance 冻结指定金额的用户可用余额。
 UPDATE user_balances
 SET

@@ -1,70 +1,14 @@
 package modelrouting
 
 import (
-	"context"
-	"errors"
 	"testing"
 
 	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
-	"github.com/ThankCat/unio-gateway/internal/service/gateway/runtimefacts"
 )
 
 // SnapshotMany 是 fail-closed 的：任何一条候选 revision 漂移都会让整批失败。
 // 那对准入是对的，但观测接口不能因此白屏——这里守的就是降级。
-
-type stubRuntime struct {
-	routingErr error
-}
-
-func (s stubRuntime) Routing(context.Context) (runtimefacts.RoutingRevisions, error) {
-	if s.routingErr != nil {
-		return runtimefacts.RoutingRevisions{}, s.routingErr
-	}
-	return runtimefacts.RoutingRevisions{
-		Integrity:      runtimefacts.Integrity{Epoch: "epoch", Revision: 1},
-		CircuitBreaker: 1,
-		RoutingBalance: 1,
-	}, nil
-}
-
-func (s stubRuntime) Admission(context.Context) (runtimefacts.AdmissionRevisions, error) {
-	return runtimefacts.AdmissionRevisions{
-		Integrity:         runtimefacts.Integrity{Epoch: "epoch", Revision: 1},
-		RequestRateLimits: 1,
-		Concurrency:       1,
-	}, nil
-}
-
-type stubBreaker struct {
-	snapshotErr error
-	observed    []breakerstore.ObservedChannelRuntime
-	observeErr  error
-	samples     map[int64]breakerstore.ChannelSampleWindow
-	observeSeen bool
-}
-
-func (s *stubBreaker) SnapshotMany(context.Context, breakerstore.SnapshotManyInput) (breakerstore.SnapshotManyResult, error) {
-	if s.snapshotErr != nil {
-		return breakerstore.SnapshotManyResult{}, s.snapshotErr
-	}
-	return breakerstore.SnapshotManyResult{}, nil
-}
-
-func (s *stubBreaker) ObserveChannels(context.Context, []int64) ([]breakerstore.ObservedChannelRuntime, error) {
-	s.observeSeen = true
-	if s.observeErr != nil {
-		return nil, s.observeErr
-	}
-	return s.observed, nil
-}
-
-func (s *stubBreaker) AggregateChannelSamples(context.Context, []int64) (map[int64]breakerstore.ChannelSampleWindow, error) {
-	if s.samples == nil {
-		return map[int64]breakerstore.ChannelSampleWindow{}, nil
-	}
-	return s.samples, nil
-}
 
 func poolRow(channelID int64, bindingStatus string) sqlc.ModelRuntimePoolRow {
 	return sqlc.ModelRuntimePoolRow{
@@ -86,20 +30,17 @@ func poolRow(channelID int64, bindingStatus string) sqlc.ModelRuntimePoolRow {
 
 // SnapshotMany 失败时不能整体报错：改用不校验 revision 的观测读，并如实标记降级。
 func TestCandidatesFallsBackWhenSnapshotFails(t *testing.T) {
-	breaker := &stubBreaker{
-		snapshotErr: errors.New("stale_revision"),
-		observed: []breakerstore.ObservedChannelRuntime{
-			{
-				ChannelID:     7,
-				Concurrency:   breakerstore.CapacityUsage{Used: 3, Limit: 10},
-				CapacityKnown: true,
-			},
+	observed := []breakerstore.ObservedChannelRuntime{
+		{
+			ChannelID:     7,
+			Concurrency:   breakerstore.CapacityUsage{Used: 3, Limit: 10},
+			CapacityKnown: true,
 		},
 	}
 	view, err := buildCandidateView(
 		[]sqlc.ModelRuntimePoolRow{poolRow(7, "enabled")},
 		nil,
-		breaker.observed,
+		observed,
 		nil,
 		false,
 		"stale_revision",

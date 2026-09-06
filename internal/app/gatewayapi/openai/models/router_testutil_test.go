@@ -10,8 +10,6 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/modelcatalog"
 )
 
-func ptrInt64(v int64) *int64 { return &v }
-
 // routerTestModelCatalogService 是 models handler 测试使用的模型目录 service 替身。
 type routerTestModelCatalogService struct {
 	called               bool

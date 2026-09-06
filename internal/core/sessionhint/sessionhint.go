@@ -73,14 +73,9 @@ type Hint struct {
 	Source string
 }
 
-// OpenAISessionKey 按 OpenAI 族提取顺序产出 sticky 会话键（决议 6）：
+// OpenAISessionHint 按 OpenAI 族提取顺序产出 sticky 会话键及其来源（决议 6）：
 // body prompt_cache_key 优先（实测 Codex 必带、= session id、跨轮稳定），
-// 缺失回退 ingress 捕获的 session-id 头；两者皆缺返回空串（本请求不粘）。
-func OpenAISessionKey(ctx context.Context, promptCacheKey *string) string {
-	return OpenAISessionHint(ctx, promptCacheKey).Key
-}
-
-// OpenAISessionHint 返回会话键和最终采用的来源。
+// 缺失回退 ingress 捕获的 session-id 头；两者皆缺返回零值 Hint（本请求不粘）。
 func OpenAISessionHint(ctx context.Context, promptCacheKey *string) Hint {
 	if promptCacheKey != nil {
 		if key := normalizeSessionKey(*promptCacheKey); key != "" {
@@ -128,15 +123,10 @@ func ContentDerivedHint(parts ...string) Hint {
 	}
 }
 
-// AnthropicSessionKey 按 Anthropic 族提取顺序产出 sticky 会话键（决议 5）：
+// AnthropicSessionHint 按 Anthropic 族提取顺序产出 sticky 会话键及其来源（决议 5）：
 // x-claude-code-session-id 头优先（实测 Claude Code 必带、跨轮稳定、换会话变新），
 // 缺失回退 body metadata.user_id 内嵌的会话段。严格解析：任一环节失败
-// 即返回空串不粘（R9，不猜第三方格式）。
-func AnthropicSessionKey(ctx context.Context, metadata json.RawMessage) string {
-	return AnthropicSessionHint(ctx, metadata).Key
-}
-
-// AnthropicSessionHint 返回会话键和最终采用的来源。
+// 即返回零值 Hint 不粘（R9，不猜第三方格式）。
 func AnthropicSessionHint(ctx context.Context, metadata json.RawMessage) Hint {
 	if key := normalizeSessionKey(ClientSessionID(ctx)); key != "" {
 		return Hint{Key: key, Source: "claude_session_id_header"}

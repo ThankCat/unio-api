@@ -1,4 +1,5 @@
 -- name: ListProviders :many
+-- 仅测试使用：生产路径不调用（sqlc 层 DB 用例夹具）。
 -- ListProviders 列出全部 provider，按 id 升序，供 admin 管理台展示。
 SELECT id, slug, name, origin, origin_revision, status, status_revision, created_at, updated_at, archived_at, currency
 FROM providers
@@ -48,14 +49,6 @@ UPDATE providers
 SET name = sqlc.arg(name), updated_at = now()
 WHERE id = sqlc.arg(id)
 RETURNING id, slug, name, origin, origin_revision, status, status_revision, created_at, updated_at, archived_at, currency;
-
--- name: CountProviderCurrencyRefs :one
--- CountProviderCurrencyRefs 统计 provider 币种语义的引用数（渠道价格 + 账本 + 余额行）。
--- 任一引用存在即禁止修改 currency（D3 不可变规则的应用层依据）。
-SELECT
-    (SELECT COUNT(*) FROM channel_prices cp JOIN channels c ON c.id = cp.channel_id WHERE c.provider_id = sqlc.arg(provider_id))
-  + (SELECT COUNT(*) FROM provider_ledger_entries ple WHERE ple.provider_id = sqlc.arg(provider_id))
-  + (SELECT COUNT(*) FROM provider_balances pb WHERE pb.provider_id = sqlc.arg(provider_id)) AS total;
 
 -- name: DeleteProvider :execrows
 -- DeleteProvider 物理删除 provider，用于清理录错且从未使用的脏数据。

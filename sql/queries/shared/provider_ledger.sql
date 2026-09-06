@@ -77,6 +77,7 @@ FROM provider_ledger_entries
 WHERE idempotency_key = sqlc.arg(idempotency_key);
 
 -- name: GetProviderLedgerEntryByCostSnapshotID :one
+-- 仅测试使用：生产路径不调用（sqlc 层 DB 用例夹具）。
 SELECT *
 FROM provider_ledger_entries
 WHERE cost_snapshot_id = sqlc.arg(cost_snapshot_id);

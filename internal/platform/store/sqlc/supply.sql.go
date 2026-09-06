@@ -89,65 +89,6 @@ func (q *Queries) EnableModelSupply(ctx context.Context, id int64) (int64, error
 	return result.RowsAffected(), nil
 }
 
-const listDisabledModelsRecoverable = `-- name: ListDisabledModelsRecoverable :many
-SELECT m.id AS model_id,
-       m.model_id AS public_model_id,
-       m.display_name,
-       m.disabled_reason,
-       m.disabled_at
-FROM models m
-WHERE m.status = 'disabled'
-  AND m.disabled_reason IN ('binding_disabled', 'channel_disabled')
-  AND EXISTS (
-      SELECT 1
-      FROM channel_models cm
-      JOIN channels c ON c.id = cm.channel_id
-      JOIN providers p ON p.id = c.provider_id
-      WHERE cm.model_id = m.id
-        AND cm.status = 'enabled'
-        AND c.status = 'enabled'
-        AND c.credential_valid
-        AND p.status = 'enabled'
-  )
-ORDER BY m.model_id
-`
-
-type ListDisabledModelsRecoverableRow struct {
-	ModelID        int64
-	PublicModelID  string
-	DisplayName    string
-	DisabledReason pgtype.Text
-	DisabledAt     pgtype.Timestamptz
-}
-
-// ListDisabledModelsRecoverable 列出因供给中断而停用、如今供给已恢复的模型（批量恢复入口）。
-// 只列 binding_disabled / channel_disabled：管理员手动下架的不该被「恢复」列表打扰。
-func (q *Queries) ListDisabledModelsRecoverable(ctx context.Context) ([]ListDisabledModelsRecoverableRow, error) {
-	rows, err := q.db.Query(ctx, listDisabledModelsRecoverable)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListDisabledModelsRecoverableRow
-	for rows.Next() {
-		var i ListDisabledModelsRecoverableRow
-		if err := rows.Scan(
-			&i.ModelID,
-			&i.PublicModelID,
-			&i.DisplayName,
-			&i.DisabledReason,
-			&i.DisabledAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listEnabledBindingModelIDsForChannel = `-- name: ListEnabledBindingModelIDsForChannel :many
 SELECT DISTINCT cm.model_id
 FROM channel_models cm
@@ -170,42 +111,6 @@ func (q *Queries) ListEnabledBindingModelIDsForChannel(ctx context.Context, chan
 			return nil, err
 		}
 		items = append(items, model_id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listModelRuntimeProtocols = `-- name: ListModelRuntimeProtocols :many
-SELECT DISTINCT proto AS ingress_protocol
-FROM channel_models cm
-JOIN channels c ON c.id = cm.channel_id
-JOIN providers p ON p.id = c.provider_id
-CROSS JOIN LATERAL unnest(c.protocols) AS proto
-WHERE cm.model_id = $1
-  AND cm.status = 'enabled'
-  AND c.status = 'enabled'
-  AND c.credential_valid
-  AND p.status = 'enabled'
-ORDER BY proto
-`
-
-// ListModelRuntimeProtocols 返回该 Model 当前可用渠道覆盖的入口协议集合。
-// 协议不落库，恒等于实际供给能力。
-func (q *Queries) ListModelRuntimeProtocols(ctx context.Context, modelID int64) ([]interface{}, error) {
-	rows, err := q.db.Query(ctx, listModelRuntimeProtocols, modelID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []interface{}
-	for rows.Next() {
-		var ingress_protocol interface{}
-		if err := rows.Scan(&ingress_protocol); err != nil {
-			return nil, err
-		}
-		items = append(items, ingress_protocol)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -400,108 +305,6 @@ func (q *Queries) ListModelsLosingSalePrice(ctx context.Context, arg ListModelsL
 	return items, nil
 }
 
-const listModelsWithoutRuntimeSupply = `-- name: ListModelsWithoutRuntimeSupply :many
-SELECT m.id AS model_id,
-       m.model_id AS public_model_id,
-       m.display_name
-FROM models m
-WHERE m.status = 'enabled'
-  AND NOT EXISTS (
-      SELECT 1
-      FROM channel_models cm
-      JOIN channels c ON c.id = cm.channel_id
-      JOIN providers p ON p.id = c.provider_id
-      WHERE cm.model_id = m.id
-        AND cm.status = 'enabled'
-        AND c.status = 'enabled'
-        AND c.credential_valid
-        AND p.status = 'enabled'
-  )
-ORDER BY m.model_id
-`
-
-type ListModelsWithoutRuntimeSupplyRow struct {
-	ModelID       int64
-	PublicModelID string
-	DisplayName   string
-}
-
-// ListModelsWithoutRuntimeSupply 列出 enabled 但当前没有任何运行候选的模型。
-// 这是不变量被打破的信号（例如渠道凭据集体失效），供后台告警，不自动改状态。
-func (q *Queries) ListModelsWithoutRuntimeSupply(ctx context.Context) ([]ListModelsWithoutRuntimeSupplyRow, error) {
-	rows, err := q.db.Query(ctx, listModelsWithoutRuntimeSupply)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListModelsWithoutRuntimeSupplyRow
-	for rows.Next() {
-		var i ListModelsWithoutRuntimeSupplyRow
-		if err := rows.Scan(&i.ModelID, &i.PublicModelID, &i.DisplayName); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listSupplyCandidatesForChannels = `-- name: ListSupplyCandidatesForChannels :many
-SELECT cm.model_id,
-       m.model_id AS public_model_id,
-       m.display_name,
-       m.status AS model_status,
-       proto AS ingress_protocol,
-       COUNT(DISTINCT c.id) AS supporting_channels
-FROM channels c
-JOIN channel_models cm ON cm.channel_id = c.id AND cm.status = 'enabled'
-JOIN models m ON m.id = cm.model_id
-CROSS JOIN LATERAL unnest(c.protocols) AS proto
-WHERE c.id = ANY($1::bigint[])
-GROUP BY cm.model_id, m.model_id, m.display_name, m.status, proto
-ORDER BY m.model_id, proto
-`
-
-type ListSupplyCandidatesForChannelsRow struct {
-	ModelID            int64
-	PublicModelID      string
-	DisplayName        string
-	ModelStatus        string
-	IngressProtocol    interface{}
-	SupportingChannels int64
-}
-
-// ListSupplyCandidatesForChannels 按给定 Channel 集合计算「模型 × 协议」供给覆盖：
-// enabled Binding 去重，协议来自渠道的 protocols 数组展开。不读 Model 当前状态。
-func (q *Queries) ListSupplyCandidatesForChannels(ctx context.Context, channelIds []int64) ([]ListSupplyCandidatesForChannelsRow, error) {
-	rows, err := q.db.Query(ctx, listSupplyCandidatesForChannels, channelIds)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListSupplyCandidatesForChannelsRow
-	for rows.Next() {
-		var i ListSupplyCandidatesForChannelsRow
-		if err := rows.Scan(
-			&i.ModelID,
-			&i.PublicModelID,
-			&i.DisplayName,
-			&i.ModelStatus,
-			&i.IngressProtocol,
-			&i.SupportingChannels,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const lockModelsForSupplyChange = `-- name: LockModelsForSupplyChange :many
 
 SELECT id FROM models
@@ -566,23 +369,6 @@ func (q *Queries) ModelDisableImpactCounts(ctx context.Context, modelID int64) (
 	var i ModelDisableImpactCountsRow
 	err := row.Scan(&i.EnabledBindings, &i.Channels, &i.Providers)
 	return i, err
-}
-
-const modelHasConfiguredSupply = `-- name: ModelHasConfiguredSupply :one
-SELECT EXISTS (
-    SELECT 1
-    FROM channel_models cm
-    WHERE cm.model_id = $1
-      AND cm.status = 'enabled'
-) AS supported
-`
-
-// ModelHasConfiguredSupply 判断该 Model 是否存在任意 enabled Binding（配置意图层面的供给）。
-func (q *Queries) ModelHasConfiguredSupply(ctx context.Context, modelID int64) (bool, error) {
-	row := q.db.QueryRow(ctx, modelHasConfiguredSupply, modelID)
-	var supported bool
-	err := row.Scan(&supported)
-	return supported, err
 }
 
 const modelHasEffectiveBasePrice = `-- name: ModelHasEffectiveBasePrice :one

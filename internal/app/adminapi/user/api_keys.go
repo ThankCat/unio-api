@@ -208,14 +208,6 @@ func (h *apiKeysHandler) delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// int64Value 解引用 *int64（nil→0）。
-func int64Value(p *int64) int64 {
-	if p == nil {
-		return 0
-	}
-	return *p
-}
-
 func toAPIKeyDTO(k customer.APIKey) apiKeyDTO {
 	return apiKeyDTO{
 		ID:         k.ID,

@@ -59,15 +59,6 @@ func TestChannelTestSettingsDefaults(t *testing.T) {
 	if got := AdminBackendChannelTestProbeTimeout(ctx, nil); got != want.ProbeTimeout {
 		t.Fatalf("probe timeout accessor = %v", got)
 	}
-	if !AdminBackendChannelTestWorkerEnabled(ctx, nil) {
-		t.Fatal("enabled accessor should be true")
-	}
-	if got := AdminBackendChannelTestWorkerInterval(ctx, nil); got != want.Interval {
-		t.Fatalf("interval accessor = %v", got)
-	}
-	if got := AdminBackendChannelTestLogRetention(ctx, nil); got != want.LogRetentionPerChannel {
-		t.Fatalf("retention accessor = %d", got)
-	}
 }
 
 func TestChannelTestSettingsRoundTrip(t *testing.T) {

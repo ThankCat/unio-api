@@ -59,7 +59,7 @@ func newPublisherTest(t *testing.T) (*pgxpool.Pool, *breakerstore.Store, string)
 // 返回 key。
 //
 // 这四个 key 同时是运行态控制的必需配置，而本测试连的是开发库：直接删掉它们会让
-// RestoreCriticalRuntimeControls 每 30 秒失败一次，跑一次测试就把开发环境打瘫。
+// RestoreCriticalRuntimeControlsObserved 每 30 秒失败一次，跑一次测试就把开发环境打瘫。
 // 所以 Cleanup 按「原来有就还原、原来没有才删」处理。
 func seedSetting(t *testing.T, pool *pgxpool.Pool, key, value string) string {
 	t.Helper()

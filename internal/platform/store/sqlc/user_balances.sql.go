@@ -212,6 +212,7 @@ type CreateUserBalanceParams struct {
 	Balance  pgtype.Numeric
 }
 
+// 仅测试使用：生产路径不调用（sqlc 层 DB 用例夹具）。
 // CreateUserBalance 创建用户指定币种的余额投影。
 func (q *Queries) CreateUserBalance(ctx context.Context, arg CreateUserBalanceParams) (UserBalance, error) {
 	row := q.db.QueryRow(ctx, createUserBalance, arg.UserID, arg.Currency, arg.Balance)
@@ -479,6 +480,7 @@ type ReserveUserBalanceParams struct {
 	Currency string
 }
 
+// 仅测试使用：生产路径不调用（sqlc 层 DB 用例夹具）。
 // ReserveUserBalance 冻结指定金额的用户可用余额。
 func (q *Queries) ReserveUserBalance(ctx context.Context, arg ReserveUserBalanceParams) (UserBalance, error) {
 	row := q.db.QueryRow(ctx, reserveUserBalance, arg.Amount, arg.UserID, arg.Currency)
@@ -560,6 +562,7 @@ type UpdateUserBalanceParams struct {
 	Currency string
 }
 
+// 仅测试使用：生产路径不调用（sqlc 层 DB 用例夹具）。
 // UpdateUserBalance 直接更新用户余额投影的 balance 字段。
 func (q *Queries) UpdateUserBalance(ctx context.Context, arg UpdateUserBalanceParams) (UserBalance, error) {
 	row := q.db.QueryRow(ctx, updateUserBalance, arg.Balance, arg.UserID, arg.Currency)

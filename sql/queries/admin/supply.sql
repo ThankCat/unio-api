@@ -95,15 +95,6 @@ WHERE cm.model_id = sqlc.arg(model_id)
   AND cm.status = 'enabled'
   AND cm.channel_id <> sqlc.arg(exclude_channel_id);
 
--- name: ModelHasConfiguredSupply :one
--- ModelHasConfiguredSupply 判断该 Model 是否存在任意 enabled Binding（配置意图层面的供给）。
-SELECT EXISTS (
-    SELECT 1
-    FROM channel_models cm
-    WHERE cm.model_id = sqlc.arg(model_id)
-      AND cm.status = 'enabled'
-) AS supported;
-
 -- name: ModelHasRuntimeSupply :one
 -- ModelHasRuntimeSupply 判断该 Model 此刻是否真的能打通：需要 Binding、Channel、Provider
 -- 三级 enabled、凭据有效，且渠道成本可解析（有绝对覆盖或价格倍率，否则不参与计费也就进不了候选）。
@@ -218,21 +209,6 @@ SELECT EXISTS (
       AND (mp.sale_uncached_input_price IS NOT NULL OR mp.sale_discount IS NOT NULL)
 ) AS has_successor;
 
--- name: ListModelRuntimeProtocols :many
--- ListModelRuntimeProtocols 返回该 Model 当前可用渠道覆盖的入口协议集合。
--- 协议不落库，恒等于实际供给能力。
-SELECT DISTINCT proto AS ingress_protocol
-FROM channel_models cm
-JOIN channels c ON c.id = cm.channel_id
-JOIN providers p ON p.id = c.provider_id
-CROSS JOIN LATERAL unnest(c.protocols) AS proto
-WHERE cm.model_id = sqlc.arg(model_id)
-  AND cm.status = 'enabled'
-  AND c.status = 'enabled'
-  AND c.credential_valid
-  AND p.status = 'enabled'
-ORDER BY proto;
-
 -- name: ModelDisableImpactCounts :one
 -- ModelDisableImpactCounts 统计 Model 全局暂停影响范围内的 enabled Binding 及其 Channel/Provider 数。
 SELECT COUNT(*) AS enabled_bindings,
@@ -261,70 +237,8 @@ SET status = 'enabled',
     updated_at = now()
 WHERE id = sqlc.arg(id) AND status = 'disabled';
 
--- name: ListDisabledModelsRecoverable :many
--- ListDisabledModelsRecoverable 列出因供给中断而停用、如今供给已恢复的模型（批量恢复入口）。
--- 只列 binding_disabled / channel_disabled：管理员手动下架的不该被「恢复」列表打扰。
-SELECT m.id AS model_id,
-       m.model_id AS public_model_id,
-       m.display_name,
-       m.disabled_reason,
-       m.disabled_at
-FROM models m
-WHERE m.status = 'disabled'
-  AND m.disabled_reason IN ('binding_disabled', 'channel_disabled')
-  AND EXISTS (
-      SELECT 1
-      FROM channel_models cm
-      JOIN channels c ON c.id = cm.channel_id
-      JOIN providers p ON p.id = c.provider_id
-      WHERE cm.model_id = m.id
-        AND cm.status = 'enabled'
-        AND c.status = 'enabled'
-        AND c.credential_valid
-        AND p.status = 'enabled'
-  )
-ORDER BY m.model_id;
-
 -- name: CountEnabledBindingsByChannel :one
 -- CountEnabledBindingsByChannel 归档前置：archived Channel 下不得存在 enabled Binding。
 SELECT COUNT(*) AS enabled_bindings
 FROM channel_models
 WHERE channel_id = sqlc.arg(channel_id) AND status = 'enabled';
-
--- name: ListSupplyCandidatesForChannels :many
--- ListSupplyCandidatesForChannels 按给定 Channel 集合计算「模型 × 协议」供给覆盖：
--- enabled Binding 去重，协议来自渠道的 protocols 数组展开。不读 Model 当前状态。
-SELECT cm.model_id,
-       m.model_id AS public_model_id,
-       m.display_name,
-       m.status AS model_status,
-       proto AS ingress_protocol,
-       COUNT(DISTINCT c.id) AS supporting_channels
-FROM channels c
-JOIN channel_models cm ON cm.channel_id = c.id AND cm.status = 'enabled'
-JOIN models m ON m.id = cm.model_id
-CROSS JOIN LATERAL unnest(c.protocols) AS proto
-WHERE c.id = ANY(sqlc.arg(channel_ids)::bigint[])
-GROUP BY cm.model_id, m.model_id, m.display_name, m.status, proto
-ORDER BY m.model_id, proto;
-
--- name: ListModelsWithoutRuntimeSupply :many
--- ListModelsWithoutRuntimeSupply 列出 enabled 但当前没有任何运行候选的模型。
--- 这是不变量被打破的信号（例如渠道凭据集体失效），供后台告警，不自动改状态。
-SELECT m.id AS model_id,
-       m.model_id AS public_model_id,
-       m.display_name
-FROM models m
-WHERE m.status = 'enabled'
-  AND NOT EXISTS (
-      SELECT 1
-      FROM channel_models cm
-      JOIN channels c ON c.id = cm.channel_id
-      JOIN providers p ON p.id = c.provider_id
-      WHERE cm.model_id = m.id
-        AND cm.status = 'enabled'
-        AND c.status = 'enabled'
-        AND c.credential_valid
-        AND p.status = 'enabled'
-  )
-ORDER BY m.model_id;

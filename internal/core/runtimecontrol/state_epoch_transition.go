@@ -45,6 +45,9 @@ func NewBootstrapStateEpochTransition(now time.Time) (StateEpochTransition, erro
 	}, nil
 }
 
+// NewStateEpochRecoveryTransition 构造 state_loss / restore 两类恢复迁移。协议的恢复臂
+// （RecoveryID、旧 epoch 校验、seeder 的迁移哈希核对）由此进入；当前生产仅走 bootstrap 迁移，
+// 状态丢失自动检测接线前该构造器只由用例驱动，保留以固定协议契约。
 func NewStateEpochRecoveryTransition(
 	old StateEpoch,
 	oldRevision int64,

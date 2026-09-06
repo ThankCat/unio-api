@@ -3,7 +3,6 @@ package apikey
 import (
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/hex"
 )
 
@@ -122,10 +121,4 @@ func Suffix(plaintext string) string {
 func Hash(plaintext string) string {
 	sum := sha256.Sum256([]byte(plaintext))
 	return hex.EncodeToString(sum[:])
-}
-
-// Verify 使用常量时间比较验证明文 API Key 是否匹配哈希值。
-func Verify(plaintext string, hash string) bool {
-	got := Hash(plaintext)
-	return subtle.ConstantTimeCompare([]byte(got), []byte(hash)) == 1
 }

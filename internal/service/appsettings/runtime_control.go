@@ -30,14 +30,9 @@ var runtimeControlSettingKeys = [...]string{
 // The callback contains only the fixed setting key and its revision, never the setting payload.
 type RuntimeControlRestoreObserver func(settingKey string, revision int64, restored bool)
 
-// RestoreCriticalRuntimeControls 从 PostgreSQL 当前事实仅补齐缺失的 Redis control，并严格核对已有 control。
+// RestoreCriticalRuntimeControlsObserved 从 PostgreSQL 当前事实仅补齐缺失的 Redis control，并严格核对已有 control。
 // 它绝不覆盖 stale/ahead/pending control；这些情况必须先由 durable operation reconciler 收口。
-func RestoreCriticalRuntimeControls(ctx context.Context, settings *SettingsStore, controls RuntimeControlRestorer) error {
-	return RestoreCriticalRuntimeControlsObserved(ctx, settings, controls, nil)
-}
-
-// RestoreCriticalRuntimeControlsObserved is RestoreCriticalRuntimeControls with an optional
-// observability callback invoked only after strict active revision and payload validation.
+// observe 为可选的观测回调，只在 active revision 与 payload 严格校验通过后调用；传 nil 表示不观测。
 func RestoreCriticalRuntimeControlsObserved(
 	ctx context.Context,
 	settings *SettingsStore,

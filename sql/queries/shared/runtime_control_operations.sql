@@ -121,7 +121,8 @@ WHERE key = 'gateway.runtime_state_epoch'
   AND value = sqlc.arg(recovering_value)::jsonb;
 
 -- name: MarkRuntimeControlOperationCommitted :execrows
--- db_committed/legacy awaiting_release -> committed（Redis Commit 成功后终结）。
+-- db_committed -> committed（Redis Commit 成功后终结）。awaiting_release 是历史兼容态：
+-- 从零建库的部署不会再写出该状态，保留在 IN 列表只为兼容旧行。
 UPDATE runtime_control_operations
 SET state = 'committed', completed_at = now(), updated_at = now()
 WHERE token = sqlc.arg(token) AND payload_hash = sqlc.arg(payload_hash)

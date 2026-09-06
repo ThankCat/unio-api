@@ -586,7 +586,7 @@ func (s *Service) BulkRevokeSelection(ctx context.Context, selection Selection) 
 	if err != nil {
 		return BulkResult{}, err
 	}
-	rows, err, tx, q := s.lockBulk(ctx, ids, "revoke")
+	rows, tx, q, err := s.lockBulk(ctx, ids, "revoke")
 	if err != nil {
 		return BulkResult{}, err
 	}
@@ -622,7 +622,7 @@ func (s *Service) BulkDeleteSelection(ctx context.Context, selection Selection) 
 	if err != nil {
 		return BulkResult{}, err
 	}
-	rows, err, tx, q := s.lockBulk(ctx, ids, "delete")
+	rows, tx, q, err := s.lockBulk(ctx, ids, "delete")
 	if err != nil {
 		return BulkResult{}, err
 	}
@@ -715,15 +715,15 @@ func (s *Service) resolveSelection(ctx context.Context, selection Selection) ([]
 	return out, nil
 }
 
-func (s *Service) lockBulk(ctx context.Context, ids []int64, operation string) ([]sqlc.Cdkey, error, pgx.Tx, Store) {
+func (s *Service) lockBulk(ctx context.Context, ids []int64, operation string) ([]sqlc.Cdkey, pgx.Tx, Store, error) {
 	if len(ids) == 0 {
-		return nil, invalidArgument("ids", "ids must not be empty"), nil, nil
+		return nil, nil, nil, invalidArgument("ids", "ids must not be empty")
 	}
 	seen := make(map[int64]struct{}, len(ids))
 	unique := make([]int64, 0, len(ids))
 	for _, id := range ids {
 		if id <= 0 {
-			return nil, invalidArgument("ids", "ids must contain positive integers"), nil, nil
+			return nil, nil, nil, invalidArgument("ids", "ids must contain positive integers")
 		}
 		if _, ok := seen[id]; !ok {
 			seen[id] = struct{}{}
@@ -732,23 +732,23 @@ func (s *Service) lockBulk(ctx context.Context, ids []int64, operation string) (
 	}
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
-		return nil, storeFailed(err, "begin bulk CDKEY "+operation+" transaction"), nil, nil
+		return nil, nil, nil, storeFailed(err, "begin bulk CDKEY "+operation+" transaction")
 	}
 	q, queryErr := s.storeForTx(tx)
 	if queryErr != nil {
 		_ = tx.Rollback(ctx)
-		return nil, queryErr, nil, nil
+		return nil, nil, nil, queryErr
 	}
 	rows, err := q.GetCDKeysForUpdateByIDs(ctx, unique)
 	if err != nil {
 		_ = tx.Rollback(ctx)
-		return nil, storeFailed(err, "lock CDKEYs"), nil, nil
+		return nil, nil, nil, storeFailed(err, "lock CDKEYs")
 	}
 	if len(rows) != len(unique) {
 		_ = tx.Rollback(ctx)
-		return nil, notFound("one or more CDKEYs not found"), nil, nil
+		return nil, nil, nil, notFound("one or more CDKEYs not found")
 	}
-	return rows, nil, tx, q
+	return rows, tx, q, nil
 }
 
 func (s *Service) storeForTx(tx pgx.Tx) (Store, error) {
@@ -871,10 +871,6 @@ func uuidString(value pgtype.UUID) string {
 		return ""
 	}
 	return uuid.UUID(value.Bytes).String()
-}
-
-func cdkeyFromModel(row sqlc.Cdkey) CDKey {
-	return CDKey{ID: row.ID, BatchID: uuidString(row.BatchID), MaskedCode: corecdkey.Mask(row.CodePlaintext), CodePrefix: row.CodePrefix, CodeSuffix: row.CodeSuffix, Amount: opsutil.NumericString(row.Amount), Currency: row.Currency, Status: row.Status, CreatedAt: row.CreatedAt.Time, RedeemedAt: opsutil.TimeValue(row.RedeemedAt), RevokedAt: opsutil.TimeValue(row.RevokedAt)}
 }
 
 func cdkeyFromListRow(row sqlc.ListCDKeysPageRow) CDKey {

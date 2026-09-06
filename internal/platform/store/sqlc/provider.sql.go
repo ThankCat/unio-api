@@ -56,22 +56,6 @@ func (q *Queries) CountNonArchivedChannelsByProvider(ctx context.Context, provid
 	return count, err
 }
 
-const countProviderCurrencyRefs = `-- name: CountProviderCurrencyRefs :one
-SELECT
-    (SELECT COUNT(*) FROM channel_prices cp JOIN channels c ON c.id = cp.channel_id WHERE c.provider_id = $1)
-  + (SELECT COUNT(*) FROM provider_ledger_entries ple WHERE ple.provider_id = $1)
-  + (SELECT COUNT(*) FROM provider_balances pb WHERE pb.provider_id = $1) AS total
-`
-
-// CountProviderCurrencyRefs 统计 provider 币种语义的引用数（渠道价格 + 账本 + 余额行）。
-// 任一引用存在即禁止修改 currency（D3 不可变规则的应用层依据）。
-func (q *Queries) CountProviderCurrencyRefs(ctx context.Context, providerID int64) (int32, error) {
-	row := q.db.QueryRow(ctx, countProviderCurrencyRefs, providerID)
-	var total int32
-	err := row.Scan(&total)
-	return total, err
-}
-
 const countProviders = `-- name: CountProviders :one
 SELECT COUNT(*) AS total
 FROM providers
@@ -364,6 +348,7 @@ FROM providers
 ORDER BY id
 `
 
+// 仅测试使用：生产路径不调用（sqlc 层 DB 用例夹具）。
 // ListProviders 列出全部 provider，按 id 升序，供 admin 管理台展示。
 func (q *Queries) ListProviders(ctx context.Context) ([]Provider, error) {
 	rows, err := q.db.Query(ctx, listProviders)

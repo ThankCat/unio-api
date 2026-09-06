@@ -93,6 +93,7 @@ JOIN app_settings AS routing_balance
 WHERE epoch.key = 'gateway.runtime_state_epoch';
 
 -- name: SeedRuntimeStateEpoch :execrows
+-- 仅测试使用：生产路径不调用（sqlc 层 DB 用例夹具）。
 -- SeedRuntimeStateEpoch 仅供受信任的 bootstrap/恢复 use-case 创建非普通设置行；普通 settings registry/API 不得调用。
 INSERT INTO app_settings (key, value, description, revision, updated_at)
 VALUES (

@@ -250,6 +250,7 @@ type ListLedgerEntriesByUserParams struct {
 	LimitRows  int32
 }
 
+// 仅测试使用：生产路径不调用（sqlc 层 DB 用例夹具）。
 // ListLedgerEntriesByUser 按用户和币种倒序列出账本流水。
 func (q *Queries) ListLedgerEntriesByUser(ctx context.Context, arg ListLedgerEntriesByUserParams) ([]LedgerEntry, error) {
 	rows, err := q.db.Query(ctx, listLedgerEntriesByUser,

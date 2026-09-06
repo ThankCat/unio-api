@@ -180,7 +180,7 @@ func TestRestoreCriticalRuntimeControlsInstallsAllValidatedSettings(t *testing.T
 	q.data[GatewayRoutingBalanceKey] = encodeRoutingBalanceSettings(DefaultRoutingBalanceSettings())
 	controls := &fakeRuntimeControlStore{}
 
-	if err := RestoreCriticalRuntimeControls(context.Background(), newTestStore(q), controls); err != nil {
+	if err := RestoreCriticalRuntimeControlsObserved(context.Background(), newTestStore(q), controls, nil); err != nil {
 		t.Fatalf("restore controls: %v", err)
 	}
 	if len(controls.restored) != 4 {
@@ -195,7 +195,7 @@ func TestRestoreCriticalRuntimeControlsRejectsLegacyShape(t *testing.T) {
 	q.data[GatewayCircuitBreakerKey] = encodeCircuitBreakerSettings(DefaultCircuitBreakerSettings())
 	q.data[GatewayRoutingBalanceKey] = encodeRoutingBalanceSettings(DefaultRoutingBalanceSettings())
 
-	err := RestoreCriticalRuntimeControls(context.Background(), newTestStore(q), &fakeRuntimeControlStore{})
+	err := RestoreCriticalRuntimeControlsObserved(context.Background(), newTestStore(q), &fakeRuntimeControlStore{}, nil)
 	if failure.CodeOf(err) != failure.CodeConfigInvalid {
 		t.Fatalf("code = %q, want config_invalid (err=%v)", failure.CodeOf(err), err)
 	}

@@ -157,7 +157,6 @@ func TestRedisInstanceProofMismatchBlocksEveryNewAdmissionBeforeResourceWrite(t 
 	ctx := context.Background()
 	const providerID int64 = 7401
 	const channelID int64 = 7402
-	const routeID int64 = 7403
 	const userID int64 = 7404
 	seedAttemptControls(t, store, testConfig(), channelID,
 		`{"concurrency":null}`)

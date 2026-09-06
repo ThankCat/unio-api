@@ -148,7 +148,7 @@ func (s *Service) ListLogs(ctx context.Context, query LogQuery) (LogList, error)
 		return LogList{}, lokiUnavailable(err)
 	}
 	if payload.Status != "success" {
-		return LogList{}, lokiUnavailable(errors.New("Loki query did not succeed"))
+		return LogList{}, lokiUnavailable(errors.New("loki query did not succeed"))
 	}
 
 	items := parseLokiLogEntries(payload)

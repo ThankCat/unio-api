@@ -158,7 +158,7 @@ func CanonicalCapacityPayload(capacity ChannelCapacity) (string, error) {
 	if err := validateChannelCapacity(capacity.Concurrency); err != nil {
 		return "", err
 	}
-	raw, err := json.Marshal(channelCapacityPayload{Concurrency: capacity.Concurrency})
+	raw, err := json.Marshal(channelCapacityPayload(capacity))
 	if err != nil {
 		return "", err
 	}

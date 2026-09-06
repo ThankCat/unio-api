@@ -338,34 +338,6 @@ func (q *Queries) GetCDKeyBatchSummary(ctx context.Context, arg GetCDKeyBatchSum
 	return items, nil
 }
 
-const getCDKeyByHashForUpdate = `-- name: GetCDKeyByHashForUpdate :one
-SELECT id, batch_id, code_plaintext, code_hash, code_prefix, code_suffix,
-       amount, currency, status, created_at, redeemed_at, revoked_at
-FROM cdkeys
-WHERE code_hash = $1
-FOR UPDATE
-`
-
-func (q *Queries) GetCDKeyByHashForUpdate(ctx context.Context, codeHash string) (Cdkey, error) {
-	row := q.db.QueryRow(ctx, getCDKeyByHashForUpdate, codeHash)
-	var i Cdkey
-	err := row.Scan(
-		&i.ID,
-		&i.BatchID,
-		&i.CodePlaintext,
-		&i.CodeHash,
-		&i.CodePrefix,
-		&i.CodeSuffix,
-		&i.Amount,
-		&i.Currency,
-		&i.Status,
-		&i.CreatedAt,
-		&i.RedeemedAt,
-		&i.RevokedAt,
-	)
-	return i, err
-}
-
 const getCDKeyByIDForUpdate = `-- name: GetCDKeyByIDForUpdate :one
 SELECT id, batch_id, code_plaintext, code_hash, code_prefix, code_suffix,
        amount, currency, status, created_at, redeemed_at, revoked_at
@@ -468,28 +440,6 @@ func (q *Queries) GetCDKeyRedemptionByCDKeyID(ctx context.Context, cdkeyID int64
 		&i.IdempotencyKey,
 		&i.RedeemedAt,
 		&i.BalanceAfter,
-	)
-	return i, err
-}
-
-const getCDKeyRedemptionByIdempotencyKey = `-- name: GetCDKeyRedemptionByIdempotencyKey :one
-SELECT id, cdkey_id, user_id, amount, currency, ledger_entry_id, idempotency_key, redeemed_at
-FROM cdkey_redemptions
-WHERE idempotency_key = $1
-`
-
-func (q *Queries) GetCDKeyRedemptionByIdempotencyKey(ctx context.Context, idempotencyKey string) (CdkeyRedemption, error) {
-	row := q.db.QueryRow(ctx, getCDKeyRedemptionByIdempotencyKey, idempotencyKey)
-	var i CdkeyRedemption
-	err := row.Scan(
-		&i.ID,
-		&i.CdkeyID,
-		&i.UserID,
-		&i.Amount,
-		&i.Currency,
-		&i.LedgerEntryID,
-		&i.IdempotencyKey,
-		&i.RedeemedAt,
 	)
 	return i, err
 }
@@ -611,43 +561,6 @@ func (q *Queries) GetCDKeysForUpdateByIDs(ctx context.Context, ids []int64) ([]C
 	return items, nil
 }
 
-const getConsoleCDKeyRedemption = `-- name: GetConsoleCDKeyRedemption :one
-SELECT r.id, r.cdkey_id, r.user_id, r.amount, r.currency, r.ledger_entry_id,
-       r.idempotency_key, r.redeemed_at, l.balance_after
-FROM cdkey_redemptions r
-JOIN ledger_entries l ON l.id = r.ledger_entry_id
-WHERE r.cdkey_id = $1
-`
-
-type GetConsoleCDKeyRedemptionRow struct {
-	ID             int64
-	CdkeyID        int64
-	UserID         int64
-	Amount         pgtype.Numeric
-	Currency       string
-	LedgerEntryID  int64
-	IdempotencyKey string
-	RedeemedAt     pgtype.Timestamptz
-	BalanceAfter   pgtype.Numeric
-}
-
-func (q *Queries) GetConsoleCDKeyRedemption(ctx context.Context, cdkeyID int64) (GetConsoleCDKeyRedemptionRow, error) {
-	row := q.db.QueryRow(ctx, getConsoleCDKeyRedemption, cdkeyID)
-	var i GetConsoleCDKeyRedemptionRow
-	err := row.Scan(
-		&i.ID,
-		&i.CdkeyID,
-		&i.UserID,
-		&i.Amount,
-		&i.Currency,
-		&i.LedgerEntryID,
-		&i.IdempotencyKey,
-		&i.RedeemedAt,
-		&i.BalanceAfter,
-	)
-	return i, err
-}
-
 const listCDKeyIDs = `-- name: ListCDKeyIDs :many
 
 SELECT c.id
@@ -682,63 +595,6 @@ type ListCDKeyIDsParams struct {
 // Resolve a server-side selection without loading plaintext or an unbounded page.
 func (q *Queries) ListCDKeyIDs(ctx context.Context, arg ListCDKeyIDsParams) ([]int64, error) {
 	rows, err := q.db.Query(ctx, listCDKeyIDs,
-		arg.Statuses,
-		arg.Amount,
-		arg.BatchID,
-		arg.Search,
-		arg.FromTime,
-		arg.ToTime,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []int64
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		items = append(items, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listCDKeyIDsByFilter = `-- name: ListCDKeyIDsByFilter :many
-SELECT c.id
-FROM cdkeys c
-LEFT JOIN cdkey_redemptions r ON r.cdkey_id = c.id
-LEFT JOIN users u ON u.id = r.user_id
-WHERE (cardinality($1::text[]) = 0 OR c.status = ANY($1::text[]))
-  AND ($2::numeric IS NULL OR c.amount = $2::numeric)
-  AND ($3::uuid IS NULL OR c.batch_id = $3::uuid)
-  AND ($4::text IS NULL OR (
-      c.code_prefix ILIKE '%' || $4::text || '%'
-      OR c.code_suffix ILIKE '%' || $4::text || '%'
-      OR c.batch_id::text ILIKE '%' || $4::text || '%'
-      OR COALESCE(u.email, '') ILIKE '%' || $4::text || '%'
-      OR COALESCE(r.user_id::text, '') ILIKE '%' || $4::text || '%'
-  ))
-  AND ($5::timestamptz IS NULL OR c.created_at >= $5::timestamptz)
-  AND ($6::timestamptz IS NULL OR c.created_at < $6::timestamptz)
-ORDER BY c.id
-`
-
-type ListCDKeyIDsByFilterParams struct {
-	Statuses []string
-	Amount   pgtype.Numeric
-	BatchID  pgtype.UUID
-	Search   pgtype.Text
-	FromTime pgtype.Timestamptz
-	ToTime   pgtype.Timestamptz
-}
-
-// Resolve select-all mutations on the server; no plaintext is selected.
-func (q *Queries) ListCDKeyIDsByFilter(ctx context.Context, arg ListCDKeyIDsByFilterParams) ([]int64, error) {
-	rows, err := q.db.Query(ctx, listCDKeyIDsByFilter,
 		arg.Statuses,
 		arg.Amount,
 		arg.BatchID,
@@ -1020,39 +876,6 @@ func (q *Queries) RevokeCDKeyIfUnused(ctx context.Context, id int64) (int64, err
 		return 0, err
 	}
 	return result.RowsAffected(), nil
-}
-
-const updateCDKeyRedeemed = `-- name: UpdateCDKeyRedeemed :one
-UPDATE cdkeys
-SET status = 'redeemed', redeemed_at = $1, revoked_at = NULL
-WHERE id = $2 AND status = 'unused'
-RETURNING id, batch_id, code_plaintext, code_hash, code_prefix, code_suffix,
-          amount, currency, status, created_at, redeemed_at, revoked_at
-`
-
-type UpdateCDKeyRedeemedParams struct {
-	RedeemedAt pgtype.Timestamptz
-	ID         int64
-}
-
-func (q *Queries) UpdateCDKeyRedeemed(ctx context.Context, arg UpdateCDKeyRedeemedParams) (Cdkey, error) {
-	row := q.db.QueryRow(ctx, updateCDKeyRedeemed, arg.RedeemedAt, arg.ID)
-	var i Cdkey
-	err := row.Scan(
-		&i.ID,
-		&i.BatchID,
-		&i.CodePlaintext,
-		&i.CodeHash,
-		&i.CodePrefix,
-		&i.CodeSuffix,
-		&i.Amount,
-		&i.Currency,
-		&i.Status,
-		&i.CreatedAt,
-		&i.RedeemedAt,
-		&i.RevokedAt,
-	)
-	return i, err
 }
 
 const updateConsoleCDKeyRedeemed = `-- name: UpdateConsoleCDKeyRedeemed :execrows

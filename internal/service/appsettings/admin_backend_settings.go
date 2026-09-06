@@ -135,21 +135,6 @@ func AdminBackendChannelTestProbeTimeout(ctx context.Context, store *SettingsSto
 	return AdminBackendChannelTest(ctx, store).ProbeTimeout
 }
 
-// AdminBackendChannelTestWorkerEnabled 读取巡检开关(聚合配置的便捷访问器)。
-func AdminBackendChannelTestWorkerEnabled(ctx context.Context, store *SettingsStore) bool {
-	return AdminBackendChannelTest(ctx, store).Enabled
-}
-
-// AdminBackendChannelTestWorkerInterval 读取巡检间隔(聚合配置的便捷访问器)。
-func AdminBackendChannelTestWorkerInterval(ctx context.Context, store *SettingsStore) time.Duration {
-	return AdminBackendChannelTest(ctx, store).Interval
-}
-
-// AdminBackendChannelTestLogRetention 读取日志保留条数(聚合配置的便捷访问器)。
-func AdminBackendChannelTestLogRetention(ctx context.Context, store *SettingsStore) int {
-	return AdminBackendChannelTest(ctx, store).LogRetentionPerChannel
-}
-
 // ChannelModelDiscoverySettings 是渠道上游模型发现的热更新配置。
 type ChannelModelDiscoverySettings struct {
 	Enabled             bool

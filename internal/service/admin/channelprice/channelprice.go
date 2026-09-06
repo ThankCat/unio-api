@@ -402,29 +402,6 @@ func parseChannelPriceAmounts(in CreateInput) (channelPriceAmounts, error) {
 	return out, nil
 }
 
-func toChannelPrice(c sqlc.ChannelPrice) ChannelPrice {
-	return ChannelPrice{
-		ID:                        c.ID,
-		ChannelID:                 c.ChannelID,
-		ModelID:                   c.ModelID,
-		Currency:                  c.Currency,
-		PricingUnit:               c.PricingUnit,
-		UncachedInputCost:         numericString(c.UncachedInputCost),
-		CacheReadInputCost:        numericPtr(c.CacheReadInputCost),
-		CacheCreation5mInputCost:  numericPtr(c.CacheCreation5mInputCost),
-		CacheCreation1hInputCost:  numericPtr(c.CacheCreation1hInputCost),
-		CacheCreation30mInputCost: numericPtr(c.CacheCreation30mInputCost),
-		OutputCost:                numericString(c.OutputCost),
-		ReasoningOutputCost:       numericPtr(c.ReasoningOutputCost),
-		FastCostStatus:            "missing",
-		Status:                    c.Status,
-		EffectiveFrom:             c.EffectiveFrom.Time,
-		EffectiveTo:               timePtr(c.EffectiveTo),
-		CreatedAt:                 c.CreatedAt.Time,
-		UpdatedAt:                 c.UpdatedAt.Time,
-	}
-}
-
 func toChannelPriceFromCreateRow(c sqlc.CreateChannelPriceRow) ChannelPrice {
 	result := ChannelPrice{
 		ID:                        c.ID,

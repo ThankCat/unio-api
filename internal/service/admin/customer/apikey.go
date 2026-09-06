@@ -163,6 +163,7 @@ func (s *APIKeyService) Create(ctx context.Context, params APIKeyCreateParams) (
 		return CreatedAPIKey{}, err
 	}
 
+	// TODO(阶段3/production): [GAP-3-007] API Key 创建缺少审计日志；接入 audit log 记录 actor、user、api_key 和操作结果。
 	generated, err := apikey.Generate()
 	if err != nil {
 		return CreatedAPIKey{}, storeFailed(err, "generate api key")
@@ -353,15 +354,6 @@ func (s *APIKeyService) buildAPIKey(
 		CreatedAt:  createdAt,
 		UpdatedAt:  updatedAt,
 	}
-}
-
-// int4ToPtr 把可空 pgtype.Int4 转成 *int64（限流上限可空，nil=继承全局默认）。
-func int4ToPtr(v pgtype.Int4) *int64 {
-	if !v.Valid {
-		return nil
-	}
-	out := int64(v.Int32)
-	return &out
 }
 
 func (s *APIKeyService) computeStatus(disabledAt, revokedAt, expiresAt pgtype.Timestamptz) string {

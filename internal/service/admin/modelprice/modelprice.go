@@ -83,7 +83,7 @@ type ModelPrice struct {
 	CacheCreation30mInputPrice  *string
 	OutputPrice                 string
 	ReasoningOutputPrice        *string
-	SaleDiscount              *string
+	SaleDiscount                *string
 	SalePrices                  *SalePriceVector
 	SaleConfigured              bool
 	LongContextEnabled          bool
@@ -162,7 +162,7 @@ type CreateInput struct {
 	CacheCreation30mInputPrice  *string
 	OutputPrice                 string
 	ReasoningOutputPrice        *string
-	SaleDiscount              *string
+	SaleDiscount                *string
 	SalePrices                  *SalePriceVector
 	LongContextEnabled          bool
 	LongContextThreshold        *int64
@@ -571,7 +571,7 @@ func createParams(
 		CacheCreation30mInputPrice:         amounts.cacheCreation30mInputPrice,
 		OutputPrice:                        amounts.outputPrice,
 		ReasoningOutputPrice:               amounts.reasoningOutputPrice,
-		SaleDiscount:                     saleDiscount,
+		SaleDiscount:                       saleDiscount,
 		SaleUncachedInputPrice:             sale.uncachedInputPrice,
 		SaleCacheReadInputPrice:            sale.cacheReadInputPrice,
 		SaleCacheCreation5mInputPrice:      sale.cacheCreation5mInputPrice,
@@ -1019,42 +1019,6 @@ func markSaleConfigured(p ModelPrice) ModelPrice {
 	return p
 }
 
-func toModelPrice(c sqlc.ModelPrice) ModelPrice {
-	return markSaleConfigured(ModelPrice{
-		ID:                         c.ID,
-		ModelID:                    c.ModelID,
-		Currency:                   c.Currency,
-		PricingUnit:                c.PricingUnit,
-		UncachedInputPrice:         numericString(c.UncachedInputPrice),
-		CacheReadInputPrice:        numericPtr(c.CacheReadInputPrice),
-		CacheCreation5mInputPrice:  numericPtr(c.CacheCreation5mInputPrice),
-		CacheCreation1hInputPrice:  numericPtr(c.CacheCreation1hInputPrice),
-		CacheCreation30mInputPrice: numericPtr(c.CacheCreation30mInputPrice),
-		OutputPrice:                numericString(c.OutputPrice),
-		ReasoningOutputPrice:       numericPtr(c.ReasoningOutputPrice),
-		SaleDiscount:             numericPtr(c.SaleDiscount),
-		SalePrices: saleVectorFromValues(
-			c.SaleUncachedInputPrice,
-			c.SaleCacheReadInputPrice,
-			c.SaleCacheCreation5mInputPrice,
-			c.SaleCacheCreation1hInputPrice,
-			c.SaleCacheCreation30mInputPrice,
-			c.SaleOutputPrice,
-			c.SaleReasoningOutputPrice,
-		),
-		LongContextEnabled:          c.LongContextEnabled,
-		LongContextThreshold:        int64Ptr(c.LongContextThreshold),
-		LongContextInputMultiplier:  numericPtr(c.LongContextInputMultiplier),
-		LongContextOutputMultiplier: numericPtr(c.LongContextOutputMultiplier),
-		FastPriceStatus:             "missing",
-		Status:                      c.Status,
-		EffectiveFrom:               c.EffectiveFrom.Time,
-		EffectiveTo:                 timePtr(c.EffectiveTo),
-		CreatedAt:                   c.CreatedAt.Time,
-		UpdatedAt:                   c.UpdatedAt.Time,
-	})
-}
-
 func toModelPriceFromCreateRow(c sqlc.CreateModelPriceRow) ModelPrice {
 	result := ModelPrice{
 		ID:                         c.ID,
@@ -1068,7 +1032,7 @@ func toModelPriceFromCreateRow(c sqlc.CreateModelPriceRow) ModelPrice {
 		CacheCreation30mInputPrice: numericPtr(c.CacheCreation30mInputPrice),
 		OutputPrice:                numericString(c.OutputPrice),
 		ReasoningOutputPrice:       numericPtr(c.ReasoningOutputPrice),
-		SaleDiscount:             numericPtr(c.SaleDiscount),
+		SaleDiscount:               numericPtr(c.SaleDiscount),
 		SalePrices: saleVectorFromValues(
 			c.SaleUncachedInputPrice,
 			c.SaleCacheReadInputPrice,
@@ -1128,7 +1092,7 @@ func toModelPriceFromRow(c sqlc.ListModelPricesByModelRow) ModelPrice {
 		CacheCreation30mInputPrice: numericPtr(c.CacheCreation30mInputPrice),
 		OutputPrice:                numericString(c.OutputPrice),
 		ReasoningOutputPrice:       numericPtr(c.ReasoningOutputPrice),
-		SaleDiscount:             numericPtr(c.SaleDiscount),
+		SaleDiscount:               numericPtr(c.SaleDiscount),
 		SalePrices: saleVectorFromValues(
 			c.SaleUncachedInputPrice,
 			c.SaleCacheReadInputPrice,

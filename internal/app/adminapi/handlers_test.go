@@ -113,10 +113,6 @@ type fakeModelService struct {
 	createErr error
 	updateOut model.Model
 	updateErr error
-	delistOut int
-	delistErr error
-	delistID  int64
-	delistIn  supply.Confirmation
 	deleteErr error
 }
 

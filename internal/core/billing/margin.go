@@ -18,15 +18,9 @@ type normalizedRatePair struct {
 	cost      *big.Rat
 }
 
-// ValidateNonNegativeMargin 精确比较客户售价与渠道成本的全部归一化分项（同币种专用）。
-// 跨币种比较用 ValidateNonNegativeMarginFX；本函数在币种不同时报错（等价于「缺汇率」语义）。
-func ValidateNonNegativeMargin(sale CustomerPriceSnapshot, cost ProviderCostSnapshot) ([]MarginViolation, error) {
-	return ValidateNonNegativeMarginFX(sale, cost, nil)
-}
-
-// ValidateNonNegativeMarginFX 支持跨币种的毛利校验（D5）：fxRate = 1 售价币种兑多少成本币种
-// （如 USD 售价 vs CNY 成本时传 7.17）。比较采用乘法 sale × rate ≥ cost，纯有理数运算零舍入。
-// 同币种时 fxRate 必须为 nil；跨币种缺 fxRate 返回 ErrMissingFxRate（保守拒绝，与 SQL 守卫同语义）。
+// ValidateNonNegativeMarginFX 精确比较客户售价与渠道成本的全部归一化分项，并支持跨币种毛利校验（D5）：
+// fxRate = 1 售价币种兑多少成本币种（如 USD 售价 vs CNY 成本时传 7.17）。比较采用乘法 sale × rate ≥ cost，
+// 纯有理数运算零舍入。同币种时 fxRate 必须为 nil；跨币种缺 fxRate 返回 ErrMissingFxRate（保守拒绝，与 SQL 守卫同语义）。
 func ValidateNonNegativeMarginFX(sale CustomerPriceSnapshot, cost ProviderCostSnapshot, fxRate *big.Rat) ([]MarginViolation, error) {
 	pairs, err := normalizedSaleCostPairs(sale, cost, fxRate)
 	if err != nil {

@@ -51,14 +51,24 @@ func newTestStore(t *testing.T) (*Store, *redis.Client, string) {
 	return store, client, ns
 }
 
+// testConfig 以 §4.8 默认值为底（生产默认由 appsettings 的 circuit breaker 定义提供），
+// 只把窗口样本数与熔断时长缩小到便于用例触发的量级。
 func testConfig() Config {
-	c := DefaultConfig()
-	c.MinRequests = 4
-	c.OpenDurationsMs = []int64{60, 120}
-	c.AttemptPermitTTLMs = 30000
-	c.AttemptRenewMs = 10000
-	c.AttemptTerminalTTLMs = 300000
-	return c
+	return Config{
+		Enabled:                           true,
+		WindowMs:                          30000,
+		MinRequests:                       4,
+		FailureRatio:                      0.5,
+		ConsecutiveFailures:               3,
+		ConsecutiveWindowMs:               10000,
+		HalfOpenSuccesses:                 2,
+		AttemptPermitTTLMs:                30000,
+		AttemptRenewMs:                    10000,
+		AttemptTerminalTTLMs:              300000,
+		OpenDurationsMs:                   []int64{60, 120},
+		ProviderAmbiguousDistinctChannels: 2,
+		ProviderAmbiguousDistinctModels:   2,
+	}
 }
 
 func testCircuitBreakerPayload(cfg Config) string {

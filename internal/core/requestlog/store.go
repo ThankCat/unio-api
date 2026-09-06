@@ -577,14 +577,7 @@ func timestamptz(t time.Time) pgtype.Timestamptz {
 	return pgtype.Timestamptz{Time: t, Valid: true}
 }
 
-// int8OrNull / int4OrNull / textOrNull 把可选值转成可空 pgtype（nil → NULL）。
-func int8OrNull(v *int64) pgtype.Int8 {
-	if v == nil {
-		return pgtype.Int8{Valid: false}
-	}
-	return pgtype.Int8{Int64: *v, Valid: true}
-}
-
+// int4OrNull / textOrNull 把可选值转成可空 pgtype（nil → NULL）。
 func int4OrNull(v *int32) pgtype.Int4 {
 	if v == nil {
 		return pgtype.Int4{Valid: false}

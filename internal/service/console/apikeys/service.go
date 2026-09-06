@@ -345,6 +345,7 @@ func (s *Service) Create(ctx context.Context, params CreateParams) (CreatedKey, 
 		return CreatedKey{}, expiresErr
 	}
 
+	// TODO(阶段3/production): [GAP-3-007] API Key 创建缺少审计日志；接入 audit log 记录 actor、user、api_key 和操作结果。
 	generated, genErr := apikey.Generate()
 	if genErr != nil {
 		return CreatedKey{}, consoleservice.RequestUnavailable("generate api key", genErr)

@@ -846,12 +846,6 @@ type RuntimeControlOperation struct {
 	CompletedAt        pgtype.Timestamptz
 }
 
-type SchemaHealthCheck struct {
-	ID        int64
-	Name      string
-	CreatedAt pgtype.Timestamptz
-}
-
 type SettlementRecoveryJob struct {
 	ID                                   int64
 	UserID                               int64

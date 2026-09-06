@@ -255,6 +255,7 @@ WHERE
 ORDER BY currency;
 
 -- name: CreateUser :one
+-- 仅测试使用：生产路径不调用（sqlc 层 DB 用例夹具）。
 -- CreateUser 创建用户账号并返回用户事实。
 -- uid 是对外暴露的稳定标识（NOT NULL 且无列默认值），必须在插入时生成，
 -- 否则整条插入被约束拒绝。

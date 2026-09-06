@@ -255,6 +255,7 @@ VALUES (
 ON CONFLICT (key) DO NOTHING
 `
 
+// 仅测试使用：生产路径不调用（sqlc 层 DB 用例夹具）。
 // SeedRuntimeStateEpoch 仅供受信任的 bootstrap/恢复 use-case 创建非普通设置行；普通 settings registry/API 不得调用。
 func (q *Queries) SeedRuntimeStateEpoch(ctx context.Context, value []byte) (int64, error) {
 	result, err := q.db.Exec(ctx, seedRuntimeStateEpoch, value)

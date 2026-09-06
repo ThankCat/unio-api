@@ -27,7 +27,7 @@ func (d registrationEmailDB) Query(context.Context, string, ...interface{}) (pgx
 }
 
 func (d registrationEmailDB) QueryRow(context.Context, string, ...interface{}) pgx.Row {
-	return registrationEmailRow{exists: d.exists, err: d.err}
+	return registrationEmailRow(d)
 }
 
 type registrationEmailRow struct {
