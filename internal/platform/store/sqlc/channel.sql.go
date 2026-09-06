@@ -674,29 +674,96 @@ func (q *Queries) ChannelOpsPerformanceTimeseries(ctx context.Context, arg Chann
 
 const channelsOpsTable = `-- name: ChannelsOpsTable :many
 
+WITH filtered AS (
+    SELECT
+        c.id, c.name, c.status, c.protocols, c.adapter_key, c.priority,
+        c.response_timeout_ms, c.first_token_timeout_ms, c.credential, c.supply_form,
+        c.concurrency_limit, c.created_at, c.last_tested_at, c.last_test_ok,
+        c.last_test_latency_ms, c.last_test_error, c.credential_valid, c.provider_id,
+        pr.origin AS provider_origin,
+        pr.name AS provider_name,
+        pr.currency AS provider_currency,
+        (SELECT COUNT(*) FROM channel_models cm WHERE cm.channel_id = c.id AND cm.status = 'enabled')::bigint AS bound_models
+    FROM channels c
+    JOIN providers pr ON pr.id = c.provider_id
+    WHERE ($3::text IS NULL OR c.status = $3::text)
+      AND ($4::bigint IS NULL OR c.provider_id = $4::bigint)
+      AND ($5::text IS NULL OR c.name ILIKE '%' || $5::text || '%')
+),
+attempt_metrics AS (
+    SELECT
+        a.channel_id,
+        COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream') AS attempt_total,
+        COUNT(a.id) FILTER (WHERE a.status = 'succeeded') AS attempt_succeeded,
+        COUNT(a.id) FILTER (WHERE a.status = 'failed' AND (a.error_code ILIKE '%timeout%' OR a.error_code = 'context_deadline_exceeded')) AS timeout_total,
+        COUNT(a.id) FILTER (WHERE a.status = 'succeeded' AND a.completed_at IS NOT NULL) AS latency_sample,
+        AVG(CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
+            THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END)::float8 AS latency_avg
+    FROM request_attempts a
+    WHERE a.channel_id IN (SELECT id FROM filtered)
+      AND ($1::timestamptz IS NULL OR a.created_at >= $1::timestamptz)
+      AND ($2::timestamptz IS NULL OR a.created_at < $2::timestamptz)
+    GROUP BY a.channel_id
+),
+page AS (
+    SELECT
+        f.id, f.name, f.status, f.protocols, f.adapter_key, f.priority, f.response_timeout_ms, f.first_token_timeout_ms, f.credential, f.supply_form, f.concurrency_limit, f.created_at, f.last_tested_at, f.last_test_ok, f.last_test_latency_ms, f.last_test_error, f.credential_valid, f.provider_id, f.provider_origin, f.provider_name, f.provider_currency, f.bound_models,
+        COALESCE(m.attempt_total, 0)::bigint AS attempt_total,
+        COALESCE(m.attempt_succeeded, 0)::bigint AS attempt_succeeded,
+        COALESCE(m.timeout_total, 0)::bigint AS timeout_total,
+        COALESCE(m.latency_sample, 0)::bigint AS latency_sample,
+        COALESCE(m.latency_avg, 0)::float8 AS latency_avg,
+        row_number() OVER (ORDER BY
+            CASE WHEN COALESCE($6::text, 'success_rate') IN ('', 'success_rate') AND COALESCE($7::bool, false) THEN (COALESCE(m.attempt_succeeded, 0)::float8 / NULLIF(COALESCE(m.attempt_total, 0), 0)) END DESC NULLS LAST,
+            CASE WHEN COALESCE($6::text, 'success_rate') IN ('', 'success_rate') AND NOT COALESCE($7::bool, false) THEN (COALESCE(m.attempt_succeeded, 0)::float8 / NULLIF(COALESCE(m.attempt_total, 0), 0)) END ASC NULLS LAST,
+            CASE WHEN $6::text = 'name' AND COALESCE($7::bool, false) THEN f.name END DESC NULLS LAST,
+            CASE WHEN $6::text = 'name' AND NOT COALESCE($7::bool, false) THEN f.name END ASC NULLS LAST,
+            CASE WHEN $6::text = 'requests' AND COALESCE($7::bool, false) THEN COALESCE(m.attempt_total, 0) END DESC NULLS LAST,
+            CASE WHEN $6::text = 'requests' AND NOT COALESCE($7::bool, false) THEN COALESCE(m.attempt_total, 0) END ASC NULLS LAST,
+            CASE WHEN $6::text = 'status' AND COALESCE($7::bool, false) THEN f.status END DESC NULLS LAST,
+            CASE WHEN $6::text = 'status' AND NOT COALESCE($7::bool, false) THEN f.status END ASC NULLS LAST,
+            CASE WHEN $6::text = 'credential_valid' AND COALESCE($7::bool, false) THEN f.credential_valid END DESC NULLS LAST,
+            CASE WHEN $6::text = 'credential_valid' AND NOT COALESCE($7::bool, false) THEN f.credential_valid END ASC NULLS LAST,
+            CASE WHEN $6::text = 'created_at' AND COALESCE($7::bool, false) THEN f.created_at END DESC NULLS LAST,
+            CASE WHEN $6::text = 'created_at' AND NOT COALESCE($7::bool, false) THEN f.created_at END ASC NULLS LAST,
+            CASE WHEN $6::text = 'latency' AND COALESCE($7::bool, false) THEN COALESCE(m.latency_avg, 0) END DESC NULLS LAST,
+            CASE WHEN $6::text = 'latency' AND NOT COALESCE($7::bool, false) THEN COALESCE(m.latency_avg, 0) END ASC NULLS LAST,
+            CASE WHEN $6::text = 'timeout' AND COALESCE($7::bool, false) THEN COALESCE(m.timeout_total, 0) END DESC NULLS LAST,
+            CASE WHEN $6::text = 'timeout' AND NOT COALESCE($7::bool, false) THEN COALESCE(m.timeout_total, 0) END ASC NULLS LAST,
+            CASE WHEN $6::text = 'bound_models' AND COALESCE($7::bool, false) THEN f.bound_models END DESC NULLS LAST,
+            CASE WHEN $6::text = 'bound_models' AND NOT COALESCE($7::bool, false) THEN f.bound_models END ASC NULLS LAST,
+            CASE WHEN $6::text = 'priority' AND COALESCE($7::bool, false) THEN f.priority END DESC NULLS LAST,
+            CASE WHEN $6::text = 'priority' AND NOT COALESCE($7::bool, false) THEN f.priority END ASC NULLS LAST,
+            f.id
+        ) AS sort_rank
+    FROM filtered f
+    LEFT JOIN attempt_metrics m ON m.channel_id = f.id
+    ORDER BY sort_rank
+    LIMIT $9 OFFSET $8
+)
 SELECT
-    c.id,
-    c.name,
-    c.status,
-    c.protocols,
-    c.adapter_key,
-    pr.origin,
-    c.priority,
-    c.response_timeout_ms,
-    c.first_token_timeout_ms,
-    c.credential,
-    c.supply_form,
-    c.concurrency_limit,
-    c.created_at,
-    c.last_tested_at,
-    c.last_test_ok,
-    c.last_test_latency_ms,
-    c.last_test_error,
-    c.credential_valid,
+    p.id,
+    p.name,
+    p.status,
+    p.protocols,
+    p.adapter_key,
+    p.provider_origin AS origin,
+    p.priority,
+    p.response_timeout_ms,
+    p.first_token_timeout_ms,
+    p.credential,
+    p.supply_form,
+    p.concurrency_limit,
+    p.created_at,
+    p.last_tested_at,
+    p.last_test_ok,
+    p.last_test_latency_ms,
+    p.last_test_error,
+    p.credential_valid,
     (
         SELECT ccm.multiplier
         FROM channel_cost_multipliers ccm
-        WHERE ccm.channel_id = c.id
+        WHERE ccm.channel_id = p.id
           AND ccm.model_id IS NULL
           AND ccm.status = 'enabled'
           AND ccm.effective_from <= now()
@@ -707,7 +774,7 @@ SELECT
     (
         SELECT COUNT(*)::bigint
         FROM channel_cost_multipliers ccm
-        WHERE ccm.channel_id = c.id
+        WHERE ccm.channel_id = p.id
           AND ccm.model_id IS NOT NULL
           AND ccm.status = 'enabled'
           AND ccm.effective_from <= now()
@@ -717,78 +784,51 @@ SELECT
     (
         SELECT prr.rate
         FROM provider_recharge_rates prr
-        WHERE prr.provider_id = c.provider_id
+        WHERE prr.provider_id = p.provider_id
           AND prr.status = 'enabled'
           AND prr.effective_from <= now()
           AND (prr.effective_to IS NULL OR prr.effective_to > now())
         ORDER BY prr.effective_from DESC, prr.id DESC
         LIMIT 1
     ) AS provider_recharge_rate,
-    c.provider_id,
-    pr.name AS provider_name,
-    pr.currency AS provider_currency,
-    COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream') AS attempt_total,
-    COUNT(a.id) FILTER (WHERE a.status = 'succeeded') AS attempt_succeeded,
-    COUNT(a.id) FILTER (WHERE a.status = 'failed' AND (a.error_code ILIKE '%timeout%' OR a.error_code = 'context_deadline_exceeded')) AS timeout_total,
-    COUNT(a.id) FILTER (WHERE a.status = 'succeeded' AND a.completed_at IS NOT NULL) AS latency_sample,
-    COALESCE(AVG(CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
-        THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_avg,
-    COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY
-        CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
-             THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p50,
-    COALESCE(percentile_cont(0.9) WITHIN GROUP (ORDER BY
-        CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
-             THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p90,
-    COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
-        CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
-             THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p95,
-    COALESCE(percentile_cont(0.99) WITHIN GROUP (ORDER BY
-        CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
-             THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p99,
-    (SELECT COUNT(*) FROM channel_models cm WHERE cm.channel_id = c.id AND cm.status = 'enabled') AS bound_models,
+    p.provider_id,
+    p.provider_name,
+    p.provider_currency,
+    p.attempt_total,
+    p.attempt_succeeded,
+    p.timeout_total,
+    p.latency_sample,
+    p.latency_avg,
+    COALESCE(lat.p50, 0)::float8 AS latency_p50,
+    COALESCE(lat.p90, 0)::float8 AS latency_p90,
+    COALESCE(lat.p95, 0)::float8 AS latency_p95,
+    COALESCE(lat.p99, 0)::float8 AS latency_p99,
+    p.bound_models,
     (
         SELECT a2.error_code FROM request_attempts a2
-        WHERE a2.channel_id = c.id AND a2.status = 'failed' AND a2.fault_party = 'upstream' AND a2.error_code IS NOT NULL
+        WHERE a2.channel_id = p.id AND a2.status = 'failed' AND a2.fault_party = 'upstream' AND a2.error_code IS NOT NULL
           AND ($1::timestamptz IS NULL OR a2.created_at >= $1::timestamptz)
           AND ($2::timestamptz IS NULL OR a2.created_at < $2::timestamptz)
         ORDER BY a2.created_at DESC LIMIT 1
     ) AS recent_error_code
-FROM channels c
-JOIN providers pr ON pr.id = c.provider_id
-LEFT JOIN request_attempts a
-    ON a.channel_id = c.id
-    AND ($1::timestamptz IS NULL OR a.created_at >= $1::timestamptz)
-    AND ($2::timestamptz IS NULL OR a.created_at < $2::timestamptz)
-WHERE ($3::text IS NULL OR c.status = $3::text)
-  AND ($4::bigint IS NULL OR c.provider_id = $4::bigint)
-  AND ($5::text IS NULL OR c.name ILIKE '%' || $5::text || '%')
-GROUP BY c.id, c.name, c.status, c.protocols, c.adapter_key, pr.origin, c.priority,
-         c.response_timeout_ms, c.first_token_timeout_ms, c.credential,
-         c.concurrency_limit, c.created_at, c.last_tested_at, c.last_test_ok,
-         c.last_test_latency_ms, c.last_test_error, c.credential_valid, pr.name, pr.currency
-ORDER BY
-  CASE WHEN COALESCE($6::text, 'success_rate') IN ('', 'success_rate') AND COALESCE($7::bool, false) THEN (COUNT(a.id) FILTER (WHERE a.status = 'succeeded')::float8 / NULLIF(COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream'), 0)) END DESC NULLS LAST,
-  CASE WHEN COALESCE($6::text, 'success_rate') IN ('', 'success_rate') AND NOT COALESCE($7::bool, false) THEN (COUNT(a.id) FILTER (WHERE a.status = 'succeeded')::float8 / NULLIF(COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream'), 0)) END ASC NULLS LAST,
-  CASE WHEN $6::text = 'name' AND COALESCE($7::bool, false) THEN c.name END DESC NULLS LAST,
-  CASE WHEN $6::text = 'name' AND NOT COALESCE($7::bool, false) THEN c.name END ASC NULLS LAST,
-  CASE WHEN $6::text = 'requests' AND COALESCE($7::bool, false) THEN COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream') END DESC NULLS LAST,
-  CASE WHEN $6::text = 'requests' AND NOT COALESCE($7::bool, false) THEN COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream') END ASC NULLS LAST,
-  CASE WHEN $6::text = 'status' AND COALESCE($7::bool, false) THEN c.status END DESC NULLS LAST,
-  CASE WHEN $6::text = 'status' AND NOT COALESCE($7::bool, false) THEN c.status END ASC NULLS LAST,
-  CASE WHEN $6::text = 'credential_valid' AND COALESCE($7::bool, false) THEN c.credential_valid END DESC NULLS LAST,
-  CASE WHEN $6::text = 'credential_valid' AND NOT COALESCE($7::bool, false) THEN c.credential_valid END ASC NULLS LAST,
-  CASE WHEN $6::text = 'created_at' AND COALESCE($7::bool, false) THEN c.created_at END DESC NULLS LAST,
-  CASE WHEN $6::text = 'created_at' AND NOT COALESCE($7::bool, false) THEN c.created_at END ASC NULLS LAST,
-  CASE WHEN $6::text = 'latency' AND COALESCE($7::bool, false) THEN COALESCE(AVG(CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0) END DESC NULLS LAST,
-  CASE WHEN $6::text = 'latency' AND NOT COALESCE($7::bool, false) THEN COALESCE(AVG(CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0) END ASC NULLS LAST,
-  CASE WHEN $6::text = 'timeout' AND COALESCE($7::bool, false) THEN COUNT(a.id) FILTER (WHERE a.status = 'failed' AND (a.error_code ILIKE '%timeout%' OR a.error_code = 'context_deadline_exceeded')) END DESC NULLS LAST,
-  CASE WHEN $6::text = 'timeout' AND NOT COALESCE($7::bool, false) THEN COUNT(a.id) FILTER (WHERE a.status = 'failed' AND (a.error_code ILIKE '%timeout%' OR a.error_code = 'context_deadline_exceeded')) END ASC NULLS LAST,
-  CASE WHEN $6::text = 'bound_models' AND COALESCE($7::bool, false) THEN (SELECT COUNT(*) FROM channel_models cm WHERE cm.channel_id = c.id AND cm.status = 'enabled') END DESC NULLS LAST,
-  CASE WHEN $6::text = 'bound_models' AND NOT COALESCE($7::bool, false) THEN (SELECT COUNT(*) FROM channel_models cm WHERE cm.channel_id = c.id AND cm.status = 'enabled') END ASC NULLS LAST,
-  CASE WHEN $6::text = 'priority' AND COALESCE($7::bool, false) THEN c.priority END DESC NULLS LAST,
-  CASE WHEN $6::text = 'priority' AND NOT COALESCE($7::bool, false) THEN c.priority END ASC NULLS LAST,
-  c.id
-LIMIT $9 OFFSET $8
+FROM page p
+LEFT JOIN LATERAL (
+    SELECT
+        percentile_cont(0.5) WITHIN GROUP (ORDER BY s.latency_ms) AS p50,
+        percentile_cont(0.9) WITHIN GROUP (ORDER BY s.latency_ms) AS p90,
+        percentile_cont(0.95) WITHIN GROUP (ORDER BY s.latency_ms) AS p95,
+        percentile_cont(0.99) WITHIN GROUP (ORDER BY s.latency_ms) AS p99
+    FROM (
+        SELECT (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 AS latency_ms
+        FROM request_attempts a
+        WHERE a.channel_id = p.id
+          AND a.status = 'succeeded'
+          AND a.completed_at IS NOT NULL
+          AND ($1::timestamptz IS NULL OR a.created_at >= $1::timestamptz)
+          AND ($2::timestamptz IS NULL OR a.created_at < $2::timestamptz)
+    ) s
+) lat ON true
+ORDER BY p.sort_rank
 `
 
 type ChannelsOpsTableParams struct {
@@ -847,6 +887,13 @@ type ChannelsOpsTableRow struct {
 // Channel 缓存画像额外排除请求开始已有 Sticky 绑定、但最终成功落到其他 Channel 的整条 usage。
 // 区间 [from,to) 半开；narg 可空（NULL 不过滤）。延迟由 completed_at-started_at 推导（毫秒）。
 // ChannelsOpsTable 渠道运维主表（分页）：每渠道 attempt 指标 + 绑定模型数 + 最近错误，默认最需处理优先。
+//
+// 三段式，避免对全部匹配渠道逐个跑 4 个 percentile_cont 再排序取页：
+//  1. filtered：按过滤条件缩小渠道集合（含排序会用到的 bound_models）；
+//  2. attempt_metrics：对窗口内 attempt 做一次哈希聚合，只算排序与主表需要的计数/均值；
+//  3. page：按排序键取当前页，再只对页内渠道补 p50/p90/p95/p99（LATERAL）。
+//
+// 排序键只依赖计数与均值，语义与原单段查询一致；百分位不参与排序，只在页内计算。
 func (q *Queries) ChannelsOpsTable(ctx context.Context, arg ChannelsOpsTableParams) ([]ChannelsOpsTableRow, error) {
 	rows, err := q.db.Query(ctx, channelsOpsTable,
 		arg.FromTime,
@@ -1952,6 +1999,7 @@ WHERE provider_id = $1
 ORDER BY priority, id
 `
 
+// 仅测试使用：生产路径不调用（sqlc 层 DB 用例夹具）。
 // ListChannelsByProvider 列出指定 provider 下的 channel，按 priority、id 升序。
 func (q *Queries) ListChannelsByProvider(ctx context.Context, providerID int64) ([]Channel, error) {
 	rows, err := q.db.Query(ctx, listChannelsByProvider, providerID)
@@ -2581,6 +2629,7 @@ type UpdateChannelCredentialParams struct {
 	ID         int64
 }
 
+// 仅测试使用：生产路径不调用（sqlc 层 DB 用例夹具）。
 // UpdateChannelCredential 更新 channel 的明文上游凭据；返回受影响行数用于判定 channel 是否存在。
 func (q *Queries) UpdateChannelCredential(ctx context.Context, arg UpdateChannelCredentialParams) (int64, error) {
 	result, err := q.db.Exec(ctx, updateChannelCredential, arg.Credential, arg.ID)

@@ -259,6 +259,7 @@ FROM channel_test_logs
 WHERE channel_id = sqlc.arg(channel_id);
 
 -- name: ListChannelsByProvider :many
+-- 仅测试使用：生产路径不调用（sqlc 层 DB 用例夹具）。
 -- ListChannelsByProvider 列出指定 provider 下的 channel，按 priority、id 升序。
 SELECT *
 FROM channels
@@ -597,6 +598,7 @@ WHERE id = sqlc.arg(id)
 RETURNING *;
 
 -- name: UpdateChannelCredential :execrows
+-- 仅测试使用：生产路径不调用（sqlc 层 DB 用例夹具）。
 -- UpdateChannelCredential 更新 channel 的明文上游凭据；返回受影响行数用于判定 channel 是否存在。
 UPDATE channels
 SET credential = sqlc.arg(credential), updated_at = now()
@@ -694,29 +696,102 @@ DELETE FROM channels WHERE channels.id = sqlc.arg(id);
 
 -- name: ChannelsOpsTable :many
 -- ChannelsOpsTable 渠道运维主表（分页）：每渠道 attempt 指标 + 绑定模型数 + 最近错误，默认最需处理优先。
+--
+-- 三段式，避免对全部匹配渠道逐个跑 4 个 percentile_cont 再排序取页：
+--   1. filtered：按过滤条件缩小渠道集合（含排序会用到的 bound_models）；
+--   2. attempt_metrics：对窗口内 attempt 做一次哈希聚合，只算排序与主表需要的计数/均值；
+--   3. page：按排序键取当前页，再只对页内渠道补 p50/p90/p95/p99（LATERAL）。
+-- 排序键只依赖计数与均值，语义与原单段查询一致；百分位不参与排序，只在页内计算。
+WITH filtered AS (
+    SELECT
+        c.id, c.name, c.status, c.protocols, c.adapter_key, c.priority,
+        c.response_timeout_ms, c.first_token_timeout_ms, c.credential, c.supply_form,
+        c.concurrency_limit, c.created_at, c.last_tested_at, c.last_test_ok,
+        c.last_test_latency_ms, c.last_test_error, c.credential_valid, c.provider_id,
+        pr.origin AS provider_origin,
+        pr.name AS provider_name,
+        pr.currency AS provider_currency,
+        (SELECT COUNT(*) FROM channel_models cm WHERE cm.channel_id = c.id AND cm.status = 'enabled')::bigint AS bound_models
+    FROM channels c
+    JOIN providers pr ON pr.id = c.provider_id
+    WHERE (sqlc.narg('status')::text IS NULL OR c.status = sqlc.narg('status')::text)
+      AND (sqlc.narg('provider_id')::bigint IS NULL OR c.provider_id = sqlc.narg('provider_id')::bigint)
+      AND (sqlc.narg('search')::text IS NULL OR c.name ILIKE '%' || sqlc.narg('search')::text || '%')
+),
+attempt_metrics AS (
+    SELECT
+        a.channel_id,
+        COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream') AS attempt_total,
+        COUNT(a.id) FILTER (WHERE a.status = 'succeeded') AS attempt_succeeded,
+        COUNT(a.id) FILTER (WHERE a.status = 'failed' AND (a.error_code ILIKE '%timeout%' OR a.error_code = 'context_deadline_exceeded')) AS timeout_total,
+        COUNT(a.id) FILTER (WHERE a.status = 'succeeded' AND a.completed_at IS NOT NULL) AS latency_sample,
+        AVG(CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
+            THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END)::float8 AS latency_avg
+    FROM request_attempts a
+    WHERE a.channel_id IN (SELECT id FROM filtered)
+      AND (sqlc.narg('from_time')::timestamptz IS NULL OR a.created_at >= sqlc.narg('from_time')::timestamptz)
+      AND (sqlc.narg('to_time')::timestamptz IS NULL OR a.created_at < sqlc.narg('to_time')::timestamptz)
+    GROUP BY a.channel_id
+),
+page AS (
+    SELECT
+        f.*,
+        COALESCE(m.attempt_total, 0)::bigint AS attempt_total,
+        COALESCE(m.attempt_succeeded, 0)::bigint AS attempt_succeeded,
+        COALESCE(m.timeout_total, 0)::bigint AS timeout_total,
+        COALESCE(m.latency_sample, 0)::bigint AS latency_sample,
+        COALESCE(m.latency_avg, 0)::float8 AS latency_avg,
+        row_number() OVER (ORDER BY
+            CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'success_rate') IN ('', 'success_rate') AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (COALESCE(m.attempt_succeeded, 0)::float8 / NULLIF(COALESCE(m.attempt_total, 0), 0)) END DESC NULLS LAST,
+            CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'success_rate') IN ('', 'success_rate') AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (COALESCE(m.attempt_succeeded, 0)::float8 / NULLIF(COALESCE(m.attempt_total, 0), 0)) END ASC NULLS LAST,
+            CASE WHEN sqlc.narg('sort_field')::text = 'name' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN f.name END DESC NULLS LAST,
+            CASE WHEN sqlc.narg('sort_field')::text = 'name' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN f.name END ASC NULLS LAST,
+            CASE WHEN sqlc.narg('sort_field')::text = 'requests' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COALESCE(m.attempt_total, 0) END DESC NULLS LAST,
+            CASE WHEN sqlc.narg('sort_field')::text = 'requests' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COALESCE(m.attempt_total, 0) END ASC NULLS LAST,
+            CASE WHEN sqlc.narg('sort_field')::text = 'status' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN f.status END DESC NULLS LAST,
+            CASE WHEN sqlc.narg('sort_field')::text = 'status' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN f.status END ASC NULLS LAST,
+            CASE WHEN sqlc.narg('sort_field')::text = 'credential_valid' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN f.credential_valid END DESC NULLS LAST,
+            CASE WHEN sqlc.narg('sort_field')::text = 'credential_valid' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN f.credential_valid END ASC NULLS LAST,
+            CASE WHEN sqlc.narg('sort_field')::text = 'created_at' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN f.created_at END DESC NULLS LAST,
+            CASE WHEN sqlc.narg('sort_field')::text = 'created_at' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN f.created_at END ASC NULLS LAST,
+            CASE WHEN sqlc.narg('sort_field')::text = 'latency' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COALESCE(m.latency_avg, 0) END DESC NULLS LAST,
+            CASE WHEN sqlc.narg('sort_field')::text = 'latency' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COALESCE(m.latency_avg, 0) END ASC NULLS LAST,
+            CASE WHEN sqlc.narg('sort_field')::text = 'timeout' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COALESCE(m.timeout_total, 0) END DESC NULLS LAST,
+            CASE WHEN sqlc.narg('sort_field')::text = 'timeout' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COALESCE(m.timeout_total, 0) END ASC NULLS LAST,
+            CASE WHEN sqlc.narg('sort_field')::text = 'bound_models' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN f.bound_models END DESC NULLS LAST,
+            CASE WHEN sqlc.narg('sort_field')::text = 'bound_models' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN f.bound_models END ASC NULLS LAST,
+            CASE WHEN sqlc.narg('sort_field')::text = 'priority' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN f.priority END DESC NULLS LAST,
+            CASE WHEN sqlc.narg('sort_field')::text = 'priority' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN f.priority END ASC NULLS LAST,
+            f.id
+        ) AS sort_rank
+    FROM filtered f
+    LEFT JOIN attempt_metrics m ON m.channel_id = f.id
+    ORDER BY sort_rank
+    LIMIT sqlc.arg('page_limit') OFFSET sqlc.arg('page_offset')
+)
 SELECT
-    c.id,
-    c.name,
-    c.status,
-    c.protocols,
-    c.adapter_key,
-    pr.origin,
-    c.priority,
-    c.response_timeout_ms,
-    c.first_token_timeout_ms,
-    c.credential,
-    c.supply_form,
-    c.concurrency_limit,
-    c.created_at,
-    c.last_tested_at,
-    c.last_test_ok,
-    c.last_test_latency_ms,
-    c.last_test_error,
-    c.credential_valid,
+    p.id,
+    p.name,
+    p.status,
+    p.protocols,
+    p.adapter_key,
+    p.provider_origin AS origin,
+    p.priority,
+    p.response_timeout_ms,
+    p.first_token_timeout_ms,
+    p.credential,
+    p.supply_form,
+    p.concurrency_limit,
+    p.created_at,
+    p.last_tested_at,
+    p.last_test_ok,
+    p.last_test_latency_ms,
+    p.last_test_error,
+    p.credential_valid,
     (
         SELECT ccm.multiplier
         FROM channel_cost_multipliers ccm
-        WHERE ccm.channel_id = c.id
+        WHERE ccm.channel_id = p.id
           AND ccm.model_id IS NULL
           AND ccm.status = 'enabled'
           AND ccm.effective_from <= now()
@@ -727,7 +802,7 @@ SELECT
     (
         SELECT COUNT(*)::bigint
         FROM channel_cost_multipliers ccm
-        WHERE ccm.channel_id = c.id
+        WHERE ccm.channel_id = p.id
           AND ccm.model_id IS NOT NULL
           AND ccm.status = 'enabled'
           AND ccm.effective_from <= now()
@@ -737,78 +812,51 @@ SELECT
     (
         SELECT prr.rate
         FROM provider_recharge_rates prr
-        WHERE prr.provider_id = c.provider_id
+        WHERE prr.provider_id = p.provider_id
           AND prr.status = 'enabled'
           AND prr.effective_from <= now()
           AND (prr.effective_to IS NULL OR prr.effective_to > now())
         ORDER BY prr.effective_from DESC, prr.id DESC
         LIMIT 1
     ) AS provider_recharge_rate,
-    c.provider_id,
-    pr.name AS provider_name,
-    pr.currency AS provider_currency,
-    COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream') AS attempt_total,
-    COUNT(a.id) FILTER (WHERE a.status = 'succeeded') AS attempt_succeeded,
-    COUNT(a.id) FILTER (WHERE a.status = 'failed' AND (a.error_code ILIKE '%timeout%' OR a.error_code = 'context_deadline_exceeded')) AS timeout_total,
-    COUNT(a.id) FILTER (WHERE a.status = 'succeeded' AND a.completed_at IS NOT NULL) AS latency_sample,
-    COALESCE(AVG(CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
-        THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_avg,
-    COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY
-        CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
-             THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p50,
-    COALESCE(percentile_cont(0.9) WITHIN GROUP (ORDER BY
-        CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
-             THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p90,
-    COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY
-        CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
-             THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p95,
-    COALESCE(percentile_cont(0.99) WITHIN GROUP (ORDER BY
-        CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL
-             THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0)::float8 AS latency_p99,
-    (SELECT COUNT(*) FROM channel_models cm WHERE cm.channel_id = c.id AND cm.status = 'enabled') AS bound_models,
+    p.provider_id,
+    p.provider_name,
+    p.provider_currency,
+    p.attempt_total,
+    p.attempt_succeeded,
+    p.timeout_total,
+    p.latency_sample,
+    p.latency_avg,
+    COALESCE(lat.p50, 0)::float8 AS latency_p50,
+    COALESCE(lat.p90, 0)::float8 AS latency_p90,
+    COALESCE(lat.p95, 0)::float8 AS latency_p95,
+    COALESCE(lat.p99, 0)::float8 AS latency_p99,
+    p.bound_models,
     (
         SELECT a2.error_code FROM request_attempts a2
-        WHERE a2.channel_id = c.id AND a2.status = 'failed' AND a2.fault_party = 'upstream' AND a2.error_code IS NOT NULL
+        WHERE a2.channel_id = p.id AND a2.status = 'failed' AND a2.fault_party = 'upstream' AND a2.error_code IS NOT NULL
           AND (sqlc.narg('from_time')::timestamptz IS NULL OR a2.created_at >= sqlc.narg('from_time')::timestamptz)
           AND (sqlc.narg('to_time')::timestamptz IS NULL OR a2.created_at < sqlc.narg('to_time')::timestamptz)
         ORDER BY a2.created_at DESC LIMIT 1
     ) AS recent_error_code
-FROM channels c
-JOIN providers pr ON pr.id = c.provider_id
-LEFT JOIN request_attempts a
-    ON a.channel_id = c.id
-    AND (sqlc.narg('from_time')::timestamptz IS NULL OR a.created_at >= sqlc.narg('from_time')::timestamptz)
-    AND (sqlc.narg('to_time')::timestamptz IS NULL OR a.created_at < sqlc.narg('to_time')::timestamptz)
-WHERE (sqlc.narg('status')::text IS NULL OR c.status = sqlc.narg('status')::text)
-  AND (sqlc.narg('provider_id')::bigint IS NULL OR c.provider_id = sqlc.narg('provider_id')::bigint)
-  AND (sqlc.narg('search')::text IS NULL OR c.name ILIKE '%' || sqlc.narg('search')::text || '%')
-GROUP BY c.id, c.name, c.status, c.protocols, c.adapter_key, pr.origin, c.priority,
-         c.response_timeout_ms, c.first_token_timeout_ms, c.credential,
-         c.concurrency_limit, c.created_at, c.last_tested_at, c.last_test_ok,
-         c.last_test_latency_ms, c.last_test_error, c.credential_valid, pr.name, pr.currency
-ORDER BY
-  CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'success_rate') IN ('', 'success_rate') AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (COUNT(a.id) FILTER (WHERE a.status = 'succeeded')::float8 / NULLIF(COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream'), 0)) END DESC NULLS LAST,
-  CASE WHEN COALESCE(sqlc.narg('sort_field')::text, 'success_rate') IN ('', 'success_rate') AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (COUNT(a.id) FILTER (WHERE a.status = 'succeeded')::float8 / NULLIF(COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream'), 0)) END ASC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'name' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN c.name END DESC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'name' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN c.name END ASC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'requests' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream') END DESC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'requests' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COUNT(a.id) FILTER (WHERE a.status = 'succeeded' OR a.fault_party = 'upstream') END ASC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'status' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN c.status END DESC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'status' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN c.status END ASC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'credential_valid' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN c.credential_valid END DESC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'credential_valid' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN c.credential_valid END ASC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'created_at' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN c.created_at END DESC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'created_at' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN c.created_at END ASC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'latency' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COALESCE(AVG(CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0) END DESC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'latency' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COALESCE(AVG(CASE WHEN a.status = 'succeeded' AND a.completed_at IS NOT NULL THEN (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 END), 0) END ASC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'timeout' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COUNT(a.id) FILTER (WHERE a.status = 'failed' AND (a.error_code ILIKE '%timeout%' OR a.error_code = 'context_deadline_exceeded')) END DESC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'timeout' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN COUNT(a.id) FILTER (WHERE a.status = 'failed' AND (a.error_code ILIKE '%timeout%' OR a.error_code = 'context_deadline_exceeded')) END ASC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'bound_models' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (SELECT COUNT(*) FROM channel_models cm WHERE cm.channel_id = c.id AND cm.status = 'enabled') END DESC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'bound_models' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN (SELECT COUNT(*) FROM channel_models cm WHERE cm.channel_id = c.id AND cm.status = 'enabled') END ASC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'priority' AND COALESCE(sqlc.narg('sort_desc')::bool, false) THEN c.priority END DESC NULLS LAST,
-  CASE WHEN sqlc.narg('sort_field')::text = 'priority' AND NOT COALESCE(sqlc.narg('sort_desc')::bool, false) THEN c.priority END ASC NULLS LAST,
-  c.id
-LIMIT sqlc.arg('page_limit') OFFSET sqlc.arg('page_offset');
+FROM page p
+LEFT JOIN LATERAL (
+    SELECT
+        percentile_cont(0.5) WITHIN GROUP (ORDER BY s.latency_ms) AS p50,
+        percentile_cont(0.9) WITHIN GROUP (ORDER BY s.latency_ms) AS p90,
+        percentile_cont(0.95) WITHIN GROUP (ORDER BY s.latency_ms) AS p95,
+        percentile_cont(0.99) WITHIN GROUP (ORDER BY s.latency_ms) AS p99
+    FROM (
+        SELECT (EXTRACT(EPOCH FROM (a.completed_at - a.started_at)) * 1000)::float8 AS latency_ms
+        FROM request_attempts a
+        WHERE a.channel_id = p.id
+          AND a.status = 'succeeded'
+          AND a.completed_at IS NOT NULL
+          AND (sqlc.narg('from_time')::timestamptz IS NULL OR a.created_at >= sqlc.narg('from_time')::timestamptz)
+          AND (sqlc.narg('to_time')::timestamptz IS NULL OR a.created_at < sqlc.narg('to_time')::timestamptz)
+    ) s
+) lat ON true
+ORDER BY p.sort_rank;
 
 -- name: ChannelsOpsTableCount :one
 -- ChannelsOpsTableCount 与 ChannelsOpsTable 同过滤条件下的渠道总数。
@@ -1031,4 +1079,3 @@ LEFT JOIN request_attempts a
 WHERE cm.channel_id = sqlc.arg('channel_id')
 GROUP BY cm.model_id, m.model_id, m.display_name, cm.upstream_model, cm.status
 ORDER BY attempt_total DESC, m.model_id;
-
