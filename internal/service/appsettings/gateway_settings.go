@@ -560,7 +560,8 @@ func accountUsagePauseThresholdDefinition() Definition {
 		Category: "gateway",
 		Label:    "账号用量暂停阈值（%）",
 		Description: "池型渠道账号的 5h/7d 任一用量窗口达到该百分比后，提前移出调度（到窗口重置自动恢复）。" +
-			"取值 1~100；100 等于只在完全打满时暂停。热更新，下一次用量观测即生效。",
+			"取值 1~100；100 等于只在完全打满时暂停。这是三层继承的最外层：渠道、账号可分别覆写（留空继承）。" +
+			"热更新：拦截按账号快照实时判定，保存后对下一次请求即生效，并立即按新阈值重算全部账号的暂停标记。",
 		HotReload: true,
 		Default:   json.RawMessage(fmt.Sprintf("%d", DefaultAccountUsagePauseThresholdPercent)),
 		Validate: func(raw json.RawMessage) error {
@@ -601,13 +602,14 @@ func GatewayAccountPoolPreferSoonestReset(ctx context.Context, store *SettingsSt
 	return v
 }
 
-// GatewayAccountUsagePauseThreshold 读取当前生效的账号用量暂停阈值（解码失败回默认 90）。
-func GatewayAccountUsagePauseThreshold(ctx context.Context, store *SettingsStore) float64 {
+// GatewayAccountUsagePauseThreshold 读取当前生效的全局账号用量暂停阈值（解码失败回默认 90）。
+// 这是三层继承（账号 → 渠道 → 全局）的最外层；两层覆写随账号行读取，不在 setting 里。
+func GatewayAccountUsagePauseThreshold(ctx context.Context, store *SettingsStore) int32 {
 	n, err := DecodePositiveIntSetting(store.Raw(ctx, GatewayAccountUsagePauseThresholdKey))
 	if err != nil || n > 100 {
 		return DefaultAccountUsagePauseThresholdPercent
 	}
-	return float64(n)
+	return int32(n)
 }
 
 // ---- 在途并发全局默认（DEC-029） ----

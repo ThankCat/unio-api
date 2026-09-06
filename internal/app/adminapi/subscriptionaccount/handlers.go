@@ -7,6 +7,7 @@
 //	POST   /channels/{id}/accounts/oauth/start     OAuth 导入：生成授权链接
 //	POST   /channels/{id}/accounts/oauth/complete  OAuth 导入：回填 code 完成落库
 //	PATCH  /subscription-accounts/{id}             调度参数编辑（并发/优先级/代理/备注名/订阅到期）
+//	PUT    /subscription-accounts/{id}/usage-pause-threshold 账号用量暂停阈值（null 继承渠道，1~100 覆写；改后重算运行态）
 //	DELETE /subscription-accounts/{id}             物理删除（仅归档账号；有请求历史则拒绝）
 //	POST   /subscription-accounts/{id}/status      启停/归档/恢复（含供给联动确认门）
 //	POST   /subscription-accounts/{id}/refresh-token 手动令牌刷新
@@ -49,6 +50,7 @@ func Register(r chi.Router, service *subscriptionaccount.Service) {
 	r.Post("/channels/{id}/accounts/oauth/start", h.oauthStart)
 	r.Post("/channels/{id}/accounts/oauth/complete", h.oauthComplete)
 	r.Patch("/subscription-accounts/{id}", h.updateConfig)
+	r.Put("/subscription-accounts/{id}/usage-pause-threshold", h.updateUsagePauseThreshold)
 	r.Delete("/subscription-accounts/{id}", h.deleteAccount)
 	r.Post("/subscription-accounts/{id}/status", h.setStatus)
 	r.Post("/subscription-accounts/{id}/refresh-token", h.refreshToken)
@@ -243,6 +245,34 @@ func (h *Handler) updateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	adminhttp.WriteData(w, http.StatusOK, account)
+}
+
+// usagePauseThresholdRequest 是账号用量暂停阈值的独立编辑体：null 继承渠道，1~100 覆写（不接受 0）。
+type usagePauseThresholdRequest struct {
+	UsagePauseThresholdPercent *int32 `json:"usage_pause_threshold_percent"`
+}
+
+// updateUsagePauseThreshold 单独修改账号阈值，并按该账号最近快照重算 Redis 暂停标记。
+// 响应带 account（含生效阈值与来源）与 runtime_refresh 统计；重算失败以 runtime_refresh_error 报出，阈值已保存。
+func (h *Handler) updateUsagePauseThreshold(w http.ResponseWriter, r *http.Request) {
+	accountID, err := pathID(r, "id")
+	if err != nil {
+		adminhttp.WriteServiceError(w, err)
+		return
+	}
+	var req usagePauseThresholdRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		adminhttp.WriteServiceError(w, failure.New(
+			failure.CodeAdminInvalidArgument, failure.WithMessage("invalid json body"),
+		))
+		return
+	}
+	result, err := h.service.UpdateUsagePauseThreshold(r.Context(), accountID, req.UsagePauseThresholdPercent)
+	if err != nil {
+		adminhttp.WriteServiceError(w, err)
+		return
+	}
+	adminhttp.WriteData(w, http.StatusOK, result)
 }
 
 type setStatusRequest struct {

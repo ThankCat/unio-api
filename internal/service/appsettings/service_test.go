@@ -200,3 +200,47 @@ func TestRestoreCriticalRuntimeControlsRejectsLegacyShape(t *testing.T) {
 		t.Fatalf("code = %q, want config_invalid (err=%v)", failure.CodeOf(err), err)
 	}
 }
+
+// 普通 setting 写入后钩子：保存成功才触发，钩子读到的是新值；钩子失败不影响写入结论，只在结果里报错。
+func TestWriteHookRunsAfterPlainSettingSaved(t *testing.T) {
+	store := newTestStore(newFakeQueries())
+	var seen []int32
+	svc := NewService(store).WithWriteHook(GatewayAccountUsagePauseThresholdKey, func(ctx context.Context) (any, error) {
+		seen = append(seen, GatewayAccountUsagePauseThreshold(ctx, store))
+		return map[string]int{"scanned": 3}, nil
+	})
+
+	result, err := svc.SetRawWithResult(context.Background(), GatewayAccountUsagePauseThresholdKey, json.RawMessage("100"))
+	if err != nil {
+		t.Fatalf("SetRawWithResult: %v", err)
+	}
+	if len(seen) != 1 || seen[0] != 100 {
+		t.Fatalf("hook must observe the freshly saved value once, got %v", seen)
+	}
+	if result.State != "saved" || result.RuntimeRefresh == nil || result.RuntimeRefreshError != "" {
+		t.Fatalf("result = %+v, want saved with runtime refresh", result)
+	}
+
+	// 校验失败不触发钩子。
+	if _, err := svc.SetRawWithResult(context.Background(), GatewayAccountUsagePauseThresholdKey, json.RawMessage("0")); err == nil {
+		t.Fatal("0 must be rejected by the definition validator")
+	}
+	if len(seen) != 1 {
+		t.Fatalf("rejected write must not run the hook, got %v", seen)
+	}
+
+	// 钩子失败：值已保存，结果带错误说明。
+	svc.WithWriteHook(GatewayAccountUsagePauseThresholdKey, func(context.Context) (any, error) {
+		return nil, failure.New(failure.CodeGatewayBreakerStoreUnavailable, failure.WithMessage("redis down"))
+	})
+	result, err = svc.SetRawWithResult(context.Background(), GatewayAccountUsagePauseThresholdKey, json.RawMessage("95"))
+	if err != nil {
+		t.Fatalf("hook failure must not fail the write: %v", err)
+	}
+	if result.RuntimeRefreshError == "" || result.RuntimeRefresh != nil {
+		t.Fatalf("hook failure must be reported, got %+v", result)
+	}
+	if got := GatewayAccountUsagePauseThreshold(context.Background(), store); got != 95 {
+		t.Fatalf("value must be saved despite hook failure, got %d", got)
+	}
+}

@@ -23,6 +23,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 
+	"github.com/ThankCat/unio-gateway/internal/core/accountusage"
 	corechannel "github.com/ThankCat/unio-gateway/internal/core/channel"
 	"github.com/ThankCat/unio-gateway/internal/core/runtimecontrol"
 	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
@@ -31,6 +32,7 @@ import (
 	channelservice "github.com/ThankCat/unio-gateway/internal/service/admin/channel"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/supply"
 	"github.com/ThankCat/unio-gateway/internal/service/subscription"
+	subscriptionhealth "github.com/ThankCat/unio-gateway/internal/service/subscription/health"
 )
 
 // Queries 是账号管理所需的数据库能力（读侧直连 pool；写侧经 Publisher 的 BusinessCommit 事务）。
@@ -53,6 +55,12 @@ type Queries interface {
 	AdminChannelAccountsSale24h(ctx context.Context, channelID int64) ([]sqlc.AdminChannelAccountsSale24hRow, error)
 	AdminChannelAccountsLastFailure24h(ctx context.Context, channelID int64) ([]sqlc.AdminChannelAccountsLastFailure24hRow, error)
 	AdminChannelAccountsLifetimeStats(ctx context.Context, channelID int64) ([]sqlc.AdminChannelAccountsLifetimeStatsRow, error)
+	AdminUpdateSubscriptionAccountUsagePauseThreshold(ctx context.Context, arg sqlc.AdminUpdateSubscriptionAccountUsagePauseThresholdParams) (sqlc.SubscriptionAccount, error)
+}
+
+// UsagePauseReconciler 在账号阈值变更后按该账号最近快照重算 Redis 暂停标记（生产实现 subscription/health.Reconciler）。
+type UsagePauseReconciler interface {
+	ReconcileAccount(ctx context.Context, accountID int64) (subscriptionhealth.ReconcileResult, error)
 }
 
 // AccountRuntimeReader 读取账号运行态（冷却/隔离/暂停/在途），供列表页展示。
@@ -81,6 +89,10 @@ type Service struct {
 	logger    *zap.Logger
 	// supplyPreview 供完整供给影响预览（ADR-0020）；nil 时退回简化确认门。
 	supplyPreview *sqlc.Queries
+	// globalUsagePauseThreshold 读全局账号用量暂停阈值（appsettings），供视图解析「生效阈值与来源」；
+	// nil 时按代码默认 90。usagePause 在账号阈值改动后重算该账号的 Redis 暂停标记；nil 不重算。
+	globalUsagePauseThreshold func(ctx context.Context) int32
+	usagePause                UsagePauseReconciler
 
 	oauthSessions sync.Map // session id -> oauthSession
 }
@@ -88,6 +100,13 @@ type Service struct {
 // WithSupplyPreview 接入供给影响预览（bootstrap 注入 *sqlc.Queries 供 supply.ChannelImpact 反查）。
 func (s *Service) WithSupplyPreview(q *sqlc.Queries) *Service {
 	s.supplyPreview = q
+	return s
+}
+
+// WithUsagePausePolicy 注入全局阈值热读取与账号阈值变更后的运行态重算器。
+func (s *Service) WithUsagePausePolicy(global func(ctx context.Context) int32, reconciler UsagePauseReconciler) *Service {
+	s.globalUsagePauseThreshold = global
+	s.usagePause = reconciler
 	return s
 }
 
@@ -137,10 +156,16 @@ type Account struct {
 	// FingerprintMode 是指纹收敛档位（off / device）。种子是系统内部事实，永不下发。
 	FingerprintMode string `json:"fingerprint_mode"`
 	// ResponseTimeoutMs / FirstTokenTimeoutMs 是账号级超时覆写：nil 继承渠道、0 不限制、正数覆写。
-	ResponseTimeoutMs   *int32    `json:"response_timeout_ms"`
-	FirstTokenTimeoutMs *int32    `json:"first_token_timeout_ms"`
-	CreatedAt           time.Time `json:"created_at"`
-	UpdatedAt           time.Time `json:"updated_at"`
+	ResponseTimeoutMs   *int32 `json:"response_timeout_ms"`
+	FirstTokenTimeoutMs *int32 `json:"first_token_timeout_ms"`
+	// UsagePauseThresholdPercent 是账号级用量暂停阈值覆写：nil 继承渠道（渠道再继承全局），1~100 覆写。
+	UsagePauseThresholdPercent *int32 `json:"usage_pause_threshold_percent"`
+	// EffectiveUsagePauseThresholdPercent / UsagePauseThresholdSource 是三层继承解析后的生效阈值与来源
+	//（account / channel / global），供管理端水位条与「继承自」提示直接使用。
+	EffectiveUsagePauseThresholdPercent int32     `json:"effective_usage_pause_threshold_percent"`
+	UsagePauseThresholdSource           string    `json:"usage_pause_threshold_source"`
+	CreatedAt                           time.Time `json:"created_at"`
+	UpdatedAt                           time.Time `json:"updated_at"`
 
 	// Runtime 是 Redis 运行态（冷却/临时不可调度/用量暂停/在途），列表读取时批量拉取。
 	Runtime *AccountRuntimeView `json:"runtime,omitempty"`
@@ -242,8 +267,11 @@ func (s *Service) List(ctx context.Context, channelID int64, status string) (Lis
 		},
 	}
 	ids := make([]int64, 0, len(rows))
+	globalThreshold := s.globalThreshold(ctx)
 	for _, row := range rows {
-		result.Accounts = append(result.Accounts, accountFromListRow(row))
+		account := accountFromListRow(row)
+		applyUsagePausePolicy(&account, thresholdOverride(row.ChannelUsagePauseThresholdPercent), globalThreshold)
+		result.Accounts = append(result.Accounts, account)
 		if row.Status != "archived" {
 			ids = append(ids, row.ID)
 		}
@@ -583,7 +611,7 @@ func (s *Service) CompleteOAuth(ctx context.Context, sessionID, code, state stri
 		if reauthErr != nil {
 			return CompleteOAuthResult{}, storeFailed(reauthErr, "reauthorize subscription account")
 		}
-		return CompleteOAuthResult{Account: accountFromRow(row), Reauthorized: true}, nil
+		return CompleteOAuthResult{Account: s.accountView(ctx, row), Reauthorized: true}, nil
 	case err == nil:
 		return CompleteOAuthResult{}, conflict(
 			"该上游账号已存在于其它渠道（channel_id=" + strconv.FormatInt(existing.ChannelID, 10) + "）；一号一池，先在原渠道归档后再导入",
@@ -607,7 +635,7 @@ func (s *Service) CompleteOAuth(ctx context.Context, sessionID, code, state stri
 	if err != nil {
 		return CompleteOAuthResult{}, storeFailed(err, "load imported account")
 	}
-	return CompleteOAuthResult{Account: accountFromRow(row)}, nil
+	return CompleteOAuthResult{Account: s.accountView(ctx, row)}, nil
 }
 
 // UpdateConfigInput 是调度参数编辑入参。
@@ -715,7 +743,49 @@ func (s *Service) UpdateConfig(ctx context.Context, in UpdateConfigInput) (Accou
 	if err != nil {
 		return Account{}, err
 	}
-	return accountFromRow(updated), nil
+	return s.accountView(ctx, updated), nil
+}
+
+// UsagePauseThresholdResult 是账号阈值编辑的结果：更新后的账号视图 + 运行态重算统计。
+// RuntimeRefreshError 非空表示阈值已保存但重算没做完（拦截按快照实时判定，不受影响；只是展示可能短暂滞后）。
+type UsagePauseThresholdResult struct {
+	Account             Account                             `json:"account"`
+	RuntimeRefresh      *subscriptionhealth.ReconcileResult `json:"runtime_refresh,omitempty"`
+	RuntimeRefreshError string                              `json:"runtime_refresh_error,omitempty"`
+}
+
+// UpdateUsagePauseThreshold 单独修改账号的用量暂停阈值（nil 继承渠道，1~100 覆写，不接受 0），
+// 然后按该账号最近快照重算 Redis 暂停标记。
+//
+// 不经渠道容量 control 两阶段发布：候选快照每请求读库，阈值列普通更新即对下一次请求生效；
+// 它也不是容量围栏参数，推进 capacity_revision 只会让在途候选快照白白失效。
+func (s *Service) UpdateUsagePauseThreshold(ctx context.Context, accountID int64, percent *int32) (UsagePauseThresholdResult, error) {
+	if accountID <= 0 {
+		return UsagePauseThresholdResult{}, invalidArgument("id", "account id must be positive")
+	}
+	if percent != nil && !accountusage.ValidThreshold(*percent) {
+		return UsagePauseThresholdResult{}, invalidArgument("usage_pause_threshold_percent", "账号用量暂停阈值须为 1~100 的整数（留空继承渠道）")
+	}
+	if _, err := s.queries.AdminGetSubscriptionAccount(ctx, accountID); err != nil {
+		return UsagePauseThresholdResult{}, accountLoadError(err)
+	}
+	updated, err := s.queries.AdminUpdateSubscriptionAccountUsagePauseThreshold(ctx, sqlc.AdminUpdateSubscriptionAccountUsagePauseThresholdParams{
+		ID:                         accountID,
+		UsagePauseThresholdPercent: optionalInt4From32(percent),
+	})
+	if err != nil {
+		return UsagePauseThresholdResult{}, storeFailed(err, "update subscription account usage pause threshold")
+	}
+	result := UsagePauseThresholdResult{Account: s.accountView(ctx, updated)}
+	if s.usagePause != nil {
+		refresh, reconcileErr := s.usagePause.ReconcileAccount(ctx, accountID)
+		if reconcileErr != nil {
+			result.RuntimeRefreshError = reconcileErr.Error()
+		} else {
+			result.RuntimeRefresh = &refresh
+		}
+	}
+	return result, nil
 }
 
 // Delete 物理删除账号，用于清理录错/试错的脏数据。
@@ -839,7 +909,7 @@ func (s *Service) SetStatus(ctx context.Context, in SetStatusInput) (Account, er
 	if err != nil {
 		return Account{}, err
 	}
-	return accountFromRow(updated), nil
+	return s.accountView(ctx, updated), nil
 }
 
 // authorizeLastSupplyChange 对「移出最后一个可调度账号」执行供给影响确认。
@@ -901,7 +971,7 @@ func (s *Service) RefreshToken(ctx context.Context, accountID int64) (Account, e
 	if err != nil {
 		return Account{}, accountLoadError(err)
 	}
-	return accountFromRow(row), nil
+	return s.accountView(ctx, row), nil
 }
 
 // refreshError 把 outbound 刷新失败翻成 admin 可读的错误，而不是让内部 routing 错误码漏成 500。
@@ -1062,15 +1132,54 @@ func newControlToken() (string, error) {
 	return "acct-" + hex.EncodeToString(buf), nil
 }
 
+// globalThreshold 取全局账号用量暂停阈值（未注入热读取或值非法时按代码默认）。
+func (s *Service) globalThreshold(ctx context.Context) int32 {
+	if s.globalUsagePauseThreshold != nil {
+		if v := s.globalUsagePauseThreshold(ctx); accountusage.ValidThreshold(v) {
+			return v
+		}
+	}
+	return accountusage.DefaultThresholdPercent
+}
+
+// applyUsagePausePolicy 按三层继承填充视图的生效阈值与来源。
+func applyUsagePausePolicy(account *Account, channelOverride *int32, globalThreshold int32) {
+	resolved := accountusage.ResolveThreshold(account.UsagePauseThresholdPercent, channelOverride, globalThreshold)
+	account.EffectiveUsagePauseThresholdPercent = resolved.Percent
+	account.UsagePauseThresholdSource = string(resolved.Source)
+}
+
+// accountView 把单行账号映射成视图并补全生效阈值。渠道行读不到时按「无渠道覆写」解析——
+// 视图是只读展示，不因一次读库失败让写操作整体失败。
+func (s *Service) accountView(ctx context.Context, row sqlc.SubscriptionAccount) Account {
+	account := accountFromRow(row)
+	var channelOverride *int32
+	if channelRow, err := s.queries.GetChannel(ctx, row.ChannelID); err == nil {
+		channelOverride = thresholdOverride(channelRow.AccountUsagePauseThresholdPercent)
+	}
+	applyUsagePausePolicy(&account, channelOverride, s.globalThreshold(ctx))
+	return account
+}
+
+// thresholdOverride 把可空的阈值列还原为 *int32（NULL → nil，表示继承上一层）。
+func thresholdOverride(v pgtype.Int4) *int32 {
+	if !v.Valid {
+		return nil
+	}
+	percent := v.Int32
+	return &percent
+}
+
 func accountFromListRow(row sqlc.AdminListSubscriptionAccountsRow) Account {
 	account := Account{
 		ID: row.ID, ChannelID: row.ChannelID, Platform: row.Platform,
 		CredentialType: row.CredentialType, UpstreamAccountID: row.UpstreamAccountID,
 		DisplayName: row.DisplayName, Priority: row.Priority, Status: row.Status,
 		ConfigRevision: row.ConfigRevision, FingerprintMode: row.FingerprintMode,
-		ResponseTimeoutMs:   timeoutOverrideResult(row.ResponseTimeoutMs),
-		FirstTokenTimeoutMs: timeoutOverrideResult(row.FirstTokenTimeoutMs),
-		CreatedAt:           row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time,
+		ResponseTimeoutMs:          timeoutOverrideResult(row.ResponseTimeoutMs),
+		FirstTokenTimeoutMs:        timeoutOverrideResult(row.FirstTokenTimeoutMs),
+		UsagePauseThresholdPercent: thresholdOverride(row.UsagePauseThresholdPercent),
+		CreatedAt:                  row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time,
 	}
 	if has, ok := row.HasRefreshToken.(bool); ok {
 		account.HasRefreshToken = has
@@ -1125,9 +1234,10 @@ func accountFromRow(row sqlc.SubscriptionAccount) Account {
 		CredentialType: row.CredentialType, UpstreamAccountID: row.UpstreamAccountID,
 		DisplayName: row.DisplayName, Priority: row.Priority, Status: row.Status,
 		ConfigRevision: row.ConfigRevision, FingerprintMode: row.FingerprintMode,
-		ResponseTimeoutMs:   timeoutOverrideResult(row.ResponseTimeoutMs),
-		FirstTokenTimeoutMs: timeoutOverrideResult(row.FirstTokenTimeoutMs),
-		CreatedAt:           row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time,
+		ResponseTimeoutMs:          timeoutOverrideResult(row.ResponseTimeoutMs),
+		FirstTokenTimeoutMs:        timeoutOverrideResult(row.FirstTokenTimeoutMs),
+		UsagePauseThresholdPercent: thresholdOverride(row.UsagePauseThresholdPercent),
+		CreatedAt:                  row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time,
 	}
 	if credsErr == nil {
 		account.HasRefreshToken = creds.RefreshToken != ""

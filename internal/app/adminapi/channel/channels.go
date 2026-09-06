@@ -54,9 +54,11 @@ type channelDTO struct {
 	StickyTTLms         *int64 `json:"sticky_ttl_ms"`
 	// ConcurrencyLimit：渠道在途并发上限（DEC-029）。null=继承并发默认 channel_limit，0=不限，>0=具体上限。
 	ConcurrencyLimit *int64 `json:"concurrency_limit"`
-	// SupplyForm：供给形态（credential/pool）；AccountDefaultConcurrency 仅池型有意义。
+	// SupplyForm：供给形态（credential/pool）；AccountDefaultConcurrency 与 AccountUsagePauseThresholdPercent 仅池型有意义。
 	SupplyForm                string `json:"supply_form"`
 	AccountDefaultConcurrency *int64 `json:"account_default_concurrency"`
+	// AccountUsagePauseThresholdPercent：池型渠道下账号的用量暂停阈值（null 继承全局，1~100 覆写）。
+	AccountUsagePauseThresholdPercent *int32 `json:"account_usage_pause_threshold_percent"`
 	// ProxyID / ProxyName：渠道级出站代理实体（null 直连）；账号自带代理时账号代理优先。
 	ProxyID    *int64  `json:"proxy_id"`
 	ProxyName  string  `json:"proxy_name,omitempty"`
@@ -98,6 +100,26 @@ func (f *optionalInt64) UnmarshalJSON(raw []byte) error {
 	return nil
 }
 
+// optionalInt32 区分 PUT 中字段缺省与显式 null（int32 版本，用于百分比等小整数）。
+type optionalInt32 struct {
+	Set   bool
+	Value *int32
+}
+
+func (f *optionalInt32) UnmarshalJSON(raw []byte) error {
+	f.Set = true
+	if string(raw) == "null" {
+		f.Value = nil
+		return nil
+	}
+	var value int32
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return err
+	}
+	f.Value = &value
+	return nil
+}
+
 func validateConcurrencyLimit(value *int64) error {
 	if value != nil && *value < 0 {
 		return failure.New(
@@ -127,6 +149,8 @@ type createChannelRequest struct {
 	SupplyForm any `json:"supply_form"`
 	// AccountDefaultConcurrency 是池型渠道的账号默认并发（null 继承全局，0 不限，正数上限）。
 	AccountDefaultConcurrency optionalInt64 `json:"account_default_concurrency"`
+	// AccountUsagePauseThresholdPercent 是池型渠道下账号的用量暂停阈值（null/缺省 继承全局，1~100 覆写）。
+	AccountUsagePauseThresholdPercent *int32 `json:"account_usage_pause_threshold_percent"`
 	// ProxyID 是渠道级出站代理实体（null/缺省 直连）。
 	ProxyID *int64 `json:"proxy_id"`
 }
@@ -144,6 +168,8 @@ type updateChannelRequest struct {
 	SupportsOpenAIFast  *bool         `json:"supports_openai_fast"`
 	// AccountDefaultConcurrency 仅池型渠道：账号默认并发（缺省=不改，null=继承全局，0=不限，正数=上限）。
 	AccountDefaultConcurrency optionalInt64 `json:"account_default_concurrency"`
+	// AccountUsagePauseThresholdPercent 仅池型渠道：账号用量暂停阈值（缺省=不改，null=继承全局，1~100=覆写）。
+	AccountUsagePauseThresholdPercent optionalInt32 `json:"account_usage_pause_threshold_percent"`
 	// ProxyID 是渠道级出站代理实体（null 清除=直连）。表单整体提交：每次都带当前值。
 	ProxyID *int64 `json:"proxy_id"`
 	// 停用渠道可能让某些模型失去最后一条可用渠道：首次请求缺省，收到 409 后
@@ -264,22 +290,23 @@ func (h *channelsHandler) create(w http.ResponseWriter, r *http.Request) {
 		supplyForm = v
 	}
 	in := channel.CreateInput{
-		ProviderID:                req.ProviderID,
-		Name:                      req.Name,
-		Protocols:                 req.Protocols,
-		AdapterKey:                req.AdapterKey,
-		Credential:                req.Credential,
-		Status:                    req.Status,
-		Priority:                  req.Priority,
-		ResponseTimeoutMs:         req.ResponseTimeoutMs,
-		FirstTokenTimeoutMs:       req.FirstTokenTimeoutMs,
-		StickyEnabled:             req.StickyEnabled,
-		StickyTTLms:               req.StickyTTLms,
-		ConcurrencyLimit:          req.ConcurrencyLimit.Value,
-		SupportsOpenAIFast:        req.SupportsOpenAIFast,
-		SupplyForm:                supplyForm,
-		AccountDefaultConcurrency: req.AccountDefaultConcurrency.Value,
-		ProxyID:                   req.ProxyID,
+		ProviderID:                        req.ProviderID,
+		Name:                              req.Name,
+		Protocols:                         req.Protocols,
+		AdapterKey:                        req.AdapterKey,
+		Credential:                        req.Credential,
+		Status:                            req.Status,
+		Priority:                          req.Priority,
+		ResponseTimeoutMs:                 req.ResponseTimeoutMs,
+		FirstTokenTimeoutMs:               req.FirstTokenTimeoutMs,
+		StickyEnabled:                     req.StickyEnabled,
+		StickyTTLms:                       req.StickyTTLms,
+		ConcurrencyLimit:                  req.ConcurrencyLimit.Value,
+		SupportsOpenAIFast:                req.SupportsOpenAIFast,
+		SupplyForm:                        supplyForm,
+		AccountDefaultConcurrency:         req.AccountDefaultConcurrency.Value,
+		AccountUsagePauseThresholdPercent: req.AccountUsagePauseThresholdPercent,
+		ProxyID:                           req.ProxyID,
 	}
 	c, err := h.service.Create(r.Context(), in)
 	if err != nil {
@@ -309,21 +336,23 @@ func (h *channelsHandler) update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	in := channel.UpdateInput{
-		ID:                                id,
-		Name:                              req.Name,
-		ProviderID:                        req.ProviderID,
-		Status:                            req.Status,
-		Priority:                          req.Priority,
-		ResponseTimeoutMs:                 req.ResponseTimeoutMs,
-		FirstTokenTimeoutMs:               req.FirstTokenTimeoutMs,
-		StickyEnabled:                     req.StickyEnabled,
-		StickyTTLms:                       req.StickyTTLms,
-		CapacityProvided:                  req.ConcurrencyLimit.Set,
-		ConcurrencyLimit:                  req.ConcurrencyLimit.Value,
-		SupportsOpenAIFast:                req.SupportsOpenAIFast,
-		AccountDefaultConcurrencyProvided: req.AccountDefaultConcurrency.Set,
-		AccountDefaultConcurrency:         req.AccountDefaultConcurrency.Value,
-		ProxyID:                           req.ProxyID,
+		ID:                                 id,
+		Name:                               req.Name,
+		ProviderID:                         req.ProviderID,
+		Status:                             req.Status,
+		Priority:                           req.Priority,
+		ResponseTimeoutMs:                  req.ResponseTimeoutMs,
+		FirstTokenTimeoutMs:                req.FirstTokenTimeoutMs,
+		StickyEnabled:                      req.StickyEnabled,
+		StickyTTLms:                        req.StickyTTLms,
+		CapacityProvided:                   req.ConcurrencyLimit.Set,
+		ConcurrencyLimit:                   req.ConcurrencyLimit.Value,
+		SupportsOpenAIFast:                 req.SupportsOpenAIFast,
+		AccountDefaultConcurrencyProvided:  req.AccountDefaultConcurrency.Set,
+		AccountDefaultConcurrency:          req.AccountDefaultConcurrency.Value,
+		AccountUsagePauseThresholdProvided: req.AccountUsagePauseThresholdPercent.Set,
+		AccountUsagePauseThresholdPercent:  req.AccountUsagePauseThresholdPercent.Value,
+		ProxyID:                            req.ProxyID,
 		Confirmation: supply.Confirmation{
 			Confirm:             req.ConfirmSupplyImpact,
 			ExpectedFingerprint: req.ExpectedImpactFingerprint,
@@ -435,32 +464,33 @@ func (h *channelsHandler) restore(w http.ResponseWriter, r *http.Request) {
 
 func toChannelDTO(c channel.Channel) channelDTO {
 	return channelDTO{
-		ID:                        c.ID,
-		ProviderID:                c.ProviderID,
-		ProviderName:              c.ProviderName,
-		ConfigRevision:            c.ConfigRevision,
-		CapacityRevision:          c.CapacityRevision,
-		RuntimeSyncPending:        c.RuntimeSyncPending,
-		Name:                      c.Name,
-		Protocols:                 c.Protocols,
-		AdapterKey:                c.AdapterKey,
-		Origin:                    c.Origin,
-		SupportsOpenAIFast:        c.SupportsOpenAIFast,
-		Credential:                c.Credential,
-		Status:                    c.Status,
-		Priority:                  c.Priority,
-		ResponseTimeoutMs:         c.ResponseTimeoutMs,
-		FirstTokenTimeoutMs:       c.FirstTokenTimeoutMs,
-		StickyEnabled:             c.StickyEnabled,
-		StickyTTLms:               c.StickyTTLms,
-		ConcurrencyLimit:          c.ConcurrencyLimit,
-		SupplyForm:                c.SupplyForm,
-		AccountDefaultConcurrency: c.AccountDefaultConcurrency,
-		ProxyID:                   c.ProxyID,
-		ProxyName:                 c.ProxyName,
-		CreatedAt:                 c.CreatedAt.UTC().Format(time.RFC3339),
-		UpdatedAt:                 c.UpdatedAt.UTC().Format(time.RFC3339),
-		ArchivedAt:                formatOptionalTime(c.ArchivedAt),
+		ID:                                c.ID,
+		ProviderID:                        c.ProviderID,
+		ProviderName:                      c.ProviderName,
+		ConfigRevision:                    c.ConfigRevision,
+		CapacityRevision:                  c.CapacityRevision,
+		RuntimeSyncPending:                c.RuntimeSyncPending,
+		Name:                              c.Name,
+		Protocols:                         c.Protocols,
+		AdapterKey:                        c.AdapterKey,
+		Origin:                            c.Origin,
+		SupportsOpenAIFast:                c.SupportsOpenAIFast,
+		Credential:                        c.Credential,
+		Status:                            c.Status,
+		Priority:                          c.Priority,
+		ResponseTimeoutMs:                 c.ResponseTimeoutMs,
+		FirstTokenTimeoutMs:               c.FirstTokenTimeoutMs,
+		StickyEnabled:                     c.StickyEnabled,
+		StickyTTLms:                       c.StickyTTLms,
+		ConcurrencyLimit:                  c.ConcurrencyLimit,
+		SupplyForm:                        c.SupplyForm,
+		AccountDefaultConcurrency:         c.AccountDefaultConcurrency,
+		AccountUsagePauseThresholdPercent: c.AccountUsagePauseThresholdPercent,
+		ProxyID:                           c.ProxyID,
+		ProxyName:                         c.ProxyName,
+		CreatedAt:                         c.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt:                         c.UpdatedAt.UTC().Format(time.RFC3339),
+		ArchivedAt:                        formatOptionalTime(c.ArchivedAt),
 
 		LastTestedAt:      formatOptionalTime(c.LastTestedAt),
 		LastTestOK:        c.LastTestOK,

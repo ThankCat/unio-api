@@ -2,9 +2,12 @@ package lifecycle
 
 import (
 	"context"
-	"encoding/json"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/ThankCat/unio-gateway/internal/core/accountpool"
+	"github.com/ThankCat/unio-gateway/internal/core/accountusage"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
 	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
@@ -12,6 +15,8 @@ import (
 
 // 池型渠道的第二阶段选号需要两份事实：账号配置（Postgres）与账号运行态（Redis）。
 // 两者都按渠道成批读取——单请求可能有多个池型候选，逐个账号往返会把选路延迟做成 N+1。
+// 用量暂停不读 Redis：按账号行里的 usage_snapshot 与三层继承的阈值（账号 → 渠道 → 全局）实时判定，
+// 任一层阈值改动对下一次请求即生效。
 
 // AccountPoolStore 是候选准备读取池内账号所需的最小数据库能力。
 type AccountPoolStore interface {
@@ -81,7 +86,10 @@ func (e *Executor) loadAccountPool(ctx context.Context, candidate routing.ChatRo
 		return accountPoolSnapshot{Reason: accountPoolReasonEmpty}
 	}
 
+	now := e.now()
+	globalThreshold := e.globalUsagePauseThreshold(ctx)
 	accounts := make([]accountpool.Account, 0, len(rows))
+	usagePauseMs := make([]int64, 0, len(rows))
 	ids := make([]int64, 0, len(rows))
 	for _, row := range rows {
 		account := accountpool.Account{
@@ -96,8 +104,12 @@ func (e *Executor) loadAccountPool(ctx context.Context, candidate routing.ChatRo
 		if row.LastSuccessAt.Valid {
 			account.LastSuccessAt = row.LastSuccessAt.Time
 		}
-		account.UsageResetAtUnix = usagePrimaryResetAt(row.UsageSnapshot)
+		snapshot, hasSnapshot := accountusage.ParseSnapshot(row.UsageSnapshot)
+		if hasSnapshot && snapshot.Primary != nil {
+			account.UsageResetAtUnix = snapshot.Primary.ResetAt
+		}
 		accounts = append(accounts, account)
+		usagePauseMs = append(usagePauseMs, derivedUsagePauseMs(snapshot, hasSnapshot, row, globalThreshold, now))
 		ids = append(ids, row.ID)
 	}
 
@@ -108,37 +120,66 @@ func (e *Executor) loadAccountPool(ctx context.Context, candidate routing.ChatRo
 		return accountPoolSnapshot{Reason: accountPoolReasonUnavailable}
 	}
 
-	pool := accountpool.NewPool(accounts, accountRuntimeFacts(runtimes), candidate.AccountDefaultConcurrency)
+	pool := accountpool.NewPool(accounts, accountRuntimeFacts(runtimes, usagePauseMs), candidate.AccountDefaultConcurrency)
 	if len(pool.Schedulable()) == 0 {
 		return accountPoolSnapshot{Pool: pool, Reason: accountPoolReasonCooldown}
 	}
 	return accountPoolSnapshot{Pool: pool}
 }
 
-// usagePrimaryResetAt 从 usage_snapshot 文档取 5h 窗口重置时刻（unix 秒）；缺失/解析失败返回 0。
-// 只解一个字段，损坏的快照静默忽略——排序退化为现状，不能因观测数据坏掉阻断选号。
-func usagePrimaryResetAt(snapshot []byte) int64 {
-	if len(snapshot) == 0 {
-		return 0
+// globalUsagePauseThreshold 取全局账号用量暂停阈值；未注入热读取时用代码默认。
+func (e *Executor) globalUsagePauseThreshold(ctx context.Context) int32 {
+	if e.usagePauseThreshold != nil {
+		if v := e.usagePauseThreshold(ctx); accountusage.ValidThreshold(v) {
+			return v
+		}
 	}
-	var doc struct {
-		Primary struct {
-			ResetAt int64 `json:"reset_at"`
-		} `json:"primary"`
-	}
-	if err := json.Unmarshal(snapshot, &doc); err != nil {
-		return 0
-	}
-	return doc.Primary.ResetAt
+	return accountusage.DefaultThresholdPercent
 }
 
-func accountRuntimeFacts(runtimes []breakerstore.AccountRuntime) []accountpool.Runtime {
+// derivedUsagePauseMs 按「账号快照水位 vs 三层继承的生效阈值」实时判定用量暂停剩余毫秒；0 表示不暂停。
+// 这是用量暂停的唯一拦截依据：Redis 里的 usage_pause 标记只是展示缓存，不参与调度——
+// 否则阈值放宽后，旧阈值写下的标记会继续把账号锁到窗口重置。无快照的账号无从判定，视为不暂停。
+func derivedUsagePauseMs(
+	snapshot accountusage.Snapshot,
+	hasSnapshot bool,
+	row sqlc.ListSchedulableAccountsByChannelRow,
+	globalThreshold int32,
+	now time.Time,
+) int64 {
+	if !hasSnapshot {
+		return 0
+	}
+	threshold := accountusage.ResolveThreshold(
+		thresholdOverride(row.UsagePauseThresholdPercent),
+		thresholdOverride(row.AccountUsagePauseThresholdPercent),
+		globalThreshold,
+	)
+	return accountusage.Evaluate(snapshot, threshold.Percent, now).RemainingMs(now)
+}
+
+// thresholdOverride 把可空的阈值列还原为 *int32（NULL → nil，表示继承上一层）。
+func thresholdOverride(v pgtype.Int4) *int32 {
+	if !v.Valid {
+		return nil
+	}
+	percent := v.Int32
+	return &percent
+}
+
+// accountRuntimeFacts 合并 Redis 运行态与按快照派生的用量暂停。冷却、临时不可调度与在途仍以 Redis 为准；
+// 用量暂停一律取派生值（usagePauseMs 与 runtimes 同序，短于 runtimes 的部分按不暂停处理）。
+func accountRuntimeFacts(runtimes []breakerstore.AccountRuntime, usagePauseMs []int64) []accountpool.Runtime {
 	out := make([]accountpool.Runtime, 0, len(runtimes))
-	for _, runtime := range runtimes {
+	for index, runtime := range runtimes {
+		var pauseMs int64
+		if index < len(usagePauseMs) {
+			pauseMs = usagePauseMs[index]
+		}
 		out = append(out, accountpool.Runtime{
 			CooldownRemainingMs:      runtime.CooldownRemainingMs,
 			UnschedulableRemainingMs: runtime.UnschedulableRemainingMs,
-			UsagePauseRemainingMs:    runtime.UsagePauseRemainingMs,
+			UsagePauseRemainingMs:    pauseMs,
 			InFlight:                 runtime.InFlight,
 		})
 	}

@@ -270,10 +270,15 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 		return nil, err
 	}
 
+	// 全局账号用量暂停阈值（三层继承的最外层）：候选准备按账号快照实时判定暂停时读它。
+	usagePauseThreshold := func(ctx context.Context) int32 {
+		return appsettings.GatewayAccountUsagePauseThreshold(ctx, settingsStore)
+	}
 	chatCompletionService := NewChatGateway(
 		deps.DB,
 		queries,
 		breakerStore,
+		usagePauseThreshold,
 		chatRouter,
 		adapterRegistry,
 		deps.Config.Worker,
@@ -284,6 +289,7 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 		deps.DB,
 		queries,
 		breakerStore,
+		usagePauseThreshold,
 		chatRouter,
 		adapterRegistry,
 		deps.Config.Worker,
@@ -295,6 +301,7 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 		deps.DB,
 		queries,
 		breakerStore,
+		usagePauseThreshold,
 		chatRouter,
 		adapterRegistry,
 		deps.Config.Worker,
@@ -325,11 +332,10 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 		deps.Redis,
 		deps.Logger,
 	)
-	// 用量暂停阈值走 appsettings 热更新（gateway.account_usage_pause_threshold_percent，默认 90）。
+	// 全局用量暂停阈值走 appsettings 热更新（gateway.account_usage_pause_threshold_percent，默认 90）；
+	// 账号/渠道两层覆写由 Recorder 观测时按账号读库解析。
 	accountHealth := subscriptionhealth.NewRecorder(queries, breakerStore, deps.Logger, 0).
-		WithThresholdProvider(func(ctx context.Context) float64 {
-			return appsettings.GatewayAccountUsagePauseThreshold(ctx, settingsStore)
-		})
+		WithThresholdProvider(usagePauseThreshold)
 	chatCompletionService.SetAccountOutbound(accountOutbound, accountHealth)
 	responsesService.SetAccountOutbound(accountOutbound, accountHealth)
 	messagesService.SetAccountOutbound(accountOutbound, accountHealth)

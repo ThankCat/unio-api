@@ -29,11 +29,30 @@ type RuntimeControlStore interface {
 	ReadControl(ctx context.Context, target breakerstore.ControlTarget, expectedRevision int64) (breakerstore.ControlSnapshot, error)
 }
 
+// WriteHook 在某个普通 setting 成功写入后同步执行（例如全局阈值改动后重算账号运行态）。
+// 返回值原样附在 SettingWriteResult.RuntimeRefresh 里回给管理端；返回 error 不回滚已保存的值，
+// 只在结果里以 RuntimeRefreshError 报出——写入已经落库且传播，副作用失败不应让管理员以为没保存。
+type WriteHook func(ctx context.Context) (any, error)
+
 // Service 是 admin 侧读写全局运行时配置的服务。
 type Service struct {
 	store            *SettingsStore
 	runtimePublisher RuntimeControlPublisher
 	runtimeStore     RuntimeControlStore
+	writeHooks       map[string]WriteHook
+}
+
+// WithWriteHook 为指定 key 注册写入后钩子（同一 key 只保留最后一个）。
+func (s *Service) WithWriteHook(key string, hook WriteHook) *Service {
+	if s.writeHooks == nil {
+		s.writeHooks = map[string]WriteHook{}
+	}
+	if hook == nil {
+		delete(s.writeHooks, key)
+		return s
+	}
+	s.writeHooks[key] = hook
+	return s
 }
 
 // NewService 创建配置服务。
@@ -119,6 +138,24 @@ type SettingWriteResult struct {
 	State           string `json:"state"` // saved | active | runtime_sync_pending
 	ActiveRevision  int64  `json:"active_revision"`
 	PendingRevision int64  `json:"pending_revision"`
+	// RuntimeRefresh 是写入后钩子的返回（例如账号运行态重算统计）；没有钩子时省略。
+	RuntimeRefresh any `json:"runtime_refresh,omitempty"`
+	// RuntimeRefreshError 是钩子失败的说明；值本身已保存，只是副作用没做完。
+	RuntimeRefreshError string `json:"runtime_refresh_error,omitempty"`
+}
+
+// runWriteHook 执行 key 对应的写入后钩子（若有），结果写进 result；钩子失败不影响写入结论。
+func (s *Service) runWriteHook(ctx context.Context, key string, result *SettingWriteResult) {
+	hook, ok := s.writeHooks[key]
+	if !ok || hook == nil {
+		return
+	}
+	refresh, err := hook(ctx)
+	if err != nil {
+		result.RuntimeRefreshError = err.Error()
+		return
+	}
+	result.RuntimeRefresh = refresh
 }
 
 // SetRawWithResult 校验并写入设置。四个关键 setting 强制走 durable publisher，普通 PUT 无法绕过。
@@ -142,11 +179,12 @@ func (s *Service) SetRawWithResult(ctx context.Context, key string, value json.R
 		if err := s.store.Set(ctx, key, value); err != nil {
 			return SettingWriteResult{}, err
 		}
-		record, err := s.store.Record(ctx, key)
-		if err != nil {
-			return SettingWriteResult{Key: key, State: "saved"}, nil
+		result := SettingWriteResult{Key: key, State: "saved"}
+		if record, err := s.store.Record(ctx, key); err == nil {
+			result.Revision = record.Revision
 		}
-		return SettingWriteResult{Key: key, Revision: record.Revision, State: "saved"}, nil
+		s.runWriteHook(ctx, key, &result)
+		return result, nil
 	}
 
 	canonical, err := canonicalRuntimeSetting(key, value)

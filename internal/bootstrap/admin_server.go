@@ -230,10 +230,24 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 			sharedBreakerStore,
 		)
 	}
+	// 全局账号用量暂停阈值（三层继承的最外层）与阈值变更后的运行态重算器：
+	// 全局 setting / 渠道阈值 / 账号阈值任一改动，都按账号最近快照重写 Redis 暂停标记（展示缓存）；
+	// 拦截本身由 gateway 按快照实时判定，不依赖这次重算。Redis 不可用时不重算，只影响展示。
+	usagePauseThreshold := func(ctx context.Context) int32 {
+		return appsettings.GatewayAccountUsagePauseThreshold(ctx, settingsStore)
+	}
+	var usagePauseReconciler *subscriptionhealth.Reconciler
+	if sharedBreakerStore != nil {
+		usagePauseReconciler = subscriptionhealth.NewReconciler(queries, sharedBreakerStore, usagePauseThreshold, deps.Logger)
+	}
+
 	channelService := channel.NewService(queries, adapterRegistry)
 	channelService.WithSupplyLinkage(deps.DB, queries)
 	if channelRuntimePublisher != nil && channelRuntimeStore != nil {
 		channelService.WithRuntimeControl(channelRuntimePublisher, channelRuntimeStore)
+	}
+	if usagePauseReconciler != nil {
+		channelService.WithUsagePauseReconciler(usagePauseReconciler)
 	}
 	// 渠道检测复用 gateway adapter registry（同一份 adapter/HTTP 链路，检测结果=真实行为）。
 	// 探测超时取自运行时配置 admin_backend.channel_test（与用户请求渠道超时正交）。
@@ -268,7 +282,8 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 			accountOutbound,
 			accountTokens,
 			deps.Logger,
-		).WithSupplyPreview(queries)
+		).WithSupplyPreview(queries).
+			WithUsagePausePolicy(usagePauseThreshold, usagePauseReconciler)
 		// 池型渠道的检测/模型发现/验证以账号身份出站；不注入的话这些操作对池型渠道必然 401。
 		probeIdentity := subscription.NewProbeIdentityResolver(queries, accountOutbound)
 		channelTestService.WithAccountResolver(probeIdentity)
@@ -276,9 +291,7 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		// 探测/验证成功即回填账号观测（用量水位 + LRU）：与请求路径同一 Recorder，阈值同样热更新。
 		// 探测 429 另写账号冷却（同一 Redis），否则检测已确认限流、列表仍显示「启用 · 正常」。
 		probeHealth := subscriptionhealth.NewRecorder(queries, sharedBreakerStore, deps.Logger, 0).
-			WithThresholdProvider(func(ctx context.Context) float64 {
-				return appsettings.GatewayAccountUsagePauseThreshold(ctx, settingsStore)
-			})
+			WithThresholdProvider(usagePauseThreshold)
 		channelTestService.WithAccountHealth(probeHealth)
 		channelTestService.WithAccountRuntime(sharedBreakerStore)
 		channelModelInventoryService.WithAccountHealth(probeHealth)
@@ -343,6 +356,12 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		providerSettingsService = appsettings.NewServiceWithRuntimeControl(
 			settingsStore, settingsRuntimePublisher, settingsRuntimeStore,
 		)
+	}
+	if usagePauseReconciler != nil {
+		// 全局阈值保存后立即按新阈值重算全部启用中的池内账号（本进程 Set 已写本地缓存，钩子读到的即新值）。
+		providerSettingsService.WithWriteHook(appsettings.GatewayAccountUsagePauseThresholdKey, func(ctx context.Context) (any, error) {
+			return usagePauseReconciler.ReconcileAll(ctx)
+		})
 	}
 	gatewayLoggingService := admingatewaylogging.NewService(
 		providerSettingsService,

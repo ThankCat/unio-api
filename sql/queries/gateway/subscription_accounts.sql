@@ -2,6 +2,8 @@
 -- ListSchedulableAccountsByChannel 取某个池型渠道下可调度的账号，供每请求的候选快照聚合并发容量与资格。
 -- 这是热路径：只取调度必需列，凭据不在其中（真正出站时再按 permit 固化的账号 ID 单取）。
 -- 「可调度」在这里只判账号自身 enabled；渠道与服务商状态由候选查询的上层条件保证（绑定式语义）。
+-- 两个用量暂停阈值列（账号 → 渠道，NULL 继承）与 usage_snapshot 一起供候选准备实时判定「水位是否触顶」，
+-- 阈值变更因此对下一次请求立即生效，不依赖 Redis 标记刷新。
 SELECT
     a.id,
     a.priority,
@@ -9,12 +11,24 @@ SELECT
     a.usage_snapshot,
     a.last_success_at,
     a.config_revision,
-    c.account_default_concurrency
+    a.usage_pause_threshold_percent,
+    c.account_default_concurrency,
+    c.account_usage_pause_threshold_percent
 FROM subscription_accounts a
 JOIN channels c ON c.id = a.channel_id
 WHERE a.channel_id = $1
   AND a.status = 'enabled'
 ORDER BY a.priority, a.id;
+
+-- name: GetAccountUsagePausePolicy :one
+-- GetAccountUsagePausePolicy 取账号与其渠道的用量暂停阈值覆写（NULL 继承），供用量观测时解析生效阈值。
+-- 全局层来自 appsettings，不在库里；两列都 NULL 时由调用方回落全局。
+SELECT
+    a.usage_pause_threshold_percent AS account_threshold_percent,
+    c.account_usage_pause_threshold_percent AS channel_threshold_percent
+FROM subscription_accounts a
+JOIN channels c ON c.id = a.channel_id
+WHERE a.id = $1;
 
 -- name: GetAccountOutboundCredential :one
 -- GetAccountOutboundCredential 取指定账号的出站凭据、代理、指纹收敛档位与账号级超时覆写，

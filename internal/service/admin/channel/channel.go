@@ -20,11 +20,13 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/ThankCat/unio-gateway/internal/core/accountusage"
 	"github.com/ThankCat/unio-gateway/internal/core/runtimecontrol"
 	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 	"github.com/ThankCat/unio-gateway/internal/service/admin/supply"
+	subscriptionhealth "github.com/ThankCat/unio-gateway/internal/service/subscription/health"
 )
 
 const (
@@ -49,6 +51,7 @@ type Store interface {
 	ListChannelsPage(ctx context.Context, arg sqlc.ListChannelsPageParams) ([]sqlc.ListChannelsPageRow, error)
 	CountChannels(ctx context.Context, arg sqlc.CountChannelsParams) (int64, error)
 	UpdateChannelAccountDefaultConcurrency(ctx context.Context, arg sqlc.UpdateChannelAccountDefaultConcurrencyParams) (sqlc.Channel, error)
+	UpdateChannelAccountUsagePauseThreshold(ctx context.Context, arg sqlc.UpdateChannelAccountUsagePauseThresholdParams) (sqlc.Channel, error)
 	GetChannel(ctx context.Context, id int64) (sqlc.Channel, error)
 	CreateChannel(ctx context.Context, arg sqlc.CreateChannelParams) (sqlc.Channel, error)
 	GetEnabledProxyURL(ctx context.Context, id int64) (string, error)
@@ -128,6 +131,9 @@ type Channel struct {
 	// SupplyForm / AccountDefaultConcurrency 是号池改造引入的供给形态（credential/pool）。
 	SupplyForm                string
 	AccountDefaultConcurrency *int64
+	// AccountUsagePauseThresholdPercent 是池型渠道下账号的用量暂停阈值覆写：nil 继承全局、1~100 覆写。
+	// credential 渠道恒为 nil。
+	AccountUsagePauseThresholdPercent *int32
 	// ProxyID / ProxyName 是渠道级出站代理实体（nil 直连）；名称由列表 JOIN 带出。
 	ProxyID    *int64
 	ProxyName  string
@@ -210,6 +216,8 @@ type CreateInput struct {
 	SupplyForm string
 	// AccountDefaultConcurrency 是池型渠道的账号默认并发（nil 继承全局，0 不限，正数上限）。
 	AccountDefaultConcurrency *int64
+	// AccountUsagePauseThresholdPercent 是池型渠道下账号的用量暂停阈值（nil 继承全局，1~100 覆写）。
+	AccountUsagePauseThresholdPercent *int32
 	// ProxyID 是渠道级出站代理实体（nil 直连）；账号自带代理时账号代理优先。
 	ProxyID *int64
 }
@@ -234,6 +242,10 @@ type UpdateInput struct {
 	// 仅池型渠道可设。候选快照按请求读库，改动即刻生效，无需容量重发布。
 	AccountDefaultConcurrencyProvided bool
 	AccountDefaultConcurrency         *int64
+	// AccountUsagePauseThresholdProvided 区分「缺省=保持不变」与「显式 null=继承全局」；仅池型渠道可设。
+	// 改动后按池内账号快照重算 Redis 暂停标记（拦截本身按快照实时判定，无需容量重发布）。
+	AccountUsagePauseThresholdProvided bool
+	AccountUsagePauseThresholdPercent  *int32
 	// ProxyID 是渠道级出站代理实体（nil 清除 = 直连）。表单整体提交语义：每次更新都带当前值。
 	ProxyID *int64
 	// Confirmation 是暂停 Channel 流量前的客户影响确认；不允许借此修改 Offering。
@@ -292,6 +304,12 @@ type CredentialRotator interface {
 	RotateCredentialAndTest(ctx context.Context, in RotateCredentialInput) (RotateCredentialResult, error)
 }
 
+// UsagePauseReconciler 在渠道账号用量暂停阈值变更后，按池内账号最近快照重算 Redis 暂停标记
+// （生产实现 subscription/health.Reconciler）。拦截本身按快照实时判定，重算只为让展示与调度一致。
+type UsagePauseReconciler interface {
+	ReconcileChannel(ctx context.Context, channelID int64) (subscriptionhealth.ReconcileResult, error)
+}
+
 // Service 编排 channel 管理读写。
 type Service struct {
 	store             Store
@@ -301,6 +319,16 @@ type Service struct {
 	runtimeStore      CapacityControlStore
 	db                TxBeginner
 	queries           *sqlc.Queries
+	// usagePause 在渠道阈值改动后重算池内账号的暂停标记；nil 表示不重算（展示可能短暂滞后，拦截不受影响）。
+	usagePause UsagePauseReconciler
+}
+
+// WithUsagePauseReconciler 注入渠道阈值变更后的运行态重算器（生产 bootstrap 在 Redis 可用时注入）。
+func (s *Service) WithUsagePauseReconciler(reconciler UsagePauseReconciler) *Service {
+	if s != nil {
+		s.usagePause = reconciler
+	}
+	return s
 }
 
 // NewService 创建 channel 管理服务。
@@ -470,6 +498,9 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Channel, error) {
 		if in.AccountDefaultConcurrency != nil {
 			return Channel{}, invalidArgument("account_default_concurrency", "仅池型渠道可配账号默认并发")
 		}
+		if in.AccountUsagePauseThresholdPercent != nil {
+			return Channel{}, invalidArgument("account_usage_pause_threshold_percent", "仅池型渠道可配账号用量暂停阈值")
+		}
 	case SupplyFormPool:
 		// 池型渠道不持凭据：凭据在账号上，双份真相会让轮换语义混乱（DB CHECK 同步拦截）。
 		if strings.TrimSpace(in.Credential) != "" {
@@ -477,6 +508,9 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Channel, error) {
 		}
 		if in.AccountDefaultConcurrency != nil && *in.AccountDefaultConcurrency < 0 {
 			return Channel{}, invalidArgument("account_default_concurrency", "账号默认并发不可为负")
+		}
+		if err := validateUsagePauseThreshold(in.AccountUsagePauseThresholdPercent); err != nil {
+			return Channel{}, err
 		}
 		// 本期订阅账号只有 Codex（OAuth 会话 + 专属 wire/账号身份头）。选了别的 adapter，
 		// 出站不会带账号身份：模型发现/检测/正式请求都会被上游 403，且 adapter 创建后不可改——
@@ -518,22 +552,23 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Channel, error) {
 		return Channel{}, err
 	}
 	row, err := s.store.CreateChannel(ctx, sqlc.CreateChannelParams{
-		ProviderID:                in.ProviderID,
-		Name:                      name,
-		Protocols:                 protocols,
-		AdapterKey:                adapterKey,
-		Credential:                strings.TrimSpace(in.Credential),
-		Status:                    status,
-		Priority:                  in.Priority,
-		SupportsOpenaiFast:        in.SupportsOpenAIFast,
-		ResponseTimeoutMs:         timeoutParam(in.ResponseTimeoutMs),
-		FirstTokenTimeoutMs:       timeoutParam(in.FirstTokenTimeoutMs),
-		ConcurrencyLimit:          rateLimitParam(capacity.Concurrency),
-		StickyEnabled:             boolParam(in.StickyEnabled),
-		StickyTtlMs:               nullableInt8Param(in.StickyTTLms),
-		SupplyForm:                supplyForm,
-		AccountDefaultConcurrency: rateLimitParam(in.AccountDefaultConcurrency),
-		ProxyID:                   nullableInt8Param(in.ProxyID),
+		ProviderID:                        in.ProviderID,
+		Name:                              name,
+		Protocols:                         protocols,
+		AdapterKey:                        adapterKey,
+		Credential:                        strings.TrimSpace(in.Credential),
+		Status:                            status,
+		Priority:                          in.Priority,
+		SupportsOpenaiFast:                in.SupportsOpenAIFast,
+		ResponseTimeoutMs:                 timeoutParam(in.ResponseTimeoutMs),
+		FirstTokenTimeoutMs:               timeoutParam(in.FirstTokenTimeoutMs),
+		ConcurrencyLimit:                  rateLimitParam(capacity.Concurrency),
+		StickyEnabled:                     boolParam(in.StickyEnabled),
+		StickyTtlMs:                       nullableInt8Param(in.StickyTTLms),
+		SupplyForm:                        supplyForm,
+		AccountDefaultConcurrency:         rateLimitParam(in.AccountDefaultConcurrency),
+		AccountUsagePauseThresholdPercent: int4Param(in.AccountUsagePauseThresholdPercent),
+		ProxyID:                           nullableInt8Param(in.ProxyID),
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -616,6 +651,28 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Channel, error) {
 			return Channel{}, storeFailed(adcErr, "update channel account default concurrency")
 		}
 		cur = updated
+	}
+	// 账号用量暂停阈值（仅池型）：候选快照按请求读库实时判定，普通列更新即热生效；
+	// 真变化时按池内账号快照重算 Redis 暂停标记，让「暂停中」展示与新阈值一致。
+	if in.AccountUsagePauseThresholdProvided {
+		if cur.SupplyForm != SupplyFormPool {
+			return Channel{}, invalidArgument("account_usage_pause_threshold_percent", "仅池型渠道可配账号用量暂停阈值")
+		}
+		if err := validateUsagePauseThreshold(in.AccountUsagePauseThresholdPercent); err != nil {
+			return Channel{}, err
+		}
+		desired := int4Param(in.AccountUsagePauseThresholdPercent)
+		if desired != cur.AccountUsagePauseThresholdPercent {
+			updated, thresholdErr := s.store.UpdateChannelAccountUsagePauseThreshold(ctx, sqlc.UpdateChannelAccountUsagePauseThresholdParams{
+				ID:                                in.ID,
+				AccountUsagePauseThresholdPercent: desired,
+			})
+			if thresholdErr != nil {
+				return Channel{}, storeFailed(thresholdErr, "update channel account usage pause threshold")
+			}
+			cur = updated
+			s.reconcileChannelUsagePause(ctx, in.ID)
+		}
 	}
 	provider, err := s.store.GetProvider(ctx, cur.ProviderID)
 	if err != nil {
@@ -1070,28 +1127,29 @@ func textString(v pgtype.Text) string {
 
 func toChannel(c sqlc.Channel) Channel {
 	return Channel{
-		ID:                        c.ID,
-		ProviderID:                c.ProviderID,
-		ConfigRevision:            c.ConfigRevision,
-		CapacityRevision:          c.CapacityRevision,
-		Name:                      c.Name,
-		Protocols:                 c.Protocols,
-		AdapterKey:                c.AdapterKey,
-		SupportsOpenAIFast:        c.SupportsOpenaiFast,
-		Credential:                c.Credential,
-		Status:                    c.Status,
-		Priority:                  c.Priority,
-		ResponseTimeoutMs:         timeoutResult(c.ResponseTimeoutMs),
-		FirstTokenTimeoutMs:       timeoutResult(c.FirstTokenTimeoutMs),
-		ConcurrencyLimit:          rateLimitResult(c.ConcurrencyLimit),
-		StickyEnabled:             boolResult(c.StickyEnabled),
-		StickyTTLms:               int8Result(c.StickyTtlMs),
-		SupplyForm:                c.SupplyForm,
-		AccountDefaultConcurrency: rateLimitResult(c.AccountDefaultConcurrency),
-		ProxyID:                   int8Result(c.ProxyID),
-		CreatedAt:                 c.CreatedAt.Time,
-		UpdatedAt:                 c.UpdatedAt.Time,
-		ArchivedAt:                timestampResult(c.ArchivedAt),
+		ID:                                c.ID,
+		ProviderID:                        c.ProviderID,
+		ConfigRevision:                    c.ConfigRevision,
+		CapacityRevision:                  c.CapacityRevision,
+		Name:                              c.Name,
+		Protocols:                         c.Protocols,
+		AdapterKey:                        c.AdapterKey,
+		SupportsOpenAIFast:                c.SupportsOpenaiFast,
+		Credential:                        c.Credential,
+		Status:                            c.Status,
+		Priority:                          c.Priority,
+		ResponseTimeoutMs:                 timeoutResult(c.ResponseTimeoutMs),
+		FirstTokenTimeoutMs:               timeoutResult(c.FirstTokenTimeoutMs),
+		ConcurrencyLimit:                  rateLimitResult(c.ConcurrencyLimit),
+		StickyEnabled:                     boolResult(c.StickyEnabled),
+		StickyTTLms:                       int8Result(c.StickyTtlMs),
+		SupplyForm:                        c.SupplyForm,
+		AccountDefaultConcurrency:         rateLimitResult(c.AccountDefaultConcurrency),
+		AccountUsagePauseThresholdPercent: timeoutResult(c.AccountUsagePauseThresholdPercent),
+		ProxyID:                           int8Result(c.ProxyID),
+		CreatedAt:                         c.CreatedAt.Time,
+		UpdatedAt:                         c.UpdatedAt.Time,
+		ArchivedAt:                        timestampResult(c.ArchivedAt),
 
 		LastTestedAt:      timestampResult(c.LastTestedAt),
 		LastTestOK:        boolResult(c.LastTestOk),
@@ -1120,30 +1178,31 @@ func (s *Service) enrichProviderName(ctx context.Context, ch Channel) (Channel, 
 // toChannelRow 映射分页列表行，额外带出 JOIN 出的 provider 名称。
 func toChannelRow(c sqlc.ListChannelsPageRow) Channel {
 	return Channel{
-		ID:                        c.ID,
-		ProviderID:                c.ProviderID,
-		ProviderName:              c.ProviderName,
-		ConfigRevision:            c.ConfigRevision,
-		CapacityRevision:          c.CapacityRevision,
-		Name:                      c.Name,
-		Protocols:                 c.Protocols,
-		AdapterKey:                c.AdapterKey,
-		SupportsOpenAIFast:        c.SupportsOpenaiFast,
-		Origin:                    c.Origin,
-		Credential:                c.Credential,
-		Status:                    c.Status,
-		Priority:                  c.Priority,
-		ResponseTimeoutMs:         timeoutResult(c.ResponseTimeoutMs),
-		FirstTokenTimeoutMs:       timeoutResult(c.FirstTokenTimeoutMs),
-		ConcurrencyLimit:          rateLimitResult(c.ConcurrencyLimit),
-		StickyEnabled:             boolResult(c.StickyEnabled),
-		StickyTTLms:               int8Result(c.StickyTtlMs),
-		SupplyForm:                c.SupplyForm,
-		AccountDefaultConcurrency: rateLimitResult(c.AccountDefaultConcurrency),
-		ProxyID:                   int8Result(c.ProxyID),
-		ProxyName:                 textString(c.ProxyName),
-		CreatedAt:                 c.CreatedAt.Time,
-		UpdatedAt:                 c.UpdatedAt.Time,
+		ID:                                c.ID,
+		ProviderID:                        c.ProviderID,
+		ProviderName:                      c.ProviderName,
+		ConfigRevision:                    c.ConfigRevision,
+		CapacityRevision:                  c.CapacityRevision,
+		Name:                              c.Name,
+		Protocols:                         c.Protocols,
+		AdapterKey:                        c.AdapterKey,
+		SupportsOpenAIFast:                c.SupportsOpenaiFast,
+		Origin:                            c.Origin,
+		Credential:                        c.Credential,
+		Status:                            c.Status,
+		Priority:                          c.Priority,
+		ResponseTimeoutMs:                 timeoutResult(c.ResponseTimeoutMs),
+		FirstTokenTimeoutMs:               timeoutResult(c.FirstTokenTimeoutMs),
+		ConcurrencyLimit:                  rateLimitResult(c.ConcurrencyLimit),
+		StickyEnabled:                     boolResult(c.StickyEnabled),
+		StickyTTLms:                       int8Result(c.StickyTtlMs),
+		SupplyForm:                        c.SupplyForm,
+		AccountDefaultConcurrency:         rateLimitResult(c.AccountDefaultConcurrency),
+		AccountUsagePauseThresholdPercent: timeoutResult(c.AccountUsagePauseThresholdPercent),
+		ProxyID:                           int8Result(c.ProxyID),
+		ProxyName:                         textString(c.ProxyName),
+		CreatedAt:                         c.CreatedAt.Time,
+		UpdatedAt:                         c.UpdatedAt.Time,
 
 		LastTestedAt:      timestampResult(c.LastTestedAt),
 		LastTestOK:        boolResult(c.LastTestOk),
@@ -1317,6 +1376,30 @@ func validateTimeout(field string, ms *int32) error {
 		return invalidArgument(field, field+" must be >= 0 when set (0 = unlimited)")
 	}
 	return nil
+}
+
+// validateUsagePauseThreshold 校验渠道级账号用量暂停阈值：nil 继承全局，否则必须落在 1~100（不接受 0）。
+func validateUsagePauseThreshold(percent *int32) error {
+	if percent != nil && !accountusage.ValidThreshold(*percent) {
+		return invalidArgument("account_usage_pause_threshold_percent", "账号用量暂停阈值须为 1~100 的整数（留空继承全局）")
+	}
+	return nil
+}
+
+// reconcileChannelUsagePause 在渠道阈值真变化后重算池内账号的暂停标记；未注入重算器时跳过。
+// 失败不影响已保存的阈值：拦截按快照实时判定，重算器自身已记日志。
+func (s *Service) reconcileChannelUsagePause(ctx context.Context, channelID int64) {
+	if s.usagePause == nil {
+		return
+	}
+	_, _ = s.usagePause.ReconcileChannel(ctx, channelID)
+}
+
+func int4Param(v *int32) pgtype.Int4 {
+	if v == nil {
+		return pgtype.Int4{}
+	}
+	return pgtype.Int4{Int32: *v, Valid: true}
 }
 
 func timeoutParam(ms *int32) pgtype.Int4 {

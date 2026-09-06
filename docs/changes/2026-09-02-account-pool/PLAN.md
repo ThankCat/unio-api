@@ -331,6 +331,8 @@ config_revision + 台账 created_by 承担，统一审计属平台级另立项�
     低于阈值显式 Resume，不等旧暂停自然到期）；任一窗口缺失按不限处理。
     阈值已接 appsettings 热更新（`gateway.account_usage_pause_threshold_percent`，默认 90，1~100，
     每次用量观测现读设置快照）；构造参数保留为降级默认。
+    **2026-09-06 演进**：阈值改为「账号 → 池型渠道 → 全局」三层继承，拦截按快照 + 生效阈值实时判定，
+    Redis 标记降级为展示缓存并在阈值变更后重算——见 `docs/changes/2026-09-06-usage-pause-threshold/PLAN.md`。
   - **E2E 实证（真实账号）**：上游真 401（token_revoked）→ 账号隔离 token_refresh 5 分钟、渠道评分
     与 breaker 零污染、同请求透明 fallback 到 credential 渠道成功结算；随后手动刷新确认吊销 →
     账号 disabled(token_revoked)。95% 用量头 → 自动暂停 → 下一请求池被过滤，全链路可复现。

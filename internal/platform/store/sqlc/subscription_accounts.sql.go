@@ -320,7 +320,7 @@ INSERT INTO subscription_accounts (
     $6, $7, $8, $9, $10, $11,
     'disabled', $12
 )
-RETURNING id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id, fingerprint_mode, fingerprint_seed, response_timeout_ms, first_token_timeout_ms
+RETURNING id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id, fingerprint_mode, fingerprint_seed, response_timeout_ms, first_token_timeout_ms, usage_pause_threshold_percent
 `
 
 type AdminCreateSubscriptionAccountParams struct {
@@ -381,6 +381,7 @@ func (q *Queries) AdminCreateSubscriptionAccount(ctx context.Context, arg AdminC
 		&i.FingerprintSeed,
 		&i.ResponseTimeoutMs,
 		&i.FirstTokenTimeoutMs,
+		&i.UsagePauseThresholdPercent,
 	)
 	return i, err
 }
@@ -452,7 +453,7 @@ func (q *Queries) AdminDeleteSubscriptionAccountCascade(ctx context.Context, id 
 }
 
 const adminGetSubscriptionAccount = `-- name: AdminGetSubscriptionAccount :one
-SELECT id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id, fingerprint_mode, fingerprint_seed, response_timeout_ms, first_token_timeout_ms
+SELECT id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id, fingerprint_mode, fingerprint_seed, response_timeout_ms, first_token_timeout_ms, usage_pause_threshold_percent
 FROM subscription_accounts
 WHERE id = $1
 `
@@ -486,6 +487,7 @@ func (q *Queries) AdminGetSubscriptionAccount(ctx context.Context, id int64) (Su
 		&i.FingerprintSeed,
 		&i.ResponseTimeoutMs,
 		&i.FirstTokenTimeoutMs,
+		&i.UsagePauseThresholdPercent,
 	)
 	return i, err
 }
@@ -565,8 +567,11 @@ SELECT
     apx.status AS proxy_status,
     a.fingerprint_mode,
     a.response_timeout_ms,
-    a.first_token_timeout_ms
+    a.first_token_timeout_ms,
+    a.usage_pause_threshold_percent,
+    c.account_usage_pause_threshold_percent AS channel_usage_pause_threshold_percent
 FROM subscription_accounts a
+JOIN channels c ON c.id = a.channel_id
 LEFT JOIN proxies apx ON apx.id = a.proxy_id
 WHERE a.channel_id = $1
   AND ($2::text IS NULL OR a.status = $2::text)
@@ -579,33 +584,35 @@ type AdminListSubscriptionAccountsParams struct {
 }
 
 type AdminListSubscriptionAccountsRow struct {
-	ID                    int64
-	ChannelID             int64
-	Platform              string
-	CredentialType        string
-	UpstreamAccountID     string
-	DisplayName           string
-	PlanType              pgtype.Text
-	ProxyUrl              pgtype.Text
-	ConcurrencyLimit      pgtype.Int4
-	Priority              int32
-	Status                string
-	DisabledReason        pgtype.Text
-	SubscriptionExpiresAt pgtype.Timestamptz
-	UsageSnapshot         []byte
-	LastSuccessAt         pgtype.Timestamptz
-	ConfigRevision        int64
-	CreatedAt             pgtype.Timestamptz
-	UpdatedAt             pgtype.Timestamptz
-	TokenExpiresAt        interface{}
-	HasRefreshToken       interface{}
-	Email                 interface{}
-	ProxyID               pgtype.Int8
-	ProxyName             pgtype.Text
-	ProxyStatus           pgtype.Text
-	FingerprintMode       string
-	ResponseTimeoutMs     pgtype.Int4
-	FirstTokenTimeoutMs   pgtype.Int4
+	ID                                int64
+	ChannelID                         int64
+	Platform                          string
+	CredentialType                    string
+	UpstreamAccountID                 string
+	DisplayName                       string
+	PlanType                          pgtype.Text
+	ProxyUrl                          pgtype.Text
+	ConcurrencyLimit                  pgtype.Int4
+	Priority                          int32
+	Status                            string
+	DisabledReason                    pgtype.Text
+	SubscriptionExpiresAt             pgtype.Timestamptz
+	UsageSnapshot                     []byte
+	LastSuccessAt                     pgtype.Timestamptz
+	ConfigRevision                    int64
+	CreatedAt                         pgtype.Timestamptz
+	UpdatedAt                         pgtype.Timestamptz
+	TokenExpiresAt                    interface{}
+	HasRefreshToken                   interface{}
+	Email                             interface{}
+	ProxyID                           pgtype.Int8
+	ProxyName                         pgtype.Text
+	ProxyStatus                       pgtype.Text
+	FingerprintMode                   string
+	ResponseTimeoutMs                 pgtype.Int4
+	FirstTokenTimeoutMs               pgtype.Int4
+	UsagePauseThresholdPercent        pgtype.Int4
+	ChannelUsagePauseThresholdPercent pgtype.Int4
 }
 
 // AdminListSubscriptionAccounts 列出渠道下全部账号（含已停用与归档），供渠道详情的账号页签。
@@ -649,6 +656,8 @@ func (q *Queries) AdminListSubscriptionAccounts(ctx context.Context, arg AdminLi
 			&i.FingerprintMode,
 			&i.ResponseTimeoutMs,
 			&i.FirstTokenTimeoutMs,
+			&i.UsagePauseThresholdPercent,
+			&i.ChannelUsagePauseThresholdPercent,
 		); err != nil {
 			return nil, err
 		}
@@ -699,6 +708,64 @@ func (q *Queries) AdminListSubscriptionLedger(ctx context.Context, accountID int
 	return items, nil
 }
 
+const adminListUsagePauseReconcileAccounts = `-- name: AdminListUsagePauseReconcileAccounts :many
+SELECT
+    a.id,
+    a.channel_id,
+    a.usage_snapshot,
+    a.usage_pause_threshold_percent,
+    c.account_usage_pause_threshold_percent AS channel_usage_pause_threshold_percent
+FROM subscription_accounts a
+JOIN channels c ON c.id = a.channel_id
+WHERE a.status = 'enabled'
+  AND c.supply_form = 'pool'
+  AND ($1::bigint IS NULL OR a.channel_id = $1::bigint)
+  AND ($2::bigint IS NULL OR a.id = $2::bigint)
+ORDER BY a.channel_id, a.id
+`
+
+type AdminListUsagePauseReconcileAccountsParams struct {
+	ChannelID pgtype.Int8
+	AccountID pgtype.Int8
+}
+
+type AdminListUsagePauseReconcileAccountsRow struct {
+	ID                                int64
+	ChannelID                         int64
+	UsageSnapshot                     []byte
+	UsagePauseThresholdPercent        pgtype.Int4
+	ChannelUsagePauseThresholdPercent pgtype.Int4
+}
+
+// AdminListUsagePauseReconcileAccounts 列出需要按阈值重算用量暂停标记的账号：启用中且属于池型渠道，
+// 带最近用量快照与两层阈值覆写。channel_id / account_id 任一给定即收窄范围（全局阈值变更 → 全量，
+// 渠道阈值变更 → 该渠道，账号阈值变更 → 该账号）。
+func (q *Queries) AdminListUsagePauseReconcileAccounts(ctx context.Context, arg AdminListUsagePauseReconcileAccountsParams) ([]AdminListUsagePauseReconcileAccountsRow, error) {
+	rows, err := q.db.Query(ctx, adminListUsagePauseReconcileAccounts, arg.ChannelID, arg.AccountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AdminListUsagePauseReconcileAccountsRow
+	for rows.Next() {
+		var i AdminListUsagePauseReconcileAccountsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ChannelID,
+			&i.UsageSnapshot,
+			&i.UsagePauseThresholdPercent,
+			&i.ChannelUsagePauseThresholdPercent,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const adminPickProbeAccount = `-- name: AdminPickProbeAccount :one
 SELECT id
 FROM subscription_accounts
@@ -725,7 +792,7 @@ SET credentials = $3,
     updated_at = now()
 WHERE platform = $1
   AND upstream_account_id = $2
-RETURNING id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id, fingerprint_mode, fingerprint_seed, response_timeout_ms, first_token_timeout_ms
+RETURNING id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id, fingerprint_mode, fingerprint_seed, response_timeout_ms, first_token_timeout_ms, usage_pause_threshold_percent
 `
 
 type AdminReauthorizeSubscriptionAccountParams struct {
@@ -772,6 +839,7 @@ func (q *Queries) AdminReauthorizeSubscriptionAccount(ctx context.Context, arg A
 		&i.FingerprintSeed,
 		&i.ResponseTimeoutMs,
 		&i.FirstTokenTimeoutMs,
+		&i.UsagePauseThresholdPercent,
 	)
 	return i, err
 }
@@ -783,7 +851,7 @@ SET fingerprint_mode = $2,
     config_revision = config_revision + 1,
     updated_at = now()
 WHERE id = $1
-RETURNING id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id, fingerprint_mode, fingerprint_seed, response_timeout_ms, first_token_timeout_ms
+RETURNING id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id, fingerprint_mode, fingerprint_seed, response_timeout_ms, first_token_timeout_ms, usage_pause_threshold_percent
 `
 
 type AdminSetSubscriptionAccountFingerprintParams struct {
@@ -823,6 +891,7 @@ func (q *Queries) AdminSetSubscriptionAccountFingerprint(ctx context.Context, ar
 		&i.FingerprintSeed,
 		&i.ResponseTimeoutMs,
 		&i.FirstTokenTimeoutMs,
+		&i.UsagePauseThresholdPercent,
 	)
 	return i, err
 }
@@ -834,7 +903,7 @@ SET status = $2,
     config_revision = config_revision + 1,
     updated_at = now()
 WHERE id = $1
-RETURNING id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id, fingerprint_mode, fingerprint_seed, response_timeout_ms, first_token_timeout_ms
+RETURNING id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id, fingerprint_mode, fingerprint_seed, response_timeout_ms, first_token_timeout_ms, usage_pause_threshold_percent
 `
 
 type AdminSetSubscriptionAccountStatusParams struct {
@@ -873,6 +942,7 @@ func (q *Queries) AdminSetSubscriptionAccountStatus(ctx context.Context, arg Adm
 		&i.FingerprintSeed,
 		&i.ResponseTimeoutMs,
 		&i.FirstTokenTimeoutMs,
+		&i.UsagePauseThresholdPercent,
 	)
 	return i, err
 }
@@ -890,7 +960,7 @@ SET display_name = $2,
     config_revision = config_revision + 1,
     updated_at = now()
 WHERE id = $1
-RETURNING id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id, fingerprint_mode, fingerprint_seed, response_timeout_ms, first_token_timeout_ms
+RETURNING id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id, fingerprint_mode, fingerprint_seed, response_timeout_ms, first_token_timeout_ms, usage_pause_threshold_percent
 `
 
 type AdminUpdateSubscriptionAccountConfigParams struct {
@@ -948,6 +1018,57 @@ func (q *Queries) AdminUpdateSubscriptionAccountConfig(ctx context.Context, arg 
 		&i.FingerprintSeed,
 		&i.ResponseTimeoutMs,
 		&i.FirstTokenTimeoutMs,
+		&i.UsagePauseThresholdPercent,
+	)
+	return i, err
+}
+
+const adminUpdateSubscriptionAccountUsagePauseThreshold = `-- name: AdminUpdateSubscriptionAccountUsagePauseThreshold :one
+UPDATE subscription_accounts
+SET usage_pause_threshold_percent = $1,
+    config_revision = config_revision + 1,
+    updated_at = now()
+WHERE id = $2
+RETURNING id, channel_id, platform, credential_type, upstream_account_id, display_name, plan_type, credentials, proxy_url, concurrency_limit, priority, status, disabled_reason, subscription_expires_at, usage_snapshot, last_success_at, config_revision, created_at, updated_at, proxy_id, fingerprint_mode, fingerprint_seed, response_timeout_ms, first_token_timeout_ms, usage_pause_threshold_percent
+`
+
+type AdminUpdateSubscriptionAccountUsagePauseThresholdParams struct {
+	UsagePauseThresholdPercent pgtype.Int4
+	ID                         int64
+}
+
+// AdminUpdateSubscriptionAccountUsagePauseThreshold 单独修改账号用量暂停阈值（NULL 继承渠道，1~100 覆写，不接受 0）。
+// 候选快照每请求读库，普通列更新即热生效，不经渠道容量 control 发布；bump config_revision 让审计能定位
+// 「这次是按哪版配置放行的」。调用方随后按快照重算该账号的 Redis 暂停标记（展示缓存）。
+func (q *Queries) AdminUpdateSubscriptionAccountUsagePauseThreshold(ctx context.Context, arg AdminUpdateSubscriptionAccountUsagePauseThresholdParams) (SubscriptionAccount, error) {
+	row := q.db.QueryRow(ctx, adminUpdateSubscriptionAccountUsagePauseThreshold, arg.UsagePauseThresholdPercent, arg.ID)
+	var i SubscriptionAccount
+	err := row.Scan(
+		&i.ID,
+		&i.ChannelID,
+		&i.Platform,
+		&i.CredentialType,
+		&i.UpstreamAccountID,
+		&i.DisplayName,
+		&i.PlanType,
+		&i.Credentials,
+		&i.ProxyUrl,
+		&i.ConcurrencyLimit,
+		&i.Priority,
+		&i.Status,
+		&i.DisabledReason,
+		&i.SubscriptionExpiresAt,
+		&i.UsageSnapshot,
+		&i.LastSuccessAt,
+		&i.ConfigRevision,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ProxyID,
+		&i.FingerprintMode,
+		&i.FingerprintSeed,
+		&i.ResponseTimeoutMs,
+		&i.FirstTokenTimeoutMs,
+		&i.UsagePauseThresholdPercent,
 	)
 	return i, err
 }
@@ -1062,6 +1183,29 @@ func (q *Queries) GetAccountOutboundCredential(ctx context.Context, id int64) (G
 	return i, err
 }
 
+const getAccountUsagePausePolicy = `-- name: GetAccountUsagePausePolicy :one
+SELECT
+    a.usage_pause_threshold_percent AS account_threshold_percent,
+    c.account_usage_pause_threshold_percent AS channel_threshold_percent
+FROM subscription_accounts a
+JOIN channels c ON c.id = a.channel_id
+WHERE a.id = $1
+`
+
+type GetAccountUsagePausePolicyRow struct {
+	AccountThresholdPercent pgtype.Int4
+	ChannelThresholdPercent pgtype.Int4
+}
+
+// GetAccountUsagePausePolicy 取账号与其渠道的用量暂停阈值覆写（NULL 继承），供用量观测时解析生效阈值。
+// 全局层来自 appsettings，不在库里；两列都 NULL 时由调用方回落全局。
+func (q *Queries) GetAccountUsagePausePolicy(ctx context.Context, id int64) (GetAccountUsagePausePolicyRow, error) {
+	row := q.db.QueryRow(ctx, getAccountUsagePausePolicy, id)
+	var i GetAccountUsagePausePolicyRow
+	err := row.Scan(&i.AccountThresholdPercent, &i.ChannelThresholdPercent)
+	return i, err
+}
+
 const getEnabledProxyURL = `-- name: GetEnabledProxyURL :one
 SELECT url FROM proxies WHERE id = $1 AND status = 'enabled'
 `
@@ -1140,7 +1284,9 @@ SELECT
     a.usage_snapshot,
     a.last_success_at,
     a.config_revision,
-    c.account_default_concurrency
+    a.usage_pause_threshold_percent,
+    c.account_default_concurrency,
+    c.account_usage_pause_threshold_percent
 FROM subscription_accounts a
 JOIN channels c ON c.id = a.channel_id
 WHERE a.channel_id = $1
@@ -1149,18 +1295,22 @@ ORDER BY a.priority, a.id
 `
 
 type ListSchedulableAccountsByChannelRow struct {
-	ID                        int64
-	Priority                  int32
-	ConcurrencyLimit          pgtype.Int4
-	UsageSnapshot             []byte
-	LastSuccessAt             pgtype.Timestamptz
-	ConfigRevision            int64
-	AccountDefaultConcurrency pgtype.Int4
+	ID                                int64
+	Priority                          int32
+	ConcurrencyLimit                  pgtype.Int4
+	UsageSnapshot                     []byte
+	LastSuccessAt                     pgtype.Timestamptz
+	ConfigRevision                    int64
+	UsagePauseThresholdPercent        pgtype.Int4
+	AccountDefaultConcurrency         pgtype.Int4
+	AccountUsagePauseThresholdPercent pgtype.Int4
 }
 
 // ListSchedulableAccountsByChannel 取某个池型渠道下可调度的账号，供每请求的候选快照聚合并发容量与资格。
 // 这是热路径：只取调度必需列，凭据不在其中（真正出站时再按 permit 固化的账号 ID 单取）。
 // 「可调度」在这里只判账号自身 enabled；渠道与服务商状态由候选查询的上层条件保证（绑定式语义）。
+// 两个用量暂停阈值列（账号 → 渠道，NULL 继承）与 usage_snapshot 一起供候选准备实时判定「水位是否触顶」，
+// 阈值变更因此对下一次请求立即生效，不依赖 Redis 标记刷新。
 func (q *Queries) ListSchedulableAccountsByChannel(ctx context.Context, channelID int64) ([]ListSchedulableAccountsByChannelRow, error) {
 	rows, err := q.db.Query(ctx, listSchedulableAccountsByChannel, channelID)
 	if err != nil {
@@ -1177,7 +1327,9 @@ func (q *Queries) ListSchedulableAccountsByChannel(ctx context.Context, channelI
 			&i.UsageSnapshot,
 			&i.LastSuccessAt,
 			&i.ConfigRevision,
+			&i.UsagePauseThresholdPercent,
 			&i.AccountDefaultConcurrency,
+			&i.AccountUsagePauseThresholdPercent,
 		); err != nil {
 			return nil, err
 		}

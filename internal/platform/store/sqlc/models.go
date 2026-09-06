@@ -124,6 +124,8 @@ type Channel struct {
 	SupplyForm                string
 	AccountDefaultConcurrency pgtype.Int4
 	ProxyID                   pgtype.Int8
+	// 池型渠道下账号的用量暂停阈值（%）。NULL 继承全局 setting；1~100 覆写；不接受 0。credential 渠道恒为 NULL。
+	AccountUsagePauseThresholdPercent pgtype.Int4
 }
 
 type ChannelCostMultiplier struct {
@@ -962,6 +964,8 @@ type SubscriptionAccount struct {
 	ResponseTimeoutMs pgtype.Int4
 	// NULL 继承渠道；0 不限制；正数覆写。限制流式首个上游进展。
 	FirstTokenTimeoutMs pgtype.Int4
+	// 账号用量暂停阈值（%）。NULL 继承渠道（渠道再继承全局）；1~100 覆写；不接受 0。
+	UsagePauseThresholdPercent pgtype.Int4
 }
 
 type SubscriptionAccountStat struct {

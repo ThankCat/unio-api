@@ -3,6 +3,7 @@ package lifecycle
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/ThankCat/unio-gateway/internal/core/accountpool"
 	"github.com/ThankCat/unio-gateway/internal/core/billing"
@@ -173,6 +174,11 @@ type Executor struct {
 	// credential 型渠道完全不经过这两个依赖，既有装配与单测因此无需改动。
 	accountPool    AccountPoolStore
 	accountRuntime AccountRuntimeStore
+	// usagePauseThreshold 读取全局账号用量暂停阈值（appsettings 热读）；nil 时用代码默认。
+	// 账号/渠道两层覆写随账号行一起读出，三层在候选准备时按请求解析。
+	usagePauseThreshold func(ctx context.Context) int32
+	// now 供单测冻结时钟；生产为 time.Now。
+	now func() time.Time
 }
 
 // ExecutorOption 调整 Executor 的可选依赖。
@@ -187,6 +193,16 @@ func WithAccountPool(pool AccountPoolStore, runtime AccountRuntimeStore) Executo
 		}
 		e.accountPool = pool
 		e.accountRuntime = runtime
+	}
+}
+
+// WithAccountUsagePauseThreshold 注入全局账号用量暂停阈值的热读取（appsettings，本地缓存数秒）。
+// 候选准备按「账号快照水位 ≥ 生效阈值且未到重置时刻」实时判定暂停，阈值改动对下一次请求即生效。
+func WithAccountUsagePauseThreshold(fn func(ctx context.Context) int32) ExecutorOption {
+	return func(e *Executor) {
+		if fn != nil {
+			e.usagePauseThreshold = fn
+		}
 	}
 }
 
@@ -211,7 +227,7 @@ func NewExecutor(registry CandidateCapabilityRegistry, opts ...ExecutorOption) *
 		panic("lifecycle: adapter capability registry is required")
 	}
 
-	e := &Executor{registry: registry}
+	e := &Executor{registry: registry, now: time.Now}
 	for _, opt := range opts {
 		opt(e)
 	}

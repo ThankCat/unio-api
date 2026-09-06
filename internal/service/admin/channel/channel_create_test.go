@@ -18,6 +18,8 @@ type createStore struct {
 	createCalls int
 	updateParam sqlc.UpdateChannelParams
 	updateCalls int
+	// thresholdUpdateCalls 记录渠道账号用量暂停阈值的写入次数（未变化时不应写）。
+	thresholdUpdateCalls int
 	// rechargeRateMissing 模拟服务商未配置当前生效充值汇率（D-02 闸门场景）。
 	rechargeRateMissing bool
 }
@@ -58,6 +60,14 @@ func (s *createStore) CreateChannel(_ context.Context, arg sqlc.CreateChannelPar
 func (s *createStore) UpdateChannelAccountDefaultConcurrency(_ context.Context, arg sqlc.UpdateChannelAccountDefaultConcurrencyParams) (sqlc.Channel, error) {
 	updated := s.channel
 	updated.AccountDefaultConcurrency = arg.AccountDefaultConcurrency
+	s.channel = updated
+	return updated, nil
+}
+
+func (s *createStore) UpdateChannelAccountUsagePauseThreshold(_ context.Context, arg sqlc.UpdateChannelAccountUsagePauseThresholdParams) (sqlc.Channel, error) {
+	s.thresholdUpdateCalls++
+	updated := s.channel
+	updated.AccountUsagePauseThresholdPercent = arg.AccountUsagePauseThresholdPercent
 	s.channel = updated
 	return updated, nil
 }

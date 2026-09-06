@@ -36,6 +36,7 @@ func TestNewChatGatewayBuildsService(t *testing.T) {
 		fakeChatGatewayDB{},
 		&sqlc.Queries{},
 		nil,
+		nil,
 		fakeChatGatewayRouter{},
 		registry,
 		config.WorkerConfig{},

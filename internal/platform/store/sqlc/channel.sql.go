@@ -184,7 +184,7 @@ SET capacity_revision = $1,
 WHERE id = $2
   AND capacity_revision = $3
   AND $1 = $3 + 1
-RETURNING id, provider_id, name, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast, protocols, supply_form, account_default_concurrency, proxy_id
+RETURNING id, provider_id, name, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast, protocols, supply_form, account_default_concurrency, proxy_id, account_usage_pause_threshold_percent
 `
 
 type BumpChannelCapacityRevisionParams struct {
@@ -229,6 +229,7 @@ func (q *Queries) BumpChannelCapacityRevision(ctx context.Context, arg BumpChann
 		&i.SupplyForm,
 		&i.AccountDefaultConcurrency,
 		&i.ProxyID,
+		&i.AccountUsagePauseThresholdPercent,
 	)
 	return i, err
 }
@@ -991,7 +992,7 @@ WHERE id = $3
   AND capacity_revision = $4
   AND $2 = $4 + 1
   AND concurrency_limit IS DISTINCT FROM $1
-RETURNING id, provider_id, name, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast, protocols, supply_form, account_default_concurrency, proxy_id
+RETURNING id, provider_id, name, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast, protocols, supply_form, account_default_concurrency, proxy_id, account_usage_pause_threshold_percent
 `
 
 type CommitChannelCapacityAtRevisionParams struct {
@@ -1040,6 +1041,7 @@ func (q *Queries) CommitChannelCapacityAtRevision(ctx context.Context, arg Commi
 		&i.SupplyForm,
 		&i.AccountDefaultConcurrency,
 		&i.ProxyID,
+		&i.AccountUsagePauseThresholdPercent,
 	)
 	return i, err
 }
@@ -1091,7 +1093,7 @@ INSERT INTO channels (
     supports_openai_fast,
     response_timeout_ms, first_token_timeout_ms, concurrency_limit,
     sticky_enabled, sticky_ttl_ms,
-    supply_form, account_default_concurrency, proxy_id
+    supply_form, account_default_concurrency, account_usage_pause_threshold_percent, proxy_id
 )
 VALUES (
     $1, $2, $3, $4,
@@ -1099,28 +1101,30 @@ VALUES (
     $8,
     $9, $10, $11,
     $12, $13,
-    $14, $15, $16
+    $14, $15, $16,
+    $17
 )
-RETURNING id, provider_id, name, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast, protocols, supply_form, account_default_concurrency, proxy_id
+RETURNING id, provider_id, name, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast, protocols, supply_form, account_default_concurrency, proxy_id, account_usage_pause_threshold_percent
 `
 
 type CreateChannelParams struct {
-	ProviderID                int64
-	Name                      string
-	Protocols                 []string
-	AdapterKey                string
-	Credential                string
-	Status                    string
-	Priority                  int32
-	SupportsOpenaiFast        bool
-	ResponseTimeoutMs         pgtype.Int4
-	FirstTokenTimeoutMs       pgtype.Int4
-	ConcurrencyLimit          pgtype.Int4
-	StickyEnabled             pgtype.Bool
-	StickyTtlMs               pgtype.Int8
-	SupplyForm                string
-	AccountDefaultConcurrency pgtype.Int4
-	ProxyID                   pgtype.Int8
+	ProviderID                        int64
+	Name                              string
+	Protocols                         []string
+	AdapterKey                        string
+	Credential                        string
+	Status                            string
+	Priority                          int32
+	SupportsOpenaiFast                bool
+	ResponseTimeoutMs                 pgtype.Int4
+	FirstTokenTimeoutMs               pgtype.Int4
+	ConcurrencyLimit                  pgtype.Int4
+	StickyEnabled                     pgtype.Bool
+	StickyTtlMs                       pgtype.Int8
+	SupplyForm                        string
+	AccountDefaultConcurrency         pgtype.Int4
+	AccountUsagePauseThresholdPercent pgtype.Int4
+	ProxyID                           pgtype.Int8
 }
 
 // CreateChannel 创建 channel；credential 为明文上游凭据，protocols 中每个协议与 adapter_key 的组合都须先在 adapter registry 校验存在。
@@ -1142,6 +1146,7 @@ func (q *Queries) CreateChannel(ctx context.Context, arg CreateChannelParams) (C
 		arg.StickyTtlMs,
 		arg.SupplyForm,
 		arg.AccountDefaultConcurrency,
+		arg.AccountUsagePauseThresholdPercent,
 		arg.ProxyID,
 	)
 	var i Channel
@@ -1173,6 +1178,7 @@ func (q *Queries) CreateChannel(ctx context.Context, arg CreateChannelParams) (C
 		&i.SupplyForm,
 		&i.AccountDefaultConcurrency,
 		&i.ProxyID,
+		&i.AccountUsagePauseThresholdPercent,
 	)
 	return i, err
 }
@@ -1560,7 +1566,7 @@ func (q *Queries) DeleteChannelModel(ctx context.Context, arg DeleteChannelModel
 }
 
 const getChannel = `-- name: GetChannel :one
-SELECT id, provider_id, name, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast, protocols, supply_form, account_default_concurrency, proxy_id
+SELECT id, provider_id, name, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast, protocols, supply_form, account_default_concurrency, proxy_id, account_usage_pause_threshold_percent
 FROM channels
 WHERE id = $1
 LIMIT 1
@@ -1598,6 +1604,7 @@ func (q *Queries) GetChannel(ctx context.Context, id int64) (Channel, error) {
 		&i.SupplyForm,
 		&i.AccountDefaultConcurrency,
 		&i.ProxyID,
+		&i.AccountUsagePauseThresholdPercent,
 	)
 	return i, err
 }
@@ -1993,7 +2000,7 @@ func (q *Queries) ListChannelTestLogsByChannel(ctx context.Context, arg ListChan
 }
 
 const listChannelsByProvider = `-- name: ListChannelsByProvider :many
-SELECT id, provider_id, name, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast, protocols, supply_form, account_default_concurrency, proxy_id
+SELECT id, provider_id, name, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast, protocols, supply_form, account_default_concurrency, proxy_id, account_usage_pause_threshold_percent
 FROM channels
 WHERE provider_id = $1
 ORDER BY priority, id
@@ -2038,6 +2045,7 @@ func (q *Queries) ListChannelsByProvider(ctx context.Context, providerID int64) 
 			&i.SupplyForm,
 			&i.AccountDefaultConcurrency,
 			&i.ProxyID,
+			&i.AccountUsagePauseThresholdPercent,
 		); err != nil {
 			return nil, err
 		}
@@ -2050,7 +2058,7 @@ func (q *Queries) ListChannelsByProvider(ctx context.Context, providerID int64) 
 }
 
 const listChannelsForRuntimeControlRestore = `-- name: ListChannelsForRuntimeControlRestore :many
-SELECT id, provider_id, name, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast, protocols, supply_form, account_default_concurrency, proxy_id
+SELECT id, provider_id, name, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast, protocols, supply_form, account_default_concurrency, proxy_id, account_usage_pause_threshold_percent
 FROM channels
 ORDER BY id
 `
@@ -2093,6 +2101,7 @@ func (q *Queries) ListChannelsForRuntimeControlRestore(ctx context.Context) ([]C
 			&i.SupplyForm,
 			&i.AccountDefaultConcurrency,
 			&i.ProxyID,
+			&i.AccountUsagePauseThresholdPercent,
 		); err != nil {
 			return nil, err
 		}
@@ -2112,7 +2121,7 @@ SELECT
     c.concurrency_limit,
     c.response_timeout_ms, c.first_token_timeout_ms,
     c.sticky_enabled, c.sticky_ttl_ms,
-    c.supply_form, c.account_default_concurrency,
+    c.supply_form, c.account_default_concurrency, c.account_usage_pause_threshold_percent,
     c.last_tested_at, c.last_test_ok, c.last_test_latency_ms, c.last_test_error, c.credential_valid,
     c.config_revision, c.capacity_revision,
     p.name AS provider_name, p.status AS provider_status,
@@ -2140,36 +2149,37 @@ type ListChannelsPageParams struct {
 }
 
 type ListChannelsPageRow struct {
-	ID                        int64
-	ProviderID                int64
-	Name                      string
-	Protocols                 []string
-	AdapterKey                string
-	Origin                    string
-	Credential                string
-	Status                    string
-	Priority                  int32
-	CreatedAt                 pgtype.Timestamptz
-	UpdatedAt                 pgtype.Timestamptz
-	SupportsOpenaiFast        bool
-	ConcurrencyLimit          pgtype.Int4
-	ResponseTimeoutMs         pgtype.Int4
-	FirstTokenTimeoutMs       pgtype.Int4
-	StickyEnabled             pgtype.Bool
-	StickyTtlMs               pgtype.Int8
-	SupplyForm                string
-	AccountDefaultConcurrency pgtype.Int4
-	LastTestedAt              pgtype.Timestamptz
-	LastTestOk                pgtype.Bool
-	LastTestLatencyMs         pgtype.Int4
-	LastTestError             pgtype.Text
-	CredentialValid           bool
-	ConfigRevision            int64
-	CapacityRevision          int64
-	ProviderName              string
-	ProviderStatus            string
-	ProxyID                   pgtype.Int8
-	ProxyName                 pgtype.Text
+	ID                                int64
+	ProviderID                        int64
+	Name                              string
+	Protocols                         []string
+	AdapterKey                        string
+	Origin                            string
+	Credential                        string
+	Status                            string
+	Priority                          int32
+	CreatedAt                         pgtype.Timestamptz
+	UpdatedAt                         pgtype.Timestamptz
+	SupportsOpenaiFast                bool
+	ConcurrencyLimit                  pgtype.Int4
+	ResponseTimeoutMs                 pgtype.Int4
+	FirstTokenTimeoutMs               pgtype.Int4
+	StickyEnabled                     pgtype.Bool
+	StickyTtlMs                       pgtype.Int8
+	SupplyForm                        string
+	AccountDefaultConcurrency         pgtype.Int4
+	AccountUsagePauseThresholdPercent pgtype.Int4
+	LastTestedAt                      pgtype.Timestamptz
+	LastTestOk                        pgtype.Bool
+	LastTestLatencyMs                 pgtype.Int4
+	LastTestError                     pgtype.Text
+	CredentialValid                   bool
+	ConfigRevision                    int64
+	CapacityRevision                  int64
+	ProviderName                      string
+	ProviderStatus                    string
+	ProxyID                           pgtype.Int8
+	ProxyName                         pgtype.Text
 }
 
 // ListChannelsPage 按 provider/状态/关键字过滤后分页列出 channel，连带 provider 名称；过滤项为 NULL 时不过滤。
@@ -2208,6 +2218,7 @@ func (q *Queries) ListChannelsPage(ctx context.Context, arg ListChannelsPagePara
 			&i.StickyTtlMs,
 			&i.SupplyForm,
 			&i.AccountDefaultConcurrency,
+			&i.AccountUsagePauseThresholdPercent,
 			&i.LastTestedAt,
 			&i.LastTestOk,
 			&i.LastTestLatencyMs,
@@ -2469,7 +2480,7 @@ SET name = $1,
     ),
     updated_at = now()
 WHERE id = $10
-RETURNING id, provider_id, name, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast, protocols, supply_form, account_default_concurrency, proxy_id
+RETURNING id, provider_id, name, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast, protocols, supply_form, account_default_concurrency, proxy_id, account_usage_pause_threshold_percent
 `
 
 type UpdateChannelParams struct {
@@ -2529,6 +2540,7 @@ func (q *Queries) UpdateChannel(ctx context.Context, arg UpdateChannelParams) (C
 		&i.SupplyForm,
 		&i.AccountDefaultConcurrency,
 		&i.ProxyID,
+		&i.AccountUsagePauseThresholdPercent,
 	)
 	return i, err
 }
@@ -2539,7 +2551,7 @@ SET account_default_concurrency = $1,
     config_revision = config_revision + 1,
     updated_at = now()
 WHERE id = $2
-RETURNING id, provider_id, name, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast, protocols, supply_form, account_default_concurrency, proxy_id
+RETURNING id, provider_id, name, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast, protocols, supply_form, account_default_concurrency, proxy_id, account_usage_pause_threshold_percent
 `
 
 type UpdateChannelAccountDefaultConcurrencyParams struct {
@@ -2580,6 +2592,60 @@ func (q *Queries) UpdateChannelAccountDefaultConcurrency(ctx context.Context, ar
 		&i.SupplyForm,
 		&i.AccountDefaultConcurrency,
 		&i.ProxyID,
+		&i.AccountUsagePauseThresholdPercent,
+	)
+	return i, err
+}
+
+const updateChannelAccountUsagePauseThreshold = `-- name: UpdateChannelAccountUsagePauseThreshold :one
+UPDATE channels
+SET account_usage_pause_threshold_percent = $1,
+    config_revision = config_revision + 1,
+    updated_at = now()
+WHERE id = $2
+RETURNING id, provider_id, name, adapter_key, credential, config_revision, capacity_revision, status, priority, sticky_enabled, sticky_ttl_ms, response_timeout_ms, first_token_timeout_ms, created_at, updated_at, last_tested_at, last_test_ok, last_test_latency_ms, last_test_error, credential_valid, archived_at, concurrency_limit, supports_openai_fast, protocols, supply_form, account_default_concurrency, proxy_id, account_usage_pause_threshold_percent
+`
+
+type UpdateChannelAccountUsagePauseThresholdParams struct {
+	AccountUsagePauseThresholdPercent pgtype.Int4
+	ID                                int64
+}
+
+// UpdateChannelAccountUsagePauseThreshold 修改池型渠道下账号的用量暂停阈值（NULL=继承全局，1~100=覆写，不接受 0）。
+// 候选快照按请求 JOIN channels 读取本列，普通列更新即热生效；bump config_revision 让迟到的检测结果按 CAS 落历史。
+// 调用方随后按快照重算该渠道全部账号的 Redis 暂停标记（展示缓存）。
+func (q *Queries) UpdateChannelAccountUsagePauseThreshold(ctx context.Context, arg UpdateChannelAccountUsagePauseThresholdParams) (Channel, error) {
+	row := q.db.QueryRow(ctx, updateChannelAccountUsagePauseThreshold, arg.AccountUsagePauseThresholdPercent, arg.ID)
+	var i Channel
+	err := row.Scan(
+		&i.ID,
+		&i.ProviderID,
+		&i.Name,
+		&i.AdapterKey,
+		&i.Credential,
+		&i.ConfigRevision,
+		&i.CapacityRevision,
+		&i.Status,
+		&i.Priority,
+		&i.StickyEnabled,
+		&i.StickyTtlMs,
+		&i.ResponseTimeoutMs,
+		&i.FirstTokenTimeoutMs,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.LastTestedAt,
+		&i.LastTestOk,
+		&i.LastTestLatencyMs,
+		&i.LastTestError,
+		&i.CredentialValid,
+		&i.ArchivedAt,
+		&i.ConcurrencyLimit,
+		&i.SupportsOpenaiFast,
+		&i.Protocols,
+		&i.SupplyForm,
+		&i.AccountDefaultConcurrency,
+		&i.ProxyID,
+		&i.AccountUsagePauseThresholdPercent,
 	)
 	return i, err
 }

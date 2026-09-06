@@ -155,7 +155,7 @@ func NewWorkerServerApp(ctx context.Context, deps WorkerServerAppDeps) (*WorkerS
 	channelModelInventoryService.WithAccountResolver(probeIdentity)
 	// 验证成功回填账号观测（水位 + LRU），与请求路径同一 Recorder。
 	probeHealth := subscriptionhealth.NewRecorder(queries, permitStore, deps.Logger, 0).
-		WithThresholdProvider(func(ctx context.Context) float64 {
+		WithThresholdProvider(func(ctx context.Context) int32 {
 			return appsettings.GatewayAccountUsagePauseThreshold(ctx, settingsStore)
 		})
 	channelTestService.WithAccountHealth(probeHealth)

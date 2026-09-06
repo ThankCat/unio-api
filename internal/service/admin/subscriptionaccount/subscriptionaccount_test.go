@@ -14,6 +14,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
+	subscriptionhealth "github.com/ThankCat/unio-gateway/internal/service/subscription/health"
 )
 
 // fakeQueries 是 Queries 的可配置替身：只实现用例路径需要的查询，其余返回零值。
@@ -28,6 +29,8 @@ type fakeQueries struct {
 	deleted      []int64
 	ledgerParams sqlc.AdminCreateSubscriptionLedgerEntryParams
 	proxyErr     error
+	// thresholdWrites 记录账号阈值列的写入次数。
+	thresholdWrites int
 }
 
 func (q *fakeQueries) AdminListSubscriptionAccounts(context.Context, sqlc.AdminListSubscriptionAccountsParams) ([]sqlc.AdminListSubscriptionAccountsRow, error) {
@@ -102,6 +105,31 @@ func (q *fakeQueries) AdminChannelAccountsLastFailure24h(context.Context, int64)
 }
 func (q *fakeQueries) AdminChannelAccountsLifetimeStats(context.Context, int64) ([]sqlc.AdminChannelAccountsLifetimeStatsRow, error) {
 	return nil, nil
+}
+func (q *fakeQueries) AdminUpdateSubscriptionAccountUsagePauseThreshold(_ context.Context, arg sqlc.AdminUpdateSubscriptionAccountUsagePauseThresholdParams) (sqlc.SubscriptionAccount, error) {
+	row, ok := q.accounts[arg.ID]
+	if !ok {
+		return sqlc.SubscriptionAccount{}, pgx.ErrNoRows
+	}
+	row.UsagePauseThresholdPercent = arg.UsagePauseThresholdPercent
+	row.ConfigRevision++
+	q.accounts[arg.ID] = row
+	q.thresholdWrites++
+	return row, nil
+}
+
+// fakeReconciler 记录账号阈值变更后触发的重算。
+type fakeReconciler struct {
+	accountIDs []int64
+	err        error
+}
+
+func (r *fakeReconciler) ReconcileAccount(_ context.Context, accountID int64) (subscriptionhealth.ReconcileResult, error) {
+	r.accountIDs = append(r.accountIDs, accountID)
+	if r.err != nil {
+		return subscriptionhealth.ReconcileResult{}, r.err
+	}
+	return subscriptionhealth.ReconcileResult{Scanned: 1, Resumed: 1}, nil
 }
 
 // fakePublisher 记录发布请求；不执行 BusinessCommit（那需要真实 pgx.Tx），只验证两阶段发布的请求形状。
@@ -398,5 +426,99 @@ func TestCreateLedgerValidatesPeriodAndNormalizesCurrency(t *testing.T) {
 	}
 	if q.ledgerParams.Currency != "USD" || !q.ledgerParams.Note.Valid || entry.AccountID != 7 {
 		t.Fatalf("ledger params = %+v entry=%+v", q.ledgerParams, entry)
+	}
+}
+
+// 列表视图按三层继承给出生效阈值与来源：账号覆写 > 渠道覆写 > 全局。
+func TestListResolvesEffectiveUsagePauseThreshold(t *testing.T) {
+	q := &fakeQueries{
+		listRows: []sqlc.AdminListSubscriptionAccountsRow{
+			{ID: 1, ChannelID: 3, Status: "enabled", UsagePauseThresholdPercent: pgtype.Int4{Int32: 70, Valid: true}, ChannelUsagePauseThresholdPercent: pgtype.Int4{Int32: 80, Valid: true}},
+			{ID: 2, ChannelID: 3, Status: "enabled", ChannelUsagePauseThresholdPercent: pgtype.Int4{Int32: 80, Valid: true}},
+			{ID: 3, ChannelID: 3, Status: "enabled"},
+		},
+		counts: sqlc.AdminCountAccountsByChannelRow{Total: 3, Enabled: 3},
+	}
+	svc := newTestService(q, &fakePublisher{}, nil).
+		WithUsagePausePolicy(func(context.Context) int32 { return 95 }, nil)
+
+	result, err := svc.List(context.Background(), 3, "")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	want := []struct {
+		percent int32
+		source  string
+	}{{70, "account"}, {80, "channel"}, {95, "global"}}
+	for index, expect := range want {
+		got := result.Accounts[index]
+		if got.EffectiveUsagePauseThresholdPercent != expect.percent || got.UsagePauseThresholdSource != expect.source {
+			t.Fatalf("account %d effective = %d/%s, want %d/%s", got.ID, got.EffectiveUsagePauseThresholdPercent, got.UsagePauseThresholdSource, expect.percent, expect.source)
+		}
+	}
+	if result.Accounts[0].UsagePauseThresholdPercent == nil || *result.Accounts[0].UsagePauseThresholdPercent != 70 {
+		t.Fatalf("account override must be surfaced, got %v", result.Accounts[0].UsagePauseThresholdPercent)
+	}
+	if result.Accounts[1].UsagePauseThresholdPercent != nil {
+		t.Fatalf("inherited account must report nil override, got %d", *result.Accounts[1].UsagePauseThresholdPercent)
+	}
+}
+
+// 账号阈值独立接口：校验值域、普通列更新（不经容量发布）、随后只重算该账号；显式 nil 回到继承。
+func TestUpdateUsagePauseThresholdWritesAndReconcilesAccountOnly(t *testing.T) {
+	q := &fakeQueries{accounts: map[int64]sqlc.SubscriptionAccount{1: account(1, 3, "enabled")}, channel: poolChannel(3)}
+	q.channel.AccountUsagePauseThresholdPercent = pgtype.Int4{Int32: 80, Valid: true}
+	publisher := &fakePublisher{}
+	reconciler := &fakeReconciler{}
+	svc := newTestService(q, publisher, nil).
+		WithUsagePausePolicy(func(context.Context) int32 { return 90 }, reconciler)
+
+	for _, bad := range []int32{0, -1, 101} {
+		if _, err := svc.UpdateUsagePauseThreshold(context.Background(), 1, &bad); failure.CodeOf(err) != failure.CodeAdminInvalidArgument {
+			t.Fatalf("threshold %d must be invalid, got %v", bad, err)
+		}
+	}
+	if _, err := svc.UpdateUsagePauseThreshold(context.Background(), 404, nil); failure.CodeOf(err) != failure.CodeAdminNotFound {
+		t.Fatalf("missing account must be not found, got %v", err)
+	}
+	if q.thresholdWrites != 0 || len(reconciler.accountIDs) != 0 {
+		t.Fatalf("rejected inputs must not write or reconcile: writes=%d reconciles=%v", q.thresholdWrites, reconciler.accountIDs)
+	}
+
+	percent := int32(60)
+	result, err := svc.UpdateUsagePauseThreshold(context.Background(), 1, &percent)
+	if err != nil {
+		t.Fatalf("update threshold: %v", err)
+	}
+	if q.thresholdWrites != 1 || len(publisher.requests) != 0 {
+		t.Fatalf("threshold must be a plain column update without capacity publish: writes=%d publishes=%d", q.thresholdWrites, len(publisher.requests))
+	}
+	if len(reconciler.accountIDs) != 1 || reconciler.accountIDs[0] != 1 {
+		t.Fatalf("reconcile must target account 1 only, got %v", reconciler.accountIDs)
+	}
+	if result.RuntimeRefresh == nil || result.RuntimeRefresh.Scanned != 1 || result.RuntimeRefreshError != "" {
+		t.Fatalf("runtime refresh must be reported, got %+v / %q", result.RuntimeRefresh, result.RuntimeRefreshError)
+	}
+	if result.Account.UsagePauseThresholdPercent == nil || *result.Account.UsagePauseThresholdPercent != 60 ||
+		result.Account.EffectiveUsagePauseThresholdPercent != 60 || result.Account.UsagePauseThresholdSource != "account" {
+		t.Fatalf("account view must reflect the override: %+v", result.Account)
+	}
+
+	cleared, err := svc.UpdateUsagePauseThreshold(context.Background(), 1, nil)
+	if err != nil {
+		t.Fatalf("clear threshold: %v", err)
+	}
+	if cleared.Account.UsagePauseThresholdPercent != nil || cleared.Account.EffectiveUsagePauseThresholdPercent != 80 || cleared.Account.UsagePauseThresholdSource != "channel" {
+		t.Fatalf("cleared account must inherit the channel threshold: %+v", cleared.Account)
+	}
+
+	// 重算失败不回滚阈值：结果里报错，账号视图照常返回。
+	reconciler.err = errors.New("redis down")
+	failed, err := svc.UpdateUsagePauseThreshold(context.Background(), 1, &percent)
+	if err != nil {
+		t.Fatalf("update with failing reconcile must still succeed: %v", err)
+	}
+	if failed.RuntimeRefresh != nil || failed.RuntimeRefreshError == "" {
+		t.Fatalf("reconcile failure must be surfaced, got %+v / %q", failed.RuntimeRefresh, failed.RuntimeRefreshError)
 	}
 }

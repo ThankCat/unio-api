@@ -3,7 +3,9 @@ package lifecycle
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/ThankCat/unio-gateway/internal/core/channel"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
@@ -57,6 +59,57 @@ func accountRow(id int64, limit int32) sqlc.ListSchedulableAccountsByChannelRow 
 	}
 }
 
+// poolTestNow 是账号池单测的冻结时钟（带 500ms 小数，便于校验毫秒级恢复时刻）。
+var poolTestNow = time.Unix(1_700_000_000, 500*int64(time.Millisecond))
+
+// withUsageSnapshot 给账号行挂上 5h 窗口快照（水位 + 重置时刻）。
+func withUsageSnapshot(row sqlc.ListSchedulableAccountsByChannelRow, usedPercent float64, resetAt time.Time) sqlc.ListSchedulableAccountsByChannelRow {
+	row.UsageSnapshot = []byte(fmt.Sprintf(
+		`{"primary":{"used_percent":%g,"window_minutes":300,"reset_at":%d},"captured_at":"2026-09-06T07:12:31Z"}`,
+		usedPercent, resetAt.Unix(),
+	))
+	return row
+}
+
+func withAccountThreshold(row sqlc.ListSchedulableAccountsByChannelRow, percent int32) sqlc.ListSchedulableAccountsByChannelRow {
+	row.UsagePauseThresholdPercent = pgtype.Int4{Int32: percent, Valid: true}
+	return row
+}
+
+func withChannelThreshold(row sqlc.ListSchedulableAccountsByChannelRow, percent int32) sqlc.ListSchedulableAccountsByChannelRow {
+	row.AccountUsagePauseThresholdPercent = pgtype.Int4{Int32: percent, Valid: true}
+	return row
+}
+
+// preparePool 用冻结时钟与给定全局阈值准备单个池型候选，返回 plan 与错误。
+func preparePool(
+	t *testing.T,
+	rows []sqlc.ListSchedulableAccountsByChannelRow,
+	runtimes map[int64]breakerstore.AccountRuntime,
+	globalThreshold int32,
+) (CandidatePlan, error) {
+	t.Helper()
+	executor := NewExecutor(
+		candidateCapabilityRegistry{allowed: map[int64]bool{7: true}},
+		WithAccountPool(
+			fakeAccountPoolStore{rows: map[int64][]sqlc.ListSchedulableAccountsByChannelRow{7: rows}},
+			fakeAccountRuntimeStore{runtimes: runtimes},
+		),
+		WithAccountUsagePauseThreshold(func(context.Context) int32 { return globalThreshold }),
+	)
+	executor.now = func() time.Time { return poolTestNow }
+	ctx := requestadmission.ContextWithRequestSession(context.Background(), &candidateSnapshotSession{
+		result: breakerstore.SnapshotManyResult{Candidates: []breakerstore.CandidateSnapshot{
+			{Status: breakerstore.CandidateSnapshotCurrent},
+		}},
+	})
+	return executor.PrepareCandidates(ctx, PrepareCandidatesParams{
+		Protocol:            "openai",
+		Candidates:          []routing.ChatRouteCandidate{poolRoute(7)},
+		EstimateInputTokens: func(context.Context, routing.ChatRouteCandidate) (int64, error) { return 1, nil },
+	})
+}
+
 func poolRoute(channelID int64) routing.ChatRouteCandidate {
 	return routing.ChatRouteCandidate{
 		AdapterKey: "codex",
@@ -107,30 +160,16 @@ func TestPrepareCandidatesUsesPoolCapacityForPoolChannel(t *testing.T) {
 
 // 池内账号全部处于运行态封锁时，候选按「到点自愈」处理：整池不可用即渠道级 429，
 // Retry-After 取最早恢复时刻。它与 breaker open 是两个事实，不能混成一个。
+// 用量暂停按账号快照实时派生：账号 2 水位 95% ≥ 全局阈值 90，暂停到 3 秒后的窗口重置（距今 2500ms）。
 func TestPrepareCandidatesTreatsFullyCooledPoolAsRateLimited(t *testing.T) {
-	executor := NewExecutor(
-		candidateCapabilityRegistry{allowed: map[int64]bool{7: true}},
-		WithAccountPool(
-			fakeAccountPoolStore{rows: map[int64][]sqlc.ListSchedulableAccountsByChannelRow{
-				7: {accountRow(1, 4), accountRow(2, 4)},
-			}},
-			fakeAccountRuntimeStore{runtimes: map[int64]breakerstore.AccountRuntime{
-				1: {CooldownRemainingMs: 9_000},
-				2: {UsagePauseRemainingMs: 2_500},
-			}},
-		),
+	plan, err := preparePool(t,
+		[]sqlc.ListSchedulableAccountsByChannelRow{
+			accountRow(1, 4),
+			withUsageSnapshot(accountRow(2, 4), 95, poolTestNow.Add(3*time.Second)),
+		},
+		map[int64]breakerstore.AccountRuntime{1: {CooldownRemainingMs: 9_000}},
+		90,
 	)
-	ctx := requestadmission.ContextWithRequestSession(context.Background(), &candidateSnapshotSession{
-		result: breakerstore.SnapshotManyResult{Candidates: []breakerstore.CandidateSnapshot{
-			{Status: breakerstore.CandidateSnapshotCurrent},
-		}},
-	})
-
-	plan, err := executor.PrepareCandidates(ctx, PrepareCandidatesParams{
-		Protocol:            "openai",
-		Candidates:          []routing.ChatRouteCandidate{poolRoute(7)},
-		EstimateInputTokens: func(context.Context, routing.ChatRouteCandidate) (int64, error) { return 1, nil },
-	})
 	if failure.CodeOf(err) != failure.CodeGatewayChannelRateLimited {
 		t.Fatalf("fully cooled pool must surface as channel rate limit, got %v", err)
 	}
@@ -139,6 +178,91 @@ func TestPrepareCandidatesTreatsFullyCooledPoolAsRateLimited(t *testing.T) {
 	}
 	if len(plan.Excluded) != 1 || plan.Excluded[0].Reason != accountPoolReasonCooldown {
 		t.Fatalf("exclusion must name the account pool cooldown, got %+v", plan.Excluded)
+	}
+}
+
+// Redis 里残留的 usage_pause 标记（旧阈值写下）不再参与拦截：阈值放宽到 100 后，
+// 90% 水位的账号对下一次请求立刻可调度，不依赖任何刷新动作。
+func TestPrepareCandidatesIgnoresStaleRedisUsagePauseMarker(t *testing.T) {
+	plan, err := preparePool(t,
+		[]sqlc.ListSchedulableAccountsByChannelRow{
+			withUsageSnapshot(accountRow(1, 4), 90, poolTestNow.Add(2*time.Hour)),
+		},
+		map[int64]breakerstore.AccountRuntime{1: {UsagePauseRemainingMs: 7_200_000}},
+		100,
+	)
+	if err != nil {
+		t.Fatalf("account under the raised threshold must be schedulable, got %v", err)
+	}
+	if len(plan.Candidates) != 1 || plan.Candidates[0].AccountPool == nil {
+		t.Fatalf("pool candidate must be prepared, got %+v", plan.Candidates)
+	}
+	if got := plan.Candidates[0].AccountPool.Members[0].UsagePauseRemainingMs; got != 0 {
+		t.Fatalf("derived usage pause must override the stale Redis marker, got %d", got)
+	}
+}
+
+// 三层继承：账号阈值 > 渠道阈值 > 全局。同一份 90% 快照在不同层级的阈值下得出不同判定。
+func TestPrepareCandidatesResolvesUsagePauseThresholdPerAccount(t *testing.T) {
+	resetAt := poolTestNow.Add(time.Hour)
+	cases := []struct {
+		name       string
+		row        sqlc.ListSchedulableAccountsByChannelRow
+		global     int32
+		wantPaused bool
+	}{
+		{
+			name:       "全部继承全局 90 → 暂停",
+			row:        withUsageSnapshot(accountRow(1, 4), 90, resetAt),
+			global:     90,
+			wantPaused: true,
+		},
+		{
+			name:       "渠道阈值 95 覆盖全局 90 → 不暂停",
+			row:        withChannelThreshold(withUsageSnapshot(accountRow(1, 4), 90, resetAt), 95),
+			global:     90,
+			wantPaused: false,
+		},
+		{
+			name:       "账号阈值 80 覆盖渠道 95 → 暂停",
+			row:        withAccountThreshold(withChannelThreshold(withUsageSnapshot(accountRow(1, 4), 90, resetAt), 95), 80),
+			global:     90,
+			wantPaused: true,
+		},
+		{
+			name:       "无快照的账号不暂停",
+			row:        accountRow(1, 4),
+			global:     1,
+			wantPaused: false,
+		},
+		{
+			name:       "窗口已重置的高水位不暂停",
+			row:        withUsageSnapshot(accountRow(1, 4), 100, poolTestNow.Add(-time.Second)),
+			global:     90,
+			wantPaused: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			plan, err := preparePool(t, []sqlc.ListSchedulableAccountsByChannelRow{tc.row}, nil, tc.global)
+			if tc.wantPaused {
+				if failure.CodeOf(err) != failure.CodeGatewayChannelRateLimited {
+					t.Fatalf("paused account must exclude the pool as rate limited, got %v", err)
+				}
+				// 快照里的 reset_at 是整秒，恢复时刻按整秒起算。
+				wantRetry := time.Unix(resetAt.Unix(), 0).Sub(poolTestNow).Milliseconds()
+				if got := failureInt64Field(err, "retry_after_ms"); got != wantRetry {
+					t.Fatalf("retry_after_ms = %d, want %d (time until window reset)", got, wantRetry)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("account must stay schedulable, got %v", err)
+			}
+			if len(plan.Candidates) != 1 {
+				t.Fatalf("expected the pool candidate to stay available, got %+v", plan.Candidates)
+			}
+		})
 	}
 }
 

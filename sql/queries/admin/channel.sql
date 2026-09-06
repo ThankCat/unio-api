@@ -281,7 +281,7 @@ SELECT
     c.concurrency_limit,
     c.response_timeout_ms, c.first_token_timeout_ms,
     c.sticky_enabled, c.sticky_ttl_ms,
-    c.supply_form, c.account_default_concurrency,
+    c.supply_form, c.account_default_concurrency, c.account_usage_pause_threshold_percent,
     c.last_tested_at, c.last_test_ok, c.last_test_latency_ms, c.last_test_error, c.credential_valid,
     c.config_revision, c.capacity_revision,
     p.name AS provider_name, p.status AS provider_status,
@@ -324,6 +324,17 @@ LIMIT 1;
 -- 候选快照按请求 JOIN channels 读取本列，普通列更新即热生效；bump config_revision 让迟到的检测结果按 CAS 落历史。
 UPDATE channels
 SET account_default_concurrency = sqlc.narg(account_default_concurrency),
+    config_revision = config_revision + 1,
+    updated_at = now()
+WHERE id = sqlc.arg(id)
+RETURNING *;
+
+-- name: UpdateChannelAccountUsagePauseThreshold :one
+-- UpdateChannelAccountUsagePauseThreshold 修改池型渠道下账号的用量暂停阈值（NULL=继承全局，1~100=覆写，不接受 0）。
+-- 候选快照按请求 JOIN channels 读取本列，普通列更新即热生效；bump config_revision 让迟到的检测结果按 CAS 落历史。
+-- 调用方随后按快照重算该渠道全部账号的 Redis 暂停标记（展示缓存）。
+UPDATE channels
+SET account_usage_pause_threshold_percent = sqlc.narg(account_usage_pause_threshold_percent),
     config_revision = config_revision + 1,
     updated_at = now()
 WHERE id = sqlc.arg(id)
@@ -529,7 +540,7 @@ INSERT INTO channels (
     supports_openai_fast,
     response_timeout_ms, first_token_timeout_ms, concurrency_limit,
     sticky_enabled, sticky_ttl_ms,
-    supply_form, account_default_concurrency, proxy_id
+    supply_form, account_default_concurrency, account_usage_pause_threshold_percent, proxy_id
 )
 VALUES (
     sqlc.arg(provider_id), sqlc.arg(name), sqlc.arg(protocols), sqlc.arg(adapter_key),
@@ -537,7 +548,8 @@ VALUES (
     sqlc.arg(supports_openai_fast),
     sqlc.narg(response_timeout_ms), sqlc.narg(first_token_timeout_ms), sqlc.narg(concurrency_limit),
     sqlc.narg(sticky_enabled), sqlc.narg(sticky_ttl_ms),
-    sqlc.arg(supply_form), sqlc.narg(account_default_concurrency), sqlc.narg(proxy_id)
+    sqlc.arg(supply_form), sqlc.narg(account_default_concurrency), sqlc.narg(account_usage_pause_threshold_percent),
+    sqlc.narg(proxy_id)
 )
 RETURNING *;
 

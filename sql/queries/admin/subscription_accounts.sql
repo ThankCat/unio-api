@@ -28,8 +28,11 @@ SELECT
     apx.status AS proxy_status,
     a.fingerprint_mode,
     a.response_timeout_ms,
-    a.first_token_timeout_ms
+    a.first_token_timeout_ms,
+    a.usage_pause_threshold_percent,
+    c.account_usage_pause_threshold_percent AS channel_usage_pause_threshold_percent
 FROM subscription_accounts a
+JOIN channels c ON c.id = a.channel_id
 LEFT JOIN proxies apx ON apx.id = a.proxy_id
 WHERE a.channel_id = $1
   AND (sqlc.narg('status')::text IS NULL OR a.status = sqlc.narg('status')::text)
@@ -76,6 +79,35 @@ SET display_name = $2,
     updated_at = now()
 WHERE id = $1
 RETURNING *;
+
+-- name: AdminUpdateSubscriptionAccountUsagePauseThreshold :one
+-- AdminUpdateSubscriptionAccountUsagePauseThreshold 单独修改账号用量暂停阈值（NULL 继承渠道，1~100 覆写，不接受 0）。
+-- 候选快照每请求读库，普通列更新即热生效，不经渠道容量 control 发布；bump config_revision 让审计能定位
+-- 「这次是按哪版配置放行的」。调用方随后按快照重算该账号的 Redis 暂停标记（展示缓存）。
+UPDATE subscription_accounts
+SET usage_pause_threshold_percent = sqlc.narg(usage_pause_threshold_percent),
+    config_revision = config_revision + 1,
+    updated_at = now()
+WHERE id = sqlc.arg(id)
+RETURNING *;
+
+-- name: AdminListUsagePauseReconcileAccounts :many
+-- AdminListUsagePauseReconcileAccounts 列出需要按阈值重算用量暂停标记的账号：启用中且属于池型渠道，
+-- 带最近用量快照与两层阈值覆写。channel_id / account_id 任一给定即收窄范围（全局阈值变更 → 全量，
+-- 渠道阈值变更 → 该渠道，账号阈值变更 → 该账号）。
+SELECT
+    a.id,
+    a.channel_id,
+    a.usage_snapshot,
+    a.usage_pause_threshold_percent,
+    c.account_usage_pause_threshold_percent AS channel_usage_pause_threshold_percent
+FROM subscription_accounts a
+JOIN channels c ON c.id = a.channel_id
+WHERE a.status = 'enabled'
+  AND c.supply_form = 'pool'
+  AND (sqlc.narg('channel_id')::bigint IS NULL OR a.channel_id = sqlc.narg('channel_id')::bigint)
+  AND (sqlc.narg('account_id')::bigint IS NULL OR a.id = sqlc.narg('account_id')::bigint)
+ORDER BY a.channel_id, a.id;
 
 -- name: AdminSetSubscriptionAccountFingerprint :one
 -- AdminSetSubscriptionAccountFingerprint 切换账号指纹收敛档位。种子只在首次需要时生成（已有则保留，
