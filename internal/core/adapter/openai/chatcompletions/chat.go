@@ -35,12 +35,9 @@ func (a *Adapter) SetProxyClientResolver(clientFor func(proxyURL string) *http.C
 	return a
 }
 
-// httpClient 出站 client 选择：账号代理 → 渠道代理 → 直连。
+// httpClient 出站 client 选择：按 Runtime.OutboundProxyURL 的回退链取代理，缺省直连。
 func (a *Adapter) httpClient(ch channel.Runtime) *http.Client {
-	proxy := ch.Account.ProxyURL
-	if proxy == "" {
-		proxy = ch.ProxyURL
-	}
+	proxy := ch.OutboundProxyURL()
 	if proxy != "" && a.proxyClientFor != nil {
 		if client := a.proxyClientFor(proxy); client != nil {
 			return client

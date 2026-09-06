@@ -194,12 +194,9 @@ func (l *Lister) ListModels(ctx context.Context, runtime channel.Runtime) (adapt
 	return adapter.ModelListResult{}, protocolError(errors.New("upstream pagination exceeds page limit"))
 }
 
-// httpClient 出站 client 选择：账号代理 → 渠道代理 → 直连（与 adapter 出站同一回退链）。
+// httpClient 出站 client 选择：按 Runtime.OutboundProxyURL 的回退链取代理（与 adapter 出站同一决策点）。
 func (l *Lister) httpClient(runtime channel.Runtime) *http.Client {
-	proxy := runtime.Account.ProxyURL
-	if proxy == "" {
-		proxy = runtime.ProxyURL
-	}
+	proxy := runtime.OutboundProxyURL()
 	if proxy != "" && l.proxyClientFor != nil {
 		if client := l.proxyClientFor(proxy); client != nil {
 			return client

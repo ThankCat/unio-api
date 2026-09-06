@@ -3,16 +3,25 @@
 // 订阅账号可各自绑定出口代理；transport 按代理 URL 为键缓存复用，避免每请求新建连接池。
 // adapter 不自管 client 池——bootstrap 用本包构造解析器注入，导入、令牌刷新、正式请求
 // 三条路径共用同一份缓存，保证同一个号始终从同一出口访问上游（风控一致性）。
+// 「账号代理 → 渠道代理 → 直连」的回退决策不在本包：由 channel.Runtime.OutboundProxyURL 统一给出。
 package proxyclient
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
 	"sync"
 	"time"
 )
 
+// ErrInvalidProxyURL 表示运行期拿到的代理 URL 无法解析为「scheme://host」形态。
+// 错误文本固定不回显 URL 本身（代理 URL 可能携带 userinfo 凭据）。
+var ErrInvalidProxyURL = errors.New("proxyclient: invalid proxy url")
+
 // Resolver 按代理 URL 解析 HTTP client。空串返回直连缺省 client。
+//
+// 缓存键空间 = 曾经配置过的代理 URL 集合，随代理实体数有界增长；条目不主动淘汰
+// （代理删除/禁用后该 URL 不再被任何账号或渠道引用，条目仅占用少量空闲连接池）。
 type Resolver struct {
 	mu       sync.RWMutex
 	direct   *http.Client
@@ -42,8 +51,11 @@ func NewResolver(direct *http.Client) *Resolver {
 	}
 }
 
-// ClientFor 返回该代理 URL 的 client；解析失败回退直连（错误在调用方的请求路径上自然暴露，
-// 这里不吞：非法代理 URL 会在导入/编辑入口被校验拒绝，运行期出现即为数据异常，直连是最保守降级）。
+// ClientFor 返回该代理 URL 的 client。
+//
+// 解析失败 fail-closed：返回一个所有请求都以 ErrInvalidProxyURL 失败的 client，而不是回退直连。
+// 号池场景「同号同出口」是风控约束，静默直连恰恰破坏它；非法代理 URL 会在导入/编辑入口被校验拒绝，
+// 运行期出现即为数据异常，让请求明确失败比换出口访问上游更安全。
 func (r *Resolver) ClientFor(proxyURL string) *http.Client {
 	if proxyURL == "" {
 		return r.direct
@@ -55,15 +67,16 @@ func (r *Resolver) ClientFor(proxyURL string) *http.Client {
 		return client
 	}
 
-	parsed, err := url.Parse(proxyURL)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return r.direct
-	}
-
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if cached, exists := r.byProxy[proxyURL]; exists {
 		return cached
+	}
+	parsed, err := url.Parse(proxyURL)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		failing := &http.Client{Transport: failingTransport{err: ErrInvalidProxyURL}}
+		r.byProxy[proxyURL] = failing
+		return failing
 	}
 	transport := r.template()
 	transport.Proxy = http.ProxyURL(parsed)
@@ -74,11 +87,9 @@ func (r *Resolver) ClientFor(proxyURL string) *http.Client {
 	return created
 }
 
-// RuntimeProxyURL 执行出站代理回退链：账号代理 → 渠道代理 → 空串（直连）。
-// 三条账号路径与渠道出站（正式请求/检测/发现/验证）统一走这一条决策。
-func RuntimeProxyURL(accountProxy, channelProxy string) string {
-	if accountProxy != "" {
-		return accountProxy
-	}
-	return channelProxy
+// failingTransport 让非法代理 URL 的每次出站都在请求路径上以固定错误失败。
+type failingTransport struct{ err error }
+
+func (t failingTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, t.err
 }

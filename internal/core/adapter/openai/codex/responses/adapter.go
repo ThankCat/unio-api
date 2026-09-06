@@ -59,12 +59,8 @@ func NewAdapter(client *http.Client, clientFor func(proxyURL string) *http.Clien
 	}
 	if clientFor != nil {
 		wire.ClientFor = func(ch channel.Runtime) *http.Client {
-			// 出站代理回退链：账号代理 → 渠道代理 → 直连（clientFor("") 返回缺省 client）。
-			proxy := ch.Account.ProxyURL
-			if proxy == "" {
-				proxy = ch.ProxyURL
-			}
-			return clientFor(proxy)
+			// 出站代理回退链由 Runtime.OutboundProxyURL 决定（clientFor("") 返回缺省 client）。
+			return clientFor(ch.OutboundProxyURL())
 		}
 	}
 	return openairesponses.NewAdapterWithWire(client, wire)

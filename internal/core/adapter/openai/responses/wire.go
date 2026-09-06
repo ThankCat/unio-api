@@ -109,7 +109,7 @@ func (a *Adapter) compactPath() string {
 }
 
 // httpClient 返回本次调用应使用的 HTTP client。
-// wire.ClientFor（codex：账号代理→渠道代理）优先；无 wire 钩子时按渠道代理选（proxyClientFor 注入），
+// wire.ClientFor 优先；无 wire 钩子时按 Runtime.OutboundProxyURL 的回退链选（proxyClientFor 注入），
 // 都缺省回构造时的直连 client。
 func (a *Adapter) httpClient(ch channel.Runtime) *http.Client {
 	if a.wire.ClientFor != nil {
@@ -117,8 +117,8 @@ func (a *Adapter) httpClient(ch channel.Runtime) *http.Client {
 			return client
 		}
 	}
-	if a.proxyClientFor != nil && ch.ProxyURL != "" {
-		if client := a.proxyClientFor(ch.ProxyURL); client != nil {
+	if proxy := ch.OutboundProxyURL(); proxy != "" && a.proxyClientFor != nil {
+		if client := a.proxyClientFor(proxy); client != nil {
 			return client
 		}
 	}

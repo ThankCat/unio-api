@@ -39,13 +39,23 @@ type Runtime struct {
 	ProviderSlug string
 
 	// ProxyURL 是渠道级出站代理（proxies 实体，enabled 才注入；空串直连）。
-	// 出站 client 选择回退链：Account.ProxyURL → ProxyURL → 默认直连 client。
+	// 出站 client 选择回退链见 OutboundProxyURL。
 	ProxyURL string
 
 	// Account 是池型渠道本次出站冻结的订阅账号身份（credential 型恒为零值）。
 	// 由 lifecycle 在 permit 固化后填充：APIKey 换成账号 access token，本结构补齐
 	// 上游账号标识与出口代理。adapter 对号池无感知——它只读 Runtime 上的事实。
 	Account AccountIdentity
+}
+
+// OutboundProxyURL 执行出站代理回退链：账号代理 → 渠道代理 → 空串（直连）。
+// 全部 adapter 的正式请求以及检测/发现/验证出站统一以此为唯一决策点，
+// 保证同一个号始终从同一出口访问上游（风控一致性）。
+func (r Runtime) OutboundProxyURL() string {
+	if r.Account.ProxyURL != "" {
+		return r.Account.ProxyURL
+	}
+	return r.ProxyURL
 }
 
 // FingerprintMode 是账号级指纹收敛档位（subscription_accounts.fingerprint_mode）。

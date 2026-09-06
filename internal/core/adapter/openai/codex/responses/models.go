@@ -71,7 +71,7 @@ func (l *ModelLister) ListModels(ctx context.Context, runtime channel.Runtime) (
 
 	client := l.client
 	if l.clientFor != nil {
-		if resolved := l.clientFor(runtime.Account.ProxyURL); resolved != nil {
+		if resolved := l.clientFor(runtime.OutboundProxyURL()); resolved != nil {
 			client = resolved
 		}
 	}
