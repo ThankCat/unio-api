@@ -421,8 +421,8 @@ type ModelRoutingSelectionStatsRow struct {
 
 // 以下三个聚合共用同一个窗口口径：按 requested_model_id（本表冗余列，不必 JOIN
 // request_records）加 created_at 范围，命中 idx_routing_decision_traces_model_created。
-// 只统计 trace_status='complete'：partial 是进行中或进程崩溃遗留，payload 不完整；
-// legacy_sampled 是改造前的采样行，schema 不同。
+// 只统计 trace_status='complete'：partial / legacy_sampled 是历史兼容位（改造前的进程遗留与旧采样行），
+// 当前从零建库的部署不会再写出这两种状态，只是 CHECK 约束仍允许其存在。
 // ModelRoutingSelectionStats 统计流量最终落在哪条渠道。
 // selected_channel_id 为 NULL 表示这次选路没能选出渠道（无可用候选等），单独归一行。
 func (q *Queries) ModelRoutingSelectionStats(ctx context.Context, arg ModelRoutingSelectionStatsParams) ([]ModelRoutingSelectionStatsRow, error) {
@@ -878,9 +878,9 @@ type UpsertRoutingDecisionTraceParams struct {
 	SelectedAccountID     pgtype.Int8
 }
 
-// 每个进入路由规划的请求恰好一条 trace：规划开始写 partial，生命周期结束幂等升级为 complete（§13.1）。
-// partial 不得覆盖已有的 complete：进程异常留下的 partial 是有意义的「尚未收口」，
-// 但一条已经收口的 trace 不能被后续 partial 写回退。
+// 每个进入路由规划的请求恰好一条 trace：生命周期结束时以 complete 一次写入（§13.1）；
+// 规划期不再落 partial 行（避免每请求两次全量 JSONB 写）。保留 partial 不覆盖 complete 的守卫：
+// 历史遗留的 partial 行与任何回退写都不能把已收口的 trace 写回去。
 func (q *Queries) UpsertRoutingDecisionTrace(ctx context.Context, arg UpsertRoutingDecisionTraceParams) error {
 	_, err := q.db.Exec(ctx, upsertRoutingDecisionTrace,
 		arg.RequestRecordID,

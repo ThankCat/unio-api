@@ -1,7 +1,7 @@
 -- name: UpsertRoutingDecisionTrace :exec
--- 每个进入路由规划的请求恰好一条 trace：规划开始写 partial，生命周期结束幂等升级为 complete（§13.1）。
--- partial 不得覆盖已有的 complete：进程异常留下的 partial 是有意义的「尚未收口」，
--- 但一条已经收口的 trace 不能被后续 partial 写回退。
+-- 每个进入路由规划的请求恰好一条 trace：生命周期结束时以 complete 一次写入（§13.1）；
+-- 规划期不再落 partial 行（避免每请求两次全量 JSONB 写）。保留 partial 不覆盖 complete 的守卫：
+-- 历史遗留的 partial 行与任何回退写都不能把已收口的 trace 写回去。
 INSERT INTO routing_decision_traces (
     request_record_id, mode, requested_model_id, protocol, endpoint,
     pool_size, algorithm_version,

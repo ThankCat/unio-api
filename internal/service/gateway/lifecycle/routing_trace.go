@@ -22,15 +22,15 @@ import (
 const routingTraceAlgorithmVersion = "objective_v1"
 
 // routingTraceSchemaVersion 是结构化 trace_payload 的稳定 schema 版本（§13.1）。
-// 0 保留给改造前的 legacy_sampled 行——它们没有结构化 payload，不能伪装成完整 trace。
+// 0 是历史兼容位：改造前的 legacy_sampled 行没有结构化 payload，从零建库的部署不会出现。
 const routingTraceSchemaVersion = 1
 
 // TraceStatus 是 trace 的生命周期状态（§13.1）。
 type TraceStatus string
 
 const (
-	// TraceStatusPartial 请求已进入路由规划但尚未收口。进程异常时保留 partial 是有意义的：
-	// 它区分「请求尚未收口」和「根本没有记录」。
+	// TraceStatusPartial 请求已进入路由规划但尚未收口。它只是规划期输入的默认状态，不再落库：
+	// trace 行在收口时一次写入（见 Record）。库里残留的 partial 行来自改造前的进程异常遗留。
 	TraceStatusPartial TraceStatus = "partial"
 	// TraceStatusComplete 请求生命周期已结束，trace 已幂等收口。
 	TraceStatusComplete TraceStatus = "complete"
@@ -49,6 +49,10 @@ type routingTraceDiagnosticStore interface {
 //
 // 不再对普通成功请求做采样（§13.1）：路由问题恰恰最需要在「看起来正常」的请求上被解释。
 // trace 与请求记录同生命周期（ON DELETE CASCADE），不单独裁剪。
+//
+// 每请求只落库一次：规划期 Record 只写调试日志，收口 complete（或规划期即终态的失败）才写行。
+// 此前规划期先写一行 partial、收口再整体替换 JSONB，等于每请求两次全量 TOAST/WAL 写放大；
+// 代价是进程在请求中途崩溃时不再留下 partial 行——该场景由 request_records 的非终态与孤儿清扫解释。
 type RoutingTraceRecorder struct {
 	store   RoutingTraceStore
 	logger  *zap.Logger
@@ -211,15 +215,17 @@ type traceCandidateScore struct {
 	ModelPermissionRecheckState      string   `json:"model_permission_recheck_state"`
 }
 
+// Record 记录规划期决策。状态为 complete（规划期即终态的路由失败）时立即落库；
+// 否则只输出计划日志，等待 complete 收口时一次写入。
 func (r *RoutingTraceRecorder) Record(ctx context.Context, in RoutingDecisionTraceInput) {
-	r.record(ctx, in, true)
+	r.record(ctx, in, true, in.Status == TraceStatusComplete)
 }
 
 func (r *RoutingTraceRecorder) complete(ctx context.Context, in RoutingDecisionTraceInput) {
-	r.record(ctx, in, false)
+	r.record(ctx, in, false, true)
 }
 
-func (r *RoutingTraceRecorder) record(ctx context.Context, in RoutingDecisionTraceInput, logPlan bool) {
+func (r *RoutingTraceRecorder) record(ctx context.Context, in RoutingDecisionTraceInput, logPlan bool, persist bool) {
 	if r == nil || r.store == nil || in.Request.ID <= 0 {
 		return
 	}
@@ -262,7 +268,8 @@ func (r *RoutingTraceRecorder) record(ctx context.Context, in RoutingDecisionTra
 	}
 	scores := make([]traceCandidateScore, 0, len(in.Plan.Candidates)+len(in.Plan.Excluded))
 	poolSize := in.PoolSize
-	if diagnosticStore, ok := r.store.(routingTraceDiagnosticStore); ok {
+	// 全池排除原因需要一次 ModelRuntimePool 读：只在真正落库时做，规划期日志用候选计划自身即可。
+	if diagnosticStore, ok := r.store.(routingTraceDiagnosticStore); ok && persist {
 		poolRows, poolErr := diagnosticStore.ModelRuntimePool(ctx, sqlc.ModelRuntimePoolParams{
 			ModelID: in.Request.RequestedModelID,
 			AtTime:  pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true},
@@ -384,6 +391,9 @@ func (r *RoutingTraceRecorder) record(ctx context.Context, in RoutingDecisionTra
 			completedFields = append(requestFields.ZapFields(), completedFields...)
 		}
 		logging.Debug(r.logger, "routing", "decision", "routing completed", completedFields...)
+	}
+	if !persist {
+		return
 	}
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
@@ -615,9 +625,9 @@ func finalResultOf(succeeded bool, err error) string {
 	return FinalResultUpstreamFailed
 }
 
-// CompleteRoutingTrace 在请求生命周期结束时把 partial trace 幂等升级为 complete（§13.1）。
+// CompleteRoutingTrace 在请求生命周期结束时以 complete 状态一次写入 trace（§13.1）。
 //
-// 它必须无条件调用（不只在 fallback 时）：否则「一次成功、零 fallback」的普通请求永远停在 partial，
+// 它必须无条件调用（不只在 fallback 时）：否则「一次成功、零 fallback」的普通请求根本没有 trace 行，
 // 而这类请求恰恰是排查「为什么选了这条渠道」最常打开的。
 func (l *RequestLifecycle) CompleteRoutingTrace(
 	ctx context.Context,

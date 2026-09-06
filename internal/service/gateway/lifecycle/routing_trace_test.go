@@ -41,7 +41,8 @@ func (s *fakeRoutingTraceStore) UpsertRoutingDecisionTrace(_ context.Context, in
 	return s.err
 }
 
-func TestRoutingTraceRecorderWritesEveryRequestAndCompletesTrace(t *testing.T) {
+// 规划期只记日志、收口时一次落库：每请求恰好一次 trace 写。
+func TestRoutingTraceRecorderWritesEveryRequestOnceAtCompletion(t *testing.T) {
 	store := &fakeRoutingTraceStore{}
 	recorder := NewRoutingTraceRecorder(store, zap.NewNop())
 	traceMetrics := &fakeRoutingTraceMetrics{}
@@ -53,11 +54,11 @@ func TestRoutingTraceRecorderWritesEveryRequestAndCompletesTrace(t *testing.T) {
 	plan := CandidatePlan{Candidates: []Candidate{{Route: candidateRoute(7, "openai"), Balance: BalanceScore{ConcurrencyScore: 50, FinalScore: 90}}}}
 
 	recorder.Record(context.Background(), RoutingDecisionTraceInput{Request: request, Mode: "balanced", PoolSize: 1, Plan: plan})
-	if len(store.writes) != 1 {
-		t.Fatalf("every planned request must create a trace, writes=%d", len(store.writes))
+	if len(store.writes) != 0 {
+		t.Fatalf("planning must not persist a partial trace row, writes=%d", len(store.writes))
 	}
-	if store.writes[0].TraceStatus != string(TraceStatusPartial) {
-		t.Fatalf("initial trace must be partial: %+v", store.writes[0])
+	if len(traceMetrics.results) != 0 {
+		t.Fatalf("planning must not record trace write metrics: %+v", traceMetrics.results)
 	}
 
 	plan.Candidates = append(plan.Candidates, Candidate{Route: candidateRoute(8, "openai")})
@@ -71,13 +72,13 @@ func TestRoutingTraceRecorderWritesEveryRequestAndCompletesTrace(t *testing.T) {
 			{ChannelID: 7, UpstreamEndpoint: requestlog.UpstreamEndpointChatCompletions},
 		},
 	})
-	if len(store.writes) != 2 {
-		t.Fatalf("completion must upsert the same request trace, writes=%d", len(store.writes))
+	if len(store.writes) != 1 {
+		t.Fatalf("completion must write the request trace exactly once, writes=%d", len(store.writes))
 	}
-	if len(traceMetrics.results) != 2 || traceMetrics.results[0] != "success" || traceMetrics.results[1] != "success" {
+	if len(traceMetrics.results) != 1 || traceMetrics.results[0] != "success" {
 		t.Fatalf("unexpected trace write metrics: %+v", traceMetrics.results)
 	}
-	got := store.writes[1]
+	got := store.writes[0]
 	if got.TraceStatus != string(TraceStatusComplete) || got.FinalResult.String != "success" ||
 		!got.SelectedChannelID.Valid || got.SelectedChannelID.Int64 != 7 {
 		t.Fatalf("completion facts missing from trace: %+v", got)
@@ -139,6 +140,7 @@ func TestRoutingTraceFallbackChainUsesActualTransportAfterAdmissionSkip(t *testi
 		},
 		PoolSize:         2,
 		Plan:             plan,
+		Status:           TraceStatusComplete,
 		FallbackOccurred: true,
 		FallbackChain: []TransportAttempt{{
 			ChannelID: 8, UpstreamEndpoint: requestlog.UpstreamEndpointResponses,
@@ -167,6 +169,7 @@ func TestRoutingTraceNormalUsesEmptyReasonsAndStructuredPayload(t *testing.T) {
 		},
 		PoolSize: 1,
 		Plan:     CandidatePlan{Candidates: []Candidate{{Route: candidateRoute(7, "openai")}}},
+		Status:   TraceStatusComplete,
 	})
 
 	if len(store.writes) != 1 {
@@ -212,6 +215,7 @@ func TestRoutingTraceDistinguishesCooldownBypassFromInvalidSticky(t *testing.T) 
 					Candidates: []Candidate{{Route: candidateRoute(8, "openai")}},
 					Excluded:   []CandidateExclusion{{ChannelID: 7, Reason: string(tc.exclusion)}},
 				},
+				Status: TraceStatusComplete,
 			})
 
 			var payload tracePayload
@@ -238,6 +242,7 @@ func TestRoutingTraceWriteFailureOnlyRecordsFailureMetric(t *testing.T) {
 		},
 		PoolSize: 1,
 		Plan:     CandidatePlan{Candidates: []Candidate{{Route: candidateRoute(7, "openai")}}},
+		Status:   TraceStatusComplete,
 	})
 
 	if len(store.writes) != 1 {
@@ -292,6 +297,7 @@ func TestRoutingTraceIncludesFullPoolExclusionReasons(t *testing.T) {
 	}
 	recorder.Record(context.Background(), RoutingDecisionTraceInput{
 		Request: request, Mode: "balanced", Plan: plan, ForceReasons: []string{"test_abnormal"},
+		Status: TraceStatusComplete,
 	})
 	if len(store.writes) != 1 || store.writes[0].PoolSize != 2 {
 		t.Fatalf("expected one full-pool trace: %+v", store.writes)
@@ -333,7 +339,7 @@ func TestRoutingTraceWritesStickyAudit(t *testing.T) {
 		store := &fakeRoutingTraceStore{}
 		recorder := NewRoutingTraceRecorder(store, zap.NewNop())
 		recorder.Record(context.Background(), RoutingDecisionTraceInput{
-			Request: request, Mode: "balanced",
+			Request: request, Mode: "balanced", Status: TraceStatusComplete,
 			Plan:            CandidatePlan{Candidates: []Candidate{{Route: candidateRoute(9, "openai")}}},
 			StickyChannelID: 7,
 			Sticky: StickyAudit{
@@ -361,7 +367,7 @@ func TestRoutingTraceWritesStickyAudit(t *testing.T) {
 		store := &fakeRoutingTraceStore{}
 		recorder := NewRoutingTraceRecorder(store, zap.NewNop())
 		recorder.Record(context.Background(), RoutingDecisionTraceInput{
-			Request: request, Mode: "balanced",
+			Request: request, Mode: "balanced", Status: TraceStatusComplete,
 			Plan: CandidatePlan{Candidates: []Candidate{{Route: candidateRoute(9, "openai")}}},
 			Sticky: StickyAudit{
 				KeyPresent: true, Action: StickyActionMiss,
@@ -384,7 +390,7 @@ func TestRoutingTraceWritesStickyAudit(t *testing.T) {
 		store := &fakeRoutingTraceStore{}
 		recorder := NewRoutingTraceRecorder(store, zap.NewNop())
 		recorder.Record(context.Background(), RoutingDecisionTraceInput{
-			Request: request, Mode: "fixed",
+			Request: request, Mode: "fixed", Status: TraceStatusComplete,
 			Plan:   CandidatePlan{Candidates: []Candidate{{Route: candidateRoute(9, "openai")}}},
 			Sticky: StickyAudit{Action: StickyActionDisabled},
 		})

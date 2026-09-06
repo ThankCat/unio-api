@@ -65,7 +65,8 @@ func (l *RequestLifecycle) SetRoutingTraceRecorder(recorder *RoutingTraceRecorde
 	}
 }
 
-// RecordRoutingDecision 按采样/异常策略写 trace；写失败不影响客户请求。
+// RecordRoutingDecision 记录规划期路由决策：非终态只写日志，终态（规划期失败）立即落 trace；
+// 正常请求的 trace 行由 CompleteRoutingTrace 在收口时一次写入。写失败不影响客户请求。
 func (l *RequestLifecycle) RecordRoutingDecision(ctx context.Context, in RoutingDecisionTraceInput) {
 	if l == nil {
 		return

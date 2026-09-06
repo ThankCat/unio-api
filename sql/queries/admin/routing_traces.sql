@@ -1,7 +1,7 @@
 -- 以下三个聚合共用同一个窗口口径：按 requested_model_id（本表冗余列，不必 JOIN
 -- request_records）加 created_at 范围，命中 idx_routing_decision_traces_model_created。
--- 只统计 trace_status='complete'：partial 是进行中或进程崩溃遗留，payload 不完整；
--- legacy_sampled 是改造前的采样行，schema 不同。
+-- 只统计 trace_status='complete'：partial / legacy_sampled 是历史兼容位（改造前的进程遗留与旧采样行），
+-- 当前从零建库的部署不会再写出这两种状态，只是 CHECK 约束仍允许其存在。
 
 -- name: ModelRoutingSelectionStats :many
 -- ModelRoutingSelectionStats 统计流量最终落在哪条渠道。
