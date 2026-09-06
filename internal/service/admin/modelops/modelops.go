@@ -66,7 +66,7 @@ type Row struct {
 	BaseOutputPrice                *string
 	BaseReasoningOutputPrice       *string
 	// 售价：绝对售价整组非空时整组覆盖，否则基准价 × 倍率。两套实体可共存，不能混算。
-	BaseSaleDiscount                 *string
+	BaseSaleDiscount                   *string
 	BaseSaleUncachedInputPrice         *string
 	BaseSaleCacheReadInputPrice        *string
 	BaseSaleCacheCreation5mInputPrice  *string
@@ -260,7 +260,7 @@ func (s *Service) Table(ctx context.Context, p TableParams) ([]Row, int64, error
 			BaseCacheCreation30mInputPrice:         opsutil.NumericStringPtr(r.BaseCacheCreation30mInputPrice),
 			BaseOutputPrice:                        opsutil.NumericStringPtr(r.BaseOutputPrice),
 			BaseReasoningOutputPrice:               opsutil.NumericStringPtr(r.BaseReasoningOutputPrice),
-			BaseSaleDiscount:                     opsutil.NumericStringPtr(r.BaseSaleDiscount),
+			BaseSaleDiscount:                       opsutil.NumericStringPtr(r.BaseSaleDiscount),
 			BaseSaleUncachedInputPrice:             opsutil.NumericStringPtr(r.BaseSaleUncachedInputPrice),
 			BaseSaleCacheReadInputPrice:            opsutil.NumericStringPtr(r.BaseSaleCacheReadInputPrice),
 			BaseSaleCacheCreation5mInputPrice:      opsutil.NumericStringPtr(r.BaseSaleCacheCreation5mInputPrice),

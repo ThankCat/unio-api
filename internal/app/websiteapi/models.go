@@ -69,7 +69,7 @@ type modelDTO struct {
 	ReleaseDate         *string         `json:"release_date"`
 	Standard            priceGroupDTO   `json:"standard"`
 	Fast                *priceGroupDTO  `json:"fast"`
-	SaleDiscount           *string         `json:"sale_discount"`
+	SaleDiscount        *string         `json:"sale_discount"`
 	LongContext         *longContextDTO `json:"long_context"`
 	Capabilities        []capabilityDTO `json:"capabilities"`
 	LabHasLogo          bool            `json:"lab_has_logo"`
@@ -109,7 +109,7 @@ func (h *modelsHandler) list(w http.ResponseWriter, r *http.Request) {
 
 // discountPointDTO 是一个采样点；discount 为 null 表示该时刻尚无生效价格，前端应断开折线。
 type discountPointDTO struct {
-	At    string   `json:"at"`
+	At       string   `json:"at"`
 	Discount *float64 `json:"discount"`
 }
 
@@ -162,7 +162,7 @@ func (h *modelsHandler) discountHistory(w http.ResponseWriter, r *http.Request) 
 type minSaleDiscountData struct {
 	// MinSaleDiscount 是在售模型最低售价/牌价比（0.2 = 2 折）；无有效定价时为 null。
 	MinSaleDiscount *float64 `json:"min_sale_discount"`
-	GeneratedAt  string   `json:"generated_at"`
+	GeneratedAt     string   `json:"generated_at"`
 }
 
 // minSaleDiscount 返回目录里最低的当前折扣，供首页「X 折起」使用。
@@ -177,7 +177,7 @@ func (h *modelsHandler) minSaleDiscount(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("Cache-Control", modelsCacheControl)
 	_ = httpx.WriteJSON(w, http.StatusOK, map[string]minSaleDiscountData{"data": {
 		MinSaleDiscount: discount,
-		GeneratedAt:  time.Now().UTC().Format(time.RFC3339),
+		GeneratedAt:     time.Now().UTC().Format(time.RFC3339),
 	}})
 }
 
@@ -193,7 +193,7 @@ func toModelDTO(m publicmodels.Model) modelDTO {
 		ContextWindowTokens: m.ContextWindowTokens,
 		MaxOutputTokens:     m.MaxOutputTokens,
 		Standard:            toPriceGroupDTO(m.Standard),
-		SaleDiscount:           m.SaleDiscount,
+		SaleDiscount:        m.SaleDiscount,
 		LabHasLogo:          m.LabHasLogo,
 		PriceEffectiveFrom:  m.PriceEffectiveFrom.UTC().Format(time.RFC3339),
 	}

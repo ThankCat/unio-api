@@ -82,7 +82,7 @@ func TestRouterPlanChatReturnsOrderedCandidates(t *testing.T) {
 				Credential:              "secret://openai/main",
 				ResponseTimeoutMs:       pgtype.Int4{Int32: 15000, Valid: true},
 				UpstreamModel:           "gpt-4.1",
-				SaleDiscount:          testSaleDiscount(),
+				SaleDiscount:            testSaleDiscount(),
 			},
 			{
 				RequestedModelID:  "openai/gpt-4.1",
@@ -93,7 +93,7 @@ func TestRouterPlanChatReturnsOrderedCandidates(t *testing.T) {
 				Credential:        "secret://openai/backup",
 				ResponseTimeoutMs: pgtype.Int4{Int32: 30000, Valid: true},
 				UpstreamModel:     "gpt-4.1",
-				SaleDiscount:    testSaleDiscount(),
+				SaleDiscount:      testSaleDiscount(),
 			},
 		},
 	}
@@ -181,7 +181,7 @@ func TestRouterPlanChatFreezesProviderCostToSaleRatio(t *testing.T) {
 			Int: big.NewInt(10), Valid: true,
 		},
 		OutputPrice:     pgtype.Numeric{Int: big.NewInt(20), Valid: true},
-		SaleDiscount:  testSaleDiscount(),
+		SaleDiscount:    testSaleDiscount(),
 		CostCurrency:    "USD",
 		CostPricingUnit: "per_1m_tokens",
 		UncachedInputCost: pgtype.Numeric{
@@ -216,7 +216,7 @@ func TestNewRouterZeroDefaultTimeoutMeansUnlimited(t *testing.T) {
 				Credential:        "secret://openai/main",
 				ResponseTimeoutMs: pgtype.Int4{Valid: false},
 				UpstreamModel:     "gpt-4.1",
-				SaleDiscount:    testSaleDiscount(),
+				SaleDiscount:      testSaleDiscount(),
 			},
 		},
 	}
@@ -246,7 +246,7 @@ func TestRouterSetDefaultTimeoutTakesEffect(t *testing.T) {
 				Credential:        "secret://openai/main",
 				ResponseTimeoutMs: pgtype.Int4{Valid: false},
 				UpstreamModel:     "gpt-4.1",
-				SaleDiscount:    testSaleDiscount(),
+				SaleDiscount:      testSaleDiscount(),
 			},
 		}
 	}
@@ -417,7 +417,7 @@ func TestRouterPlanChatSkipsBadCandidateKeepsGood(t *testing.T) {
 				Credential:        "secret://openai/good",
 				ResponseTimeoutMs: pgtype.Int4{Int32: 30000, Valid: true},
 				UpstreamModel:     "gpt-4.1",
-				SaleDiscount:    testSaleDiscount(),
+				SaleDiscount:      testSaleDiscount(),
 			},
 		},
 	}
@@ -493,7 +493,7 @@ func salePriceRow() sqlc.FindModelCandidatesRow {
 		BasePricingUnit:    "per_1m_tokens",
 		UncachedInputPrice: numeric(10, 0),
 		OutputPrice:        numeric(20, 0),
-		SaleDiscount:     numeric(1, 0),
+		SaleDiscount:       numeric(1, 0),
 		CostCurrency:       "USD",
 		CostPricingUnit:    "per_1m_tokens",
 		UncachedInputCost:  numeric(1, 0),

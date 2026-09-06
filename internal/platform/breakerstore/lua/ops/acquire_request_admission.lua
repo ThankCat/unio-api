@@ -73,9 +73,7 @@ if breaker == nil then return { 'runtime_sync_required', 'circuit_breaker' } end
 local eff_rpm = resolve_request_limit_override(rpm_override, request_rate.rpm)
 local eff_rpd = resolve_request_limit_override(rpd_override, request_rate.rpd)
 local eff_conc = resolve_request_limit_override(concurrency_override, concurrency.key_limit)
-if eff_rpm == nil or eff_rpd == nil or eff_conc == nil then
-  return { 'runtime_sync_required', 'request_overrides' }
-end
+if eff_rpm == nil or eff_rpd == nil or eff_conc == nil then return { 'runtime_sync_required', 'request_overrides' } end
 local lease_ttl_ms = breaker.attempt_permit_ttl_ms
 local renew_ms = breaker.attempt_permit_renew_interval_ms
 local terminal_ttl_ms = breaker.attempt_permit_terminal_ttl_ms

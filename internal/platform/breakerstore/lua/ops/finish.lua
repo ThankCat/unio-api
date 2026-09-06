@@ -24,13 +24,11 @@ local permit_id = ARGV[1]
 local ep_outcome = ARGV[18]
 local ch_outcome = ARGV[19]
 local origin_evidence = ARGV[20]
+-- 三项交互事实只作为 permit 终态的诊断字段落盘（见下方 HSET）。「finish 必须携带上游交互证据、
+-- 否则走 abort」由 Go 侧 validateFinishInput 在入口强制，脚本内不重复裁决。
 local request_write_state = ARGV[21]
 local response_headers_received = ARGV[22]
 local first_token_eligible = ARGV[23]
-local interaction_evidence = request_write_state == 'completed'
-  or request_write_state == 'uncertain'
-  or response_headers_received == 'true'
-  or first_token_eligible == 'true'
 
 local now = now_ms()
 
@@ -187,7 +185,7 @@ if origin_evidence ~= '' then
 end
 
 -- apply_scope 对某作用域应用 outcome，返回 disposition。
-local function apply_scope(state_key, outcome, permit_gen_field, permit_probe_field, is_channel)
+local function apply_scope(state_key, outcome, permit_gen_field, permit_probe_field)
   local permit_gen = tonumber(redis.call('HGET', permit_key, permit_gen_field)) or 0
   local probe = redis.call('HGET', permit_key, permit_probe_field)
 
@@ -334,12 +332,12 @@ end
 local ep_disp = origin_fence_disposition
 if ep_disp == nil then ep_disp = evidence_disposition end
 if ep_disp == nil then
-  ep_disp = apply_scope(origin_key, ep_outcome, 'provider_state_generation', 'provider_half_open_probe', 0)
+  ep_disp = apply_scope(origin_key, ep_outcome, 'provider_state_generation', 'provider_half_open_probe')
 end
 local ch_disp = origin_fence_disposition
 if ch_disp == nil then ch_disp = channel_fence_disposition end
 if ch_disp == nil then
-  ch_disp = apply_scope(channel_key, ch_outcome, 'channel_state_generation', 'channel_half_open_probe', 1)
+  ch_disp = apply_scope(channel_key, ch_outcome, 'channel_state_generation', 'channel_half_open_probe')
 end
 
 -- 写 permit 终态（first-terminal-wins tombstone）。

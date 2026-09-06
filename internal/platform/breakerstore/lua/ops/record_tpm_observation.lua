@@ -30,12 +30,7 @@ end
 
 local marker_ttl = tonumber(ARGV[1])
 local bucket_ttl = tonumber(ARGV[2])
-if
-  marker_ttl == nil
-  or marker_ttl <= 0
-  or bucket_ttl == nil
-  or bucket_ttl <= 0
-then
+if marker_ttl == nil or marker_ttl <= 0 or bucket_ttl == nil or bucket_ttl <= 0 then
   return redis.error_reply('tpm observation ttl must be positive')
 end
 
@@ -44,20 +39,13 @@ for index = 1, bucket_count do
   local base = 2 + (index - 1) * FIELD_COUNT
   for offset = 1, FIELD_COUNT do
     local delta = tonumber(ARGV[base + offset])
-    if
-      delta == nil
-      or delta < 0
-      or delta > MAX_EXACT_INTEGER
-      or delta ~= math.floor(delta)
-    then
+    if delta == nil or delta < 0 or delta > MAX_EXACT_INTEGER or delta ~= math.floor(delta) then
       return redis.error_reply('tpm observation delta must be a non-negative exact integer')
     end
   end
 end
 
-if redis.call('SET', KEYS[1], '1', 'NX', 'PX', marker_ttl) == false then
-  return 0
-end
+if redis.call('SET', KEYS[1], '1', 'NX', 'PX', marker_ttl) == false then return 0 end
 
 for index = 1, bucket_count do
   local key = KEYS[index + 1]
@@ -70,9 +58,7 @@ for index = 1, bucket_count do
       touched = true
     end
   end
-  if touched then
-    redis.call('PEXPIRE', key, bucket_ttl)
-  end
+  if touched then redis.call('PEXPIRE', key, bucket_ttl) end
 end
 
 return 1

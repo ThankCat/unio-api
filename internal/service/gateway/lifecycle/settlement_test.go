@@ -407,7 +407,7 @@ func (d *chatSettlementDBDeps) params() ChatSettlementParams {
 		},
 		// SaleDiscount 随 SalePrice 一起快照进 price_snapshots.sale_discount（0.5 折扣），供请求展示恒显结算当时折扣。
 		SaleDiscount: testNumeric(0_5000000000, -10),
-		Facts:      chatSettlementFacts(coreusage.SourceUpstreamResponse),
+		Facts:        chatSettlementFacts(coreusage.SourceUpstreamResponse),
 	}
 }
 
@@ -1373,10 +1373,10 @@ func TestChatSettlementMultiplierPathComputesAndPinsCost(t *testing.T) {
 		OutputPrice:          testNumeric(500_0000000000, -10),
 		ReasoningOutputPrice: testNumeric(500_0000000000, -10),
 		// 倍率随价格行走：按 1.0 卖，合并成本倍率 0.12 × 0.5 = 0.06 远低于它。
-		SaleDiscount: testNumeric(1_0000000000, -10),
-		Status:         "enabled",
-		EffectiveFrom:  pgtype.Timestamptz{Time: time.Now().Add(-time.Hour), Valid: true},
-		EffectiveTo:    pgtype.Timestamptz{Valid: false},
+		SaleDiscount:  testNumeric(1_0000000000, -10),
+		Status:        "enabled",
+		EffectiveFrom: pgtype.Timestamptz{Time: time.Now().Add(-time.Hour), Valid: true},
+		EffectiveTo:   pgtype.Timestamptz{Valid: false},
 	})
 	if err != nil {
 		t.Fatalf("create model price (cost base): %v", err)

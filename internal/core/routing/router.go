@@ -625,7 +625,7 @@ func (r *Router) buildChatRouteCandidate(ctx context.Context, row sqlc.FindModel
 		},
 		UpstreamModel:                 row.UpstreamModel,
 		ModelPriceID:                  row.ModelPriceID,
-		SaleDiscount:                    appliedRatio,
+		SaleDiscount:                  appliedRatio,
 		SalePrice:                     salePrice,
 		FastModelPriceServiceTierID:   fastModelPriceServiceTierID,
 		FastSalePrice:                 fastSalePrice,

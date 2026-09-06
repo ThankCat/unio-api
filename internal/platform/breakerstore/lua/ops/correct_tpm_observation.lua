@@ -26,34 +26,23 @@ local FIELDS = {
 
 local bucket_count = #KEYS - 1
 if bucket_count < 0 then return redis.error_reply('tpm correction requires a marker key') end
-if #ARGV ~= 1 + bucket_count * FIELD_COUNT then
-  return redis.error_reply('tpm correction argument count mismatch')
-end
+if #ARGV ~= 1 + bucket_count * FIELD_COUNT then return redis.error_reply('tpm correction argument count mismatch') end
 
 local marker_ttl = tonumber(ARGV[1])
-if marker_ttl == nil or marker_ttl <= 0 then
-  return redis.error_reply('tpm correction marker ttl must be positive')
-end
+if marker_ttl == nil or marker_ttl <= 0 then return redis.error_reply('tpm correction marker ttl must be positive') end
 
 -- 校验全部前置于第一次写入：脚本中途报错不会回滚已执行的命令。
 for index = 1, bucket_count do
   local base = 1 + (index - 1) * FIELD_COUNT
   for offset = 1, FIELD_COUNT do
     local delta = tonumber(ARGV[base + offset])
-    if
-      delta == nil
-      or delta > MAX_EXACT_INTEGER
-      or delta < -MAX_EXACT_INTEGER
-      or delta ~= math.floor(delta)
-    then
+    if delta == nil or delta > MAX_EXACT_INTEGER or delta < -MAX_EXACT_INTEGER or delta ~= math.floor(delta) then
       return redis.error_reply('tpm correction delta must be an exact integer')
     end
   end
 end
 
-if redis.call('SET', KEYS[1], '1', 'NX', 'PX', marker_ttl) == false then
-  return { 'duplicate' }
-end
+if redis.call('SET', KEYS[1], '1', 'NX', 'PX', marker_ttl) == false then return { 'duplicate' } end
 
 local applied = 0
 local expired = 0

@@ -87,14 +87,13 @@ for candidate = 1, count do
   local channel_capacity
   -- parse_channel_capacity_payload comes from helpers/authoritative_control.lua at assemble time.
   ---@diagnostic disable-next-line: undefined-global
-  channel_capacity, reason = require_control(channel_ctl, expected_channel_revision, parse_channel_capacity_payload, 'stale_admission_revision')
+  channel_capacity, reason =
+    require_control(channel_ctl, expected_channel_revision, parse_channel_capacity_payload, 'stale_admission_revision')
   if channel_capacity == nil then return { 'error', reason } end
   local effective_concurrency = resolve_channel_limit(channel_capacity.concurrency, global_conc.channel_limit)
 
   local concurrency_used = active_zset_count(concurrency_key, now)
-  if concurrency_used == nil then
-    return { 'error', 'runtime_sync_required' }
-  end
+  if concurrency_used == nil then return { 'error', 'runtime_sync_required' } end
 
   local cooldown_remaining = 0
   local cooldown_type = redis_key_type(cooldown_key)

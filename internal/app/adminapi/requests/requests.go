@@ -107,7 +107,7 @@ type requestListItemDTO struct {
 	// 用户/Key 展示口径同 api-keys 页：只给名称和前缀，明文不落库也就无从回显。
 	ApiKeyName            *string  `json:"api_key_name"`
 	ApiKeyPrefix          *string  `json:"api_key_prefix"`
-	SaleDiscount        *string  `json:"sale_discount"`
+	SaleDiscount          *string  `json:"sale_discount"`
 	FinalChannelName      *string  `json:"final_channel_name"`
 	ChannelChain          string   `json:"channel_chain"`
 	ScoringAttemptID      *int64   `json:"scoring_attempt_id"`
@@ -244,7 +244,7 @@ type requestDetailDTO struct {
 	ClientIP              *string                     `json:"client_ip"`
 	CostSnapshot          *costSnapshotDTO            `json:"cost_snapshot"`
 	PriceSnapshot         *priceSnapshotDTO           `json:"price_snapshot"`
-	SaleDiscount        *string                     `json:"sale_discount"`
+	SaleDiscount          *string                     `json:"sale_discount"`
 	Attempts              []attemptDTO                `json:"attempts"`
 	Usage                 *usageDTO                   `json:"usage"`
 	LedgerEntries         []ledger.LedgerEntryDTO     `json:"ledger_entries"`
@@ -445,7 +445,7 @@ func toRequestListItemDTO(item query.RequestListItem) requestListItemDTO {
 		ApiKeyName:   item.APIKeyName,
 		ApiKeyPrefix: item.APIKeyPrefix,
 
-		SaleDiscount:        item.SaleDiscount,
+		SaleDiscount:          item.SaleDiscount,
 		FinalChannelName:      item.FinalChannelName,
 		ChannelChain:          item.ChannelChain,
 		ScoringAttemptID:      item.ScoringAttemptID,
@@ -526,7 +526,7 @@ func toRequestDetailDTO(d query.RequestDetail) requestDetailDTO {
 		ReasoningEffort:       d.ReasoningEffort,
 		ReasoningBudgetTokens: d.ReasoningBudgetTokens,
 		ClientIP:              d.ClientIP,
-		SaleDiscount:        d.SaleDiscount,
+		SaleDiscount:          d.SaleDiscount,
 		Attempts:              make([]attemptDTO, 0, len(d.Attempts)),
 		LedgerEntries:         make([]ledger.LedgerEntryDTO, 0, len(d.LedgerEntries)),
 	}

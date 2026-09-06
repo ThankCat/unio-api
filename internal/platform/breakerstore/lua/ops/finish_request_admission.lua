@@ -44,10 +44,7 @@ if
 then
   return { 'stale_integrity_epoch' }
 end
-if
-  redis.call('HGET', token_key, 'user_id') ~= user_id
-  or redis.call('HGET', token_key, 'conc_key') ~= conc_key
-then
+if redis.call('HGET', token_key, 'user_id') ~= user_id or redis.call('HGET', token_key, 'conc_key') ~= conc_key then
   return { 'conflict' }
 end
 if redis.call('HGET', token_key, 'status') ~= 'active' then return { 'terminal' } end
@@ -62,15 +59,6 @@ if terminal_ttl == nil or terminal_ttl <= 0 then return { 'runtime_sync_required
 -- 释放 用户级并发（RPM/RPD 作为已接收请求保留，不回退）。
 if key_type(conc_key) == 'zset' then redis.call('ZREM', conc_key, rid) end
 
-redis.call(
-  'HSET',
-  token_key,
-  'status',
-  'finished',
-  'terminal_at_ms',
-  now,
-  'terminal_result',
-  'finished'
-)
+redis.call('HSET', token_key, 'status', 'finished', 'terminal_at_ms', now, 'terminal_result', 'finished')
 redis.call('PEXPIRE', token_key, terminal_ttl)
 return { 'finished' }

@@ -67,7 +67,7 @@ func baseRow(t *testing.T) sqlc.ListPublicModelsRow {
 		UncachedInputPrice:  num(t, "4"),
 		CacheReadInputPrice: num(t, "0.4"),
 		OutputPrice:         num(t, "20"),
-		SaleDiscount:      num(t, "0.2"),
+		SaleDiscount:        num(t, "0.2"),
 		LabHasLogo:          true,
 		PriceEffectiveFrom:  pgtype.Timestamptz{Time: time.Date(2026, 8, 26, 0, 0, 0, 0, time.UTC), Valid: true},
 	}

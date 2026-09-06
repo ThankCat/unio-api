@@ -89,7 +89,7 @@ func currentEnabledRow() sqlc.ListModelPricesByModelRow {
 		PricingUnit:        PricingUnitPer1MTokens,
 		UncachedInputPrice: mustNumeric("2.5"),
 		OutputPrice:        mustNumeric("15"),
-		SaleDiscount:     mustNumeric("0.2"),
+		SaleDiscount:       mustNumeric("0.2"),
 		Status:             StatusEnabled,
 		EffectiveFrom:      pgtype.Timestamptz{Time: now.Add(-time.Hour), Valid: true},
 		ModelExternalID:    "gpt-test",
@@ -170,11 +170,11 @@ func TestCreateIntentSaleDiscountCopiesBaseAndKeepsAbsolute(t *testing.T) {
 
 	ratio := "0.5"
 	in := CreateInput{
-		ModelID:        7,
-		Intent:         IntentSaleDiscount,
-		SaleDiscount: &ratio,
-		Status:         StatusEnabled,
-		EffectiveFrom:  time.Now().UTC(),
+		ModelID:       7,
+		Intent:        IntentSaleDiscount,
+		SaleDiscount:  &ratio,
+		Status:        StatusEnabled,
+		EffectiveFrom: time.Now().UTC(),
 	}
 	if _, err := svc.createInLock(context.Background(), nil, in); !errors.Is(err, errStoreUnreachable) {
 		t.Fatalf("expected to reach the store, got %v", err)
@@ -233,11 +233,11 @@ func TestCreateSaleIntentRequiresEffectiveBase(t *testing.T) {
 
 	ratio := "0.2"
 	_, err := svc.createInLock(context.Background(), nil, CreateInput{
-		ModelID:        7,
-		Intent:         IntentSaleDiscount,
-		SaleDiscount: &ratio,
-		Status:         StatusEnabled,
-		EffectiveFrom:  time.Now().UTC(),
+		ModelID:       7,
+		Intent:        IntentSaleDiscount,
+		SaleDiscount:  &ratio,
+		Status:        StatusEnabled,
+		EffectiveFrom: time.Now().UTC(),
 	})
 	if err == nil || errors.Is(err, errStoreUnreachable) || store.got != nil {
 		t.Fatal("sale pricing without an effective base must be rejected before insert")
@@ -300,11 +300,11 @@ func TestCreateSaleDiscountCopiesFastBaseAndKeepsFastAbsolute(t *testing.T) {
 
 	ratio := "0.4"
 	in := CreateInput{
-		ModelID:        7,
-		Intent:         IntentSaleDiscount,
-		SaleDiscount: &ratio,
-		Status:         StatusEnabled,
-		EffectiveFrom:  time.Now().UTC(),
+		ModelID:       7,
+		Intent:        IntentSaleDiscount,
+		SaleDiscount:  &ratio,
+		Status:        StatusEnabled,
+		EffectiveFrom: time.Now().UTC(),
 	}
 	if _, err := svc.createInLock(context.Background(), nil, in); !errors.Is(err, errStoreUnreachable) {
 		t.Fatalf("expected to reach the store, got %v", err)
@@ -326,11 +326,11 @@ func TestCreateRejectsNonPositiveSaleDiscount(t *testing.T) {
 
 	for _, ratio := range []string{"0", "-0.5"} {
 		in := CreateInput{
-			ModelID:        7,
-			Intent:         IntentSaleDiscount,
-			SaleDiscount: &ratio,
-			Status:         StatusEnabled,
-			EffectiveFrom:  time.Now().UTC(),
+			ModelID:       7,
+			Intent:        IntentSaleDiscount,
+			SaleDiscount:  &ratio,
+			Status:        StatusEnabled,
+			EffectiveFrom: time.Now().UTC(),
 		}
 		if _, err := svc.createInLock(context.Background(), nil, in); err == nil || errors.Is(err, errStoreUnreachable) {
 			t.Fatalf("sale ratio %q must be rejected, got %v", ratio, err)

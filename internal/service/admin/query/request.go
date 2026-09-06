@@ -142,7 +142,7 @@ type RequestListItem struct {
 	APIKeyName   *string
 	APIKeyPrefix *string
 
-	SaleDiscount      *string
+	SaleDiscount        *string
 	FinalChannelName    *string
 	ChannelChain        string
 	ScoringAttemptID    *int64
@@ -232,7 +232,7 @@ type RequestDetail struct {
 	// 费用明细快照：平台成本单价+金额 / 用户售价单价 / 线路倍率+策略（供详情费用明细「计算过程」）。
 	CostSnapshot     *CostSnapshotView
 	PriceSnapshot    *PriceSnapshotView
-	SaleDiscount   *string
+	SaleDiscount     *string
 	Attempts         []Attempt
 	Usage            *Usage
 	LedgerEntries    []LedgerEntry
@@ -577,7 +577,7 @@ func toRequestListItem(r sqlc.ListRequestRecordsPageRow) RequestListItem {
 		APIKeyName:   textPtr(r.ApiKeyName),
 		APIKeyPrefix: textPtr(r.ApiKeyPrefix),
 
-		SaleDiscount:      opsutil.NumericStringPtr(r.SaleDiscount),
+		SaleDiscount:        opsutil.NumericStringPtr(r.SaleDiscount),
 		FinalChannelName:    textPtr(r.FinalChannelName),
 		ChannelChain:        r.ChannelChain,
 		ScoringDimensions:   r.ScoringDimensions,

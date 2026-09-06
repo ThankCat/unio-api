@@ -90,7 +90,7 @@ func TestListDiscountHistoryAbsoluteSaleUsesSaleDiscount(t *testing.T) {
 		WindowStatus:       "enabled",
 		EffectiveFrom:      ts(now.Add(-24 * time.Hour)),
 		UncachedInputPrice: num(t, "4"), OutputPrice: num(t, "20"),
-		SaleDiscount:         num(t, "0.9"),
+		SaleDiscount:           num(t, "0.9"),
 		SaleUncachedInputPrice: num(t, "1"), SaleOutputPrice: num(t, "5"),
 	}}}
 

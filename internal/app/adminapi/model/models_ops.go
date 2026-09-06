@@ -52,7 +52,7 @@ type modelOpsRowDTO struct {
 	BaseOutputPrice                *string `json:"base_output_price"`
 	BaseReasoningOutputPrice       *string `json:"base_reasoning_output_price"`
 	// 售价：绝对售价整组非空时整组覆盖，否则基准价 × 倍率。两套实体可共存，不能混算。
-	BaseSaleDiscount                 *string `json:"base_sale_discount"`
+	BaseSaleDiscount                   *string `json:"base_sale_discount"`
 	BaseSaleUncachedInputPrice         *string `json:"base_sale_uncached_input_price"`
 	BaseSaleCacheReadInputPrice        *string `json:"base_sale_cache_read_input_price"`
 	BaseSaleCacheCreation5mInputPrice  *string `json:"base_sale_cache_creation_5m_input_price"`
@@ -224,7 +224,7 @@ func (h *modelOpsHandler) table(w http.ResponseWriter, r *http.Request) {
 			BaseCacheCreation30mInputPrice:         row.BaseCacheCreation30mInputPrice,
 			BaseOutputPrice:                        row.BaseOutputPrice,
 			BaseReasoningOutputPrice:               row.BaseReasoningOutputPrice,
-			BaseSaleDiscount:                     row.BaseSaleDiscount,
+			BaseSaleDiscount:                       row.BaseSaleDiscount,
 			BaseSaleUncachedInputPrice:             row.BaseSaleUncachedInputPrice,
 			BaseSaleCacheReadInputPrice:            row.BaseSaleCacheReadInputPrice,
 			BaseSaleCacheCreation5mInputPrice:      row.BaseSaleCacheCreation5mInputPrice,

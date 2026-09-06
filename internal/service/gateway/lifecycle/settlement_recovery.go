@@ -187,7 +187,7 @@ func (s *ChatSettlementRecoveryStore) CreatePendingChatSettlementRecoveryJob(ctx
 		OutputPrice:                           tierSelection.salePrice.OutputPrice,
 		ReasoningOutputPrice:                  tierSelection.salePrice.ReasoningOutputPrice,
 		FormulaVersion:                        billing.FormulaVersionV1,
-		SaleDiscount:                            params.SaleDiscount,
+		SaleDiscount:                          params.SaleDiscount,
 		LongContextEnabled:                    params.LongContextPolicy.Enabled,
 		LongContextThreshold:                  settlementRecoveryLongContextThreshold(params.LongContextPolicy),
 		LongContextInputMultiplier:            params.LongContextPolicy.InputMultiplier,

@@ -340,7 +340,7 @@ func createModelPriceWithFastForTest(t *testing.T, ctx context.Context, queries 
 		PricingUnit:        "per_1m_tokens",
 		UncachedInputPrice: numeric(100),
 		OutputPrice:        numeric(400),
-		SaleDiscount:     numeric(1),
+		SaleDiscount:       numeric(1),
 		Status:             "enabled",
 		EffectiveFrom:      timestamptz(at.Add(-time.Hour)),
 		EffectiveTo:        nullTimestamptz(),

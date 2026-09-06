@@ -13,9 +13,7 @@
 -- ARGV[7] = observed_request（'1' 真实发起上游调用，计入 RPM/RPD）
 -- 返回 1=已写入；0=幂等跳过。
 -- token 观测不在这里：TPM 由独立的 obs:tpm 分钟桶按真实 chunk 时间记录（§8）。
-if redis.call('SET', KEYS[1], '1', 'NX', 'PX', tonumber(ARGV[1])) == false then
-  return 0
-end
+if redis.call('SET', KEYS[1], '1', 'NX', 'PX', tonumber(ARGV[1])) == false then return 0 end
 
 local mkey = KEYS[2]
 local touched = false
@@ -31,9 +29,7 @@ end
 
 if ARGV[5] == '1' then
   redis.call('HINCRBY', mkey, 'error_attempt_count', 1)
-  if ARGV[6] == '1' then
-    redis.call('HINCRBY', mkey, 'error_count', 1)
-  end
+  if ARGV[6] == '1' then redis.call('HINCRBY', mkey, 'error_count', 1) end
   touched = true
 end
 
@@ -44,7 +40,5 @@ if ARGV[7] == '1' then
   redis.call('PEXPIRE', KEYS[3], tonumber(ARGV[3]))
 end
 
-if touched then
-  redis.call('PEXPIRE', mkey, tonumber(ARGV[2]))
-end
+if touched then redis.call('PEXPIRE', mkey, tonumber(ARGV[2])) end
 return 1

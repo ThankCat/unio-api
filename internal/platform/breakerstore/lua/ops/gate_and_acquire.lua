@@ -104,7 +104,8 @@ local global_concurrency, global_concurrency_state =
 if global_concurrency == nil then return { 'denied', global_concurrency_state } end
 -- parse_channel_capacity_payload comes from helpers/authoritative_control.lua at assemble time.
 ---@diagnostic disable-next-line: undefined-global
-local channel_capacity, channel_capacity_state = read_new_admission_control(channel_capacity_ctl, expected_channel_capacity_rev, parse_channel_capacity_payload)
+local channel_capacity, channel_capacity_state =
+  read_new_admission_control(channel_capacity_ctl, expected_channel_capacity_rev, parse_channel_capacity_payload)
 if channel_capacity == nil then
   if channel_capacity_state == 'stale_setting_revision' then return { 'denied', 'stale_config_revision' } end
   return { 'denied', channel_capacity_state }

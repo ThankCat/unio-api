@@ -39,7 +39,7 @@ type modelPriceDTO struct {
 	CacheCreation30mInputPrice  *string                `json:"cache_creation_30m_input_price"`
 	OutputPrice                 string                 `json:"output_price"`
 	ReasoningOutputPrice        *string                `json:"reasoning_output_price"`
-	SaleDiscount              *string                `json:"sale_discount"`
+	SaleDiscount                *string                `json:"sale_discount"`
 	SalePrices                  *salePriceVectorDTO    `json:"sale_prices"`
 	SaleConfigured              bool                   `json:"sale_configured"`
 	LongContextEnabled          bool                   `json:"long_context_enabled"`
@@ -123,7 +123,7 @@ type createModelPriceRequest struct {
 	CacheCreation30mInputPrice  *string             `json:"cache_creation_30m_input_price"`
 	OutputPrice                 string              `json:"output_price"`
 	ReasoningOutputPrice        *string             `json:"reasoning_output_price"`
-	SaleDiscount              *string             `json:"sale_discount"`
+	SaleDiscount                *string             `json:"sale_discount"`
 	SalePrices                  *salePriceVectorDTO `json:"sale_prices"`
 	LongContextEnabled          bool                `json:"long_context_enabled"`
 	LongContextThreshold        *int64              `json:"long_context_threshold"`
@@ -214,7 +214,7 @@ func (h *modelPricesHandler) create(w http.ResponseWriter, r *http.Request) {
 		CacheCreation30mInputPrice:  req.CacheCreation30mInputPrice,
 		OutputPrice:                 req.OutputPrice,
 		ReasoningOutputPrice:        req.ReasoningOutputPrice,
-		SaleDiscount:              req.SaleDiscount,
+		SaleDiscount:                req.SaleDiscount,
 		SalePrices:                  saleVectorInput(req.SalePrices),
 		LongContextEnabled:          req.LongContextEnabled,
 		LongContextThreshold:        req.LongContextThreshold,
@@ -289,7 +289,7 @@ func toModelPriceDTO(p modelprice.ModelPrice) modelPriceDTO {
 		CacheCreation30mInputPrice:  p.CacheCreation30mInputPrice,
 		OutputPrice:                 p.OutputPrice,
 		ReasoningOutputPrice:        p.ReasoningOutputPrice,
-		SaleDiscount:              p.SaleDiscount,
+		SaleDiscount:                p.SaleDiscount,
 		SalePrices:                  saleVectorDTO(p.SalePrices),
 		SaleConfigured:              p.SaleConfigured,
 		LongContextEnabled:          p.LongContextEnabled,

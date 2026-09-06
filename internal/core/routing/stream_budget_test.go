@@ -20,7 +20,7 @@ func timeoutRow(responseTimeout, firstTokenTimeout pgtype.Int4) sqlc.FindModelCa
 		ResponseTimeoutMs:   responseTimeout,
 		FirstTokenTimeoutMs: firstTokenTimeout,
 		UpstreamModel:       "gpt-4.1",
-		SaleDiscount:      testSaleDiscount(),
+		SaleDiscount:        testSaleDiscount(),
 	}
 }
 

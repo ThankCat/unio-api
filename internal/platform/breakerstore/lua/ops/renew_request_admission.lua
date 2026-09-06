@@ -32,10 +32,7 @@ if
 then
   return { 'stale_integrity_epoch' }
 end
-if
-  redis.call('HGET', token_key, 'user_id') ~= user_id
-  or redis.call('HGET', token_key, 'conc_key') ~= conc_key
-then
+if redis.call('HGET', token_key, 'user_id') ~= user_id or redis.call('HGET', token_key, 'conc_key') ~= conc_key then
   return { 'conflict' }
 end
 if redis.call('HGET', token_key, 'status') ~= 'active' then return { 'terminal' } end

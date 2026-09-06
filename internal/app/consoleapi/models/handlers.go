@@ -52,7 +52,7 @@ type modelDTO struct {
 	ReleaseDate         *string         `json:"release_date"`
 	Standard            priceGroupDTO   `json:"standard"`
 	Fast                *priceGroupDTO  `json:"fast"`
-	SaleDiscount           *string         `json:"sale_discount"`
+	SaleDiscount        *string         `json:"sale_discount"`
 	LongContext         *longContextDTO `json:"long_context"`
 	Capabilities        []capabilityDTO `json:"capabilities"`
 	LabHasLogo          bool            `json:"lab_has_logo"`
@@ -93,7 +93,7 @@ func toModelDTO(m publicmodels.Model) modelDTO {
 		ContextWindowTokens: m.ContextWindowTokens,
 		MaxOutputTokens:     m.MaxOutputTokens,
 		Standard:            toPriceGroupDTO(m.Standard),
-		SaleDiscount:           m.SaleDiscount,
+		SaleDiscount:        m.SaleDiscount,
 		LabHasLogo:          m.LabHasLogo,
 		PriceEffectiveFrom:  m.PriceEffectiveFrom.UTC().Format(time.RFC3339),
 	}
