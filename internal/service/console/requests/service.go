@@ -224,6 +224,11 @@ func (s *Service) List(ctx context.Context, params ListParams) ([]Item, int64, *
 
 // Summary 返回当前用户实际扣费请求的累计指标；筛选口径与列表相同。
 func (s *Service) Summary(ctx context.Context, params SummaryParams) (Summary, *consoleservice.Error) {
+	// 窗口与分桶合法性在任何查询之前一次判定：非法输入统一 400，不让主汇总先落库再由 compare 半路报错。
+	plan, planErr := planCompare(params)
+	if planErr != nil {
+		return Summary{}, planErr
+	}
 	bounds := toSummarySQL(params)
 	row, err := s.store.SummarizeConsoleBilledRequests(ctx, bounds)
 	if err != nil {
@@ -275,11 +280,10 @@ func (s *Service) Summary(ctx context.Context, params SummaryParams) (Summary, *
 	}
 
 	// 环比和热力条都要求有时间窗；不给窗口时（全量统计）没有"上一周期"可言。
-	// 起止相等时仍要允许生成完整的展示窗，例如当天刚过 00:00 的 24 个小时格。
-	if params.From == nil || params.To == nil || params.To.Before(*params.From) {
+	if plan == nil {
 		return summary, nil
 	}
-	previous, series, compareErr := s.compare(ctx, params, bounds)
+	previous, series, compareErr := s.compare(ctx, params, bounds, *plan)
 	if compareErr != nil {
 		return Summary{}, compareErr
 	}
@@ -288,35 +292,103 @@ func (s *Service) Summary(ctx context.Context, params SummaryParams) (Summary, *
 	return summary, nil
 }
 
-// compare 取等长的上一周期汇总，以及当前周期的分桶序列。
-// 分桶复用用量统计那条 timeseries：两边口径本就一致，没必要再写一份聚合。
-func (s *Service) compare(
-	ctx context.Context,
-	params SummaryParams,
-	bounds sqlc.SummarizeConsoleBilledRequestsParams,
-) (*Window, []Point, *consoleservice.Error) {
+// maxSeriesBuckets 限制热力条展示窗一次生成的桶数。SQL 侧用 generate_series 为展示窗补全空桶，
+// 桶数只受「窗长 ÷ 桶宽」约束；不设上限时 bucket=minute 配多年窗口会先打 PostgreSQL 再打进程内存。
+// 与用量页 maxBuckets=1500（当前 + 上一周期）同量级。
+const maxSeriesBuckets = 1500
+
+// comparePlan 是 Summary 在落库前对环比窗、展示窗与分桶做完的一次性判定。
+type comparePlan struct {
+	bucket       string
+	tz           string
+	previousFrom time.Time
+	previousTo   time.Time
+	seriesFrom   time.Time
+	seriesTo     time.Time
+}
+
+// planCompare 校验环比与热力条所需的全部输入；没有完整时间窗时返回 nil（跳过 compare）。
+// 起止相等时仍要允许生成完整的展示窗，例如当天刚过 00:00 的 24 个小时格。
+func planCompare(params SummaryParams) (*comparePlan, *consoleservice.Error) {
+	if params.From != nil && params.To != nil && params.To.Before(*params.From) {
+		return nil, consoleservice.InvalidArgument("to", "to must be later than or equal to from.")
+	}
+	if params.From == nil || params.To == nil {
+		return nil, nil
+	}
 	bucket, tz := params.Bucket, params.TZ
 	if bucket == "" {
 		bucket = "day"
 	}
 	if !supportedBucket(bucket) {
-		return nil, nil, consoleservice.InvalidArgument("bucket", "bucket must be minute, hour, day, week, month, quarter, or year.")
+		return nil, consoleservice.InvalidArgument("bucket", "bucket must be minute, hour, day, week, month, quarter, or year.")
 	}
 	if tz == "" {
 		tz = "UTC"
 	}
 	previousFrom, previousTo := previousWindow(params)
 	if previousFrom == nil || previousTo == nil || previousTo.Before(*previousFrom) {
-		return nil, nil, consoleservice.InvalidArgument("previous_to", "previous_to must be later than or equal to previous_from.")
+		return nil, consoleservice.InvalidArgument("previous_to", "previous_to must be later than or equal to previous_from.")
 	}
 	seriesFrom, seriesTo := params.From, params.To
-	if params.SeriesFrom != nil && params.SeriesTo != nil && !params.SeriesTo.Before(*params.SeriesFrom) {
+	if params.SeriesFrom != nil || params.SeriesTo != nil {
+		if params.SeriesFrom == nil || params.SeriesTo == nil || params.SeriesTo.Before(*params.SeriesFrom) {
+			return nil, consoleservice.InvalidArgument("series_to", "series_to must be later than or equal to series_from.")
+		}
 		seriesFrom, seriesTo = params.SeriesFrom, params.SeriesTo
 	}
+	if estimateBuckets(seriesTo.Sub(*seriesFrom), bucket) > maxSeriesBuckets {
+		return nil, consoleservice.InvalidArgument("bucket", "the selected range is too long for this bucket; choose a coarser bucket.")
+	}
+	return &comparePlan{
+		bucket:       bucket,
+		tz:           tz,
+		previousFrom: *previousFrom,
+		previousTo:   *previousTo,
+		seriesFrom:   *seriesFrom,
+		seriesTo:     *seriesTo,
+	}, nil
+}
 
+// estimateBuckets 按桶宽下界估算展示窗桶数（月/季/年按最短自然长度取整，宁可略高估）。
+// 边界对齐（date_trunc 把窗两端各扩到整桶）最多再多两格。
+func estimateBuckets(span time.Duration, bucket string) int64 {
+	var width time.Duration
+	switch bucket {
+	case "minute":
+		width = time.Minute
+	case "hour":
+		width = time.Hour
+	case "day":
+		width = 24 * time.Hour
+	case "week":
+		width = 7 * 24 * time.Hour
+	case "month":
+		width = 28 * 24 * time.Hour
+	case "quarter":
+		width = 90 * 24 * time.Hour
+	case "year":
+		width = 365 * 24 * time.Hour
+	default:
+		width = 24 * time.Hour
+	}
+	if span < 0 {
+		span = 0
+	}
+	return int64(span/width) + 2
+}
+
+// compare 取等长的上一周期汇总，以及当前周期的分桶序列。
+// 分桶复用用量统计那条 timeseries：两边口径本就一致，没必要再写一份聚合。
+func (s *Service) compare(
+	ctx context.Context,
+	params SummaryParams,
+	bounds sqlc.SummarizeConsoleBilledRequestsParams,
+	plan comparePlan,
+) (*Window, []Point, *consoleservice.Error) {
 	prevBounds := bounds
-	prevBounds.FromTime = pgtype.Timestamptz{Time: *previousFrom, Valid: true}
-	prevBounds.ToTime = pgtype.Timestamptz{Time: *previousTo, Valid: true}
+	prevBounds.FromTime = pgtype.Timestamptz{Time: plan.previousFrom, Valid: true}
+	prevBounds.ToTime = pgtype.Timestamptz{Time: plan.previousTo, Valid: true}
 	prevRow, err := s.store.SummarizeConsoleBilledRequests(ctx, prevBounds)
 	if err != nil {
 		return nil, nil, consoleservice.RequestUnavailable("summarize previous charged requests", err)
@@ -326,15 +398,15 @@ func (s *Service) compare(
 		UserID:      params.UserID,
 		FromTime:    pgtype.Timestamptz{Time: *params.From, Valid: true},
 		ToTime:      pgtype.Timestamptz{Time: *params.To, Valid: true},
-		Bucket:      bucket,
-		Tz:          tz,
+		Bucket:      plan.bucket,
+		Tz:          plan.tz,
 		ApiKeyIds:   bounds.ApiKeyIds,
 		ModelIds:    []string{},
 		Endpoints:   bounds.Endpoints,
 		StreamTypes: bounds.StreamTypes,
 		Q:           bounds.Q,
-		SeriesFrom:  pgtype.Timestamptz{Time: *seriesFrom, Valid: true},
-		SeriesTo:    pgtype.Timestamptz{Time: *seriesTo, Valid: true},
+		SeriesFrom:  pgtype.Timestamptz{Time: plan.seriesFrom, Valid: true},
+		SeriesTo:    pgtype.Timestamptz{Time: plan.seriesTo, Valid: true},
 	})
 	if err != nil {
 		return nil, nil, consoleservice.RequestUnavailable("list request timeseries", err)
@@ -562,12 +634,4 @@ func textPtr(value pgtype.Text) *string {
 	}
 	s := value.String
 	return &s
-}
-
-func int8Ptr(value pgtype.Int8) *int64 {
-	if !value.Valid {
-		return nil
-	}
-	v := value.Int64
-	return &v
 }

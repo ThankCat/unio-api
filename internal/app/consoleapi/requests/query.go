@@ -84,8 +84,8 @@ func parseSummaryQuery(r *http.Request) (consolerequests.SummaryParams, *console
 	if err != nil {
 		return consolerequests.SummaryParams{}, err
 	}
-	if err != nil {
-		return consolerequests.SummaryParams{}, err
+	if from != nil && to != nil && to.Before(*from) {
+		return consolerequests.SummaryParams{}, consoleservice.InvalidArgument("to", "to must be later than or equal to from.")
 	}
 	apiKeyIDs, err := parseInt64Values(r, "api_key_id")
 	if err != nil {

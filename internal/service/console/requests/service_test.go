@@ -3,6 +3,7 @@ package requests_test
 import (
 	"context"
 	"math/big"
+	"net/http"
 	"testing"
 	"time"
 
@@ -341,6 +342,59 @@ func TestSummaryQueriesPreviousWindowOfEqualLength(t *testing.T) {
 	}
 	if store.seriesParams.Bucket != "day" || store.seriesParams.Tz != "Asia/Shanghai" {
 		t.Fatalf("series bucket/tz = %q/%q", store.seriesParams.Bucket, store.seriesParams.Tz)
+	}
+}
+
+// 主窗口倒置与环比窗倒置同为输入错误：统一 400，且在任何查询之前拒绝。
+func TestSummaryRejectsInvertedWindowBeforeQuerying(t *testing.T) {
+	store := &fakeStore{}
+	from := time.Date(2026, 8, 19, 16, 0, 0, 0, time.UTC)
+	to := from.Add(-time.Hour)
+
+	_, err := requests.NewService(store).Summary(context.Background(), requests.SummaryParams{
+		UserID: 7,
+		From:   &from,
+		To:     &to,
+	})
+	if err == nil || err.Status != http.StatusBadRequest {
+		t.Fatalf("expected 400 for inverted window, got %+v", err)
+	}
+	if len(store.summaryCalls) != 0 {
+		t.Fatalf("inverted window must not reach the store, got %d calls", len(store.summaryCalls))
+	}
+}
+
+// 展示窗桶数受上限约束：bucket=minute 配多年窗口不能落到 generate_series。
+func TestSummaryRejectsOversizedSeriesBucketCount(t *testing.T) {
+	store := &fakeStore{}
+	from := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	_, err := requests.NewService(store).Summary(context.Background(), requests.SummaryParams{
+		UserID: 7,
+		From:   &from,
+		To:     &to,
+		Bucket: "minute",
+	})
+	if err == nil || err.Status != http.StatusBadRequest || err.Param != "bucket" {
+		t.Fatalf("expected 400 on bucket for oversized series, got %+v", err)
+	}
+	if len(store.summaryCalls) != 0 {
+		t.Fatalf("oversized series must not reach the store, got %d calls", len(store.summaryCalls))
+	}
+
+	// 同一窗口换成粗粒度桶即可通过：六年按月约 72 格。
+	_, err = requests.NewService(store).Summary(context.Background(), requests.SummaryParams{
+		UserID: 7,
+		From:   &from,
+		To:     &to,
+		Bucket: "month",
+	})
+	if err != nil {
+		t.Fatalf("month bucket over six years should be accepted: %+v", err)
+	}
+	if store.seriesParams.Bucket != "month" {
+		t.Fatalf("series bucket = %q, want month", store.seriesParams.Bucket)
 	}
 }
 

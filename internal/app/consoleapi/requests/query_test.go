@@ -60,6 +60,7 @@ func TestParseListQueryRejectsInvalidValues(t *testing.T) {
 		"endpoint=/v1/models",
 		"stream=true",
 		"sort=unknown",
+		"from=2026-08-20T00:00:00Z&to=2026-08-19T00:00:00Z",
 	}
 	for _, raw := range cases {
 		req := &http.Request{URL: &url.URL{RawQuery: raw}}
