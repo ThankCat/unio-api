@@ -96,6 +96,12 @@ redis.call("DEL", KEYS[1])
 return 1
 `
 
+// 与全仓其余 Redis 脚本一致走 redis.NewScript（EVALSHA + NOSCRIPT 回退），热路径不再每次发送脚本全文。
+var (
+	refreshIfCurrentScript = redis.NewScript(refreshIfCurrentLua)
+	clearIfCurrentScript   = redis.NewScript(clearIfCurrentLua)
+)
+
 // Store 是 sticky 绑定的 Redis 实现（实现 lifecycle.StickyStore）。
 // 键统一加进程 Redis namespace 前缀（与 ratelimit sliding window 同约定）。
 type Store struct {
@@ -251,8 +257,8 @@ func (s *Store) RefreshIfCurrent(
 		)
 		return Binding{}, CASResult{StoreUnavailable: true}
 	}
-	applied, err := s.client.Eval(
-		opCtx, refreshIfCurrentLua, []string{s.keyPrefix + key},
+	applied, err := refreshIfCurrentScript.Run(
+		opCtx, s.client, []string{s.keyPrefix + key},
 		channelID, accountID, bindingVersion, value, ttl.Milliseconds(),
 	).Int64()
 	if err != nil {
@@ -276,8 +282,8 @@ func (s *Store) ClearIfCurrent(ctx context.Context, key string, channelID, accou
 	opCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), opTimeout)
 	defer cancel()
 
-	applied, err := s.client.Eval(
-		opCtx, clearIfCurrentLua, []string{s.keyPrefix + key}, channelID, accountID, bindingVersion,
+	applied, err := clearIfCurrentScript.Run(
+		opCtx, s.client, []string{s.keyPrefix + key}, channelID, accountID, bindingVersion,
 	).Int64()
 	if err != nil {
 		logging.Warn(s.logger, "routing", "sticky", "sticky operation failed",
