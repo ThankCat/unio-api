@@ -56,6 +56,28 @@ func TestNumericFromRatSingleRounding(t *testing.T) {
 	}
 }
 
+// half-up 边界：恰好 .5 向上进位；负数按绝对值 half-up 后保留符号（远离零），与 SQL round() 一致。
+func TestNumericFromRatHalfUpBoundaries(t *testing.T) {
+	cases := []struct {
+		raw   string
+		scale int32
+		want  string
+	}{
+		{"0.00000000005", 10, "1"},
+		{"0.00000000004", 10, "0"},
+		{"1.25", 1, "13"},
+		{"1.35", 1, "14"},
+		{"-1.25", 1, "-13"},
+		{"2", 2, "200"},
+	}
+	for _, tc := range cases {
+		got := NumericFromRat(ratFromString(t, tc.raw), tc.scale)
+		if !got.Valid || got.Exp != -tc.scale || got.Int.String() != tc.want {
+			t.Fatalf("NumericFromRat(%s, %d) = %+v, want int %s", tc.raw, tc.scale, got, tc.want)
+		}
+	}
+}
+
 // 乘除等价：sale × rate ≥ cost 与 sale ≥ cost ÷ rate 在 big.Rat 下判定必然一致。
 func TestMultiplyDivideEquivalence(t *testing.T) {
 	cases := []struct{ sale, cost, rate string }{

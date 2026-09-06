@@ -43,6 +43,7 @@ func NewChatGateway(
 		ledgerService,
 		providerLedgerService,
 	).WithFxRates(fx.NewService(queries, 0))
+	withSettlementMetrics(chatSettlementService, metricsRecorder)
 	chatSettlementRecoveryStore := lifecycle.NewChatSettlementRecoveryStore(
 		queries,
 		workerConfig.SettlementRecoveryInitialDelay,
@@ -110,6 +111,7 @@ func NewResponsesGateway(
 		ledgerService,
 		providerLedgerService,
 	).WithFxRates(fx.NewService(queries, 0)).WithLogger(logger)
+	withSettlementMetrics(chatSettlementService, metricsRecorder)
 	chatSettlementRecoveryStore := lifecycle.NewChatSettlementRecoveryStore(
 		queries,
 		workerConfig.SettlementRecoveryInitialDelay,
@@ -171,6 +173,7 @@ func NewMessagesGateway(
 		ledgerService,
 		providerLedgerService,
 	).WithFxRates(fx.NewService(queries, 0))
+	withSettlementMetrics(chatSettlementService, metricsRecorder)
 	chatSettlementRecoveryStore := lifecycle.NewChatSettlementRecoveryStore(
 		queries,
 		workerConfig.SettlementRecoveryInitialDelay,
@@ -204,4 +207,11 @@ func NewMessagesGateway(
 		chatMetrics,
 	)
 	return service
+}
+
+// withSettlementMetrics 只在真的有 metrics 时注入：nil *metrics.Metrics 装进接口会变成非 nil 接口值。
+func withSettlementMetrics(service *lifecycle.ChatSettlementService, recorder *metrics.Metrics) {
+	if recorder != nil {
+		service.WithMetrics(recorder)
+	}
 }

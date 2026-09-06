@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/ThankCat/unio-gateway/internal/core/channel"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 )
@@ -126,11 +127,17 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (ChannelCostMultip
 		return ChannelCostMultiplier{}, err
 	}
 
-	if _, err := s.store.GetChannel(ctx, in.ChannelID); err != nil {
+	channelRow, err := s.store.GetChannel(ctx, in.ChannelID)
+	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ChannelCostMultiplier{}, notFound("channel not found")
 		}
 		return ChannelCostMultiplier{}, storeFailed(err, "load channel")
+	}
+	// 池型渠道的供给是订阅账号（包月，无按量成本）：成本倍率只能为 0。非零倍率会让结算持续写出
+	// 无意义的服务商成本流水并扣减服务商余额，这里在配置入口直接拦住。
+	if channel.SupplyForm(channelRow.SupplyForm).IsPool() && multiplier.Int != nil && multiplier.Int.Sign() != 0 {
+		return ChannelCostMultiplier{}, invalidArgument("multiplier", "池型渠道成本恒为 0：订阅账号无按量成本，倍率只能配置为 0")
 	}
 
 	// 逐模型覆盖：该 (channel, model) 绑定必须存在。

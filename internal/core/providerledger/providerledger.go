@@ -225,7 +225,7 @@ func (s *Service) SetTargetBalance(ctx context.Context, params TargetParams) (En
 	if delta.Sign() == 0 {
 		return Entry{}, failure.New(failure.CodeAdminInvalidArgument, failure.WithMessage("target balance is the same as current balance"))
 	}
-	amount := ratToNumeric(new(big.Rat).Abs(delta), 10)
+	amount := fx.NumericFromRat(new(big.Rat).Abs(delta), 10)
 	entryType := EntryTypeAdjustmentCredit
 	var after sqlc.ProviderBalance
 	if delta.Sign() > 0 {
@@ -517,12 +517,6 @@ func numericRat(v pgtype.Numeric) *big.Rat {
 		r.Quo(r, new(big.Rat).SetInt(new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(-v.Exp)), nil)))
 	}
 	return r
-}
-
-func ratToNumeric(v *big.Rat, scale int) pgtype.Numeric {
-	var out pgtype.Numeric
-	_ = out.Scan(v.FloatString(scale))
-	return out
 }
 
 func invalidArgument(message string) error {

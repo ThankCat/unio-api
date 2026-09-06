@@ -175,6 +175,7 @@ type Metrics struct {
 	routingCapacityRead          *prometheus.CounterVec
 	routingMarginGuard           *prometheus.CounterVec
 	routingTraceWrite            *prometheus.CounterVec
+	settlementRechargeFallback   prometheus.Counter
 	routingTracePersistFailure   prometheus.Counter
 	routingSampleAggFailure      prometheus.Counter
 
@@ -390,6 +391,11 @@ func New() *Metrics {
 			Name: "unio_gateway_routing_sample_aggregation_failure_total",
 			Help: "30-minute scoring sample aggregation write failures (observation is best-effort).",
 		}),
+		settlementRechargeFallback: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "unio_gateway_settlement_recharge_rate_fallback_total",
+			// 结算时找不到服务商充值汇率而按 1.0 记账的次数：长期非零说明配置缺口，不能只靠 Warn 日志发现。
+			Help: "Settlements that fell back to a 1.0 provider recharge rate because no active rate row existed.",
+		}),
 
 		// TPM 观测指标（§8/§10）：全部 best-effort，标签里绝不出现 request/attempt ID。
 		tpmObservationFlushFailure: prometheus.NewCounter(prometheus.CounterOpts{
@@ -585,6 +591,7 @@ func New() *Metrics {
 		m.routingTraceWrite,
 		m.routingTracePersistFailure,
 		m.routingSampleAggFailure,
+		m.settlementRechargeFallback,
 		m.tpmObservationFlushFailure,
 		m.tpmObservationDropped,
 		m.tpmObservationQueueDepth,
@@ -818,6 +825,11 @@ func (m *Metrics) IncRoutingTraceWrite(result string) {
 	if result == "failed" {
 		m.routingTracePersistFailure.Inc()
 	}
+}
+
+// IncSettlementRechargeRateFallback 记录一次结算按 1.0 充值汇率兜底记账（B-5：只靠日志会被淹没）。
+func (m *Metrics) IncSettlementRechargeRateFallback() {
+	m.settlementRechargeFallback.Inc()
 }
 
 // IncRoutingSampleAggregationFailure 记录一次 30 分钟评分样本聚合写失败（观测 best-effort，§12.5/§18）。

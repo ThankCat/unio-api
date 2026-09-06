@@ -56,6 +56,27 @@ type ChatSettlementService struct {
 	providerLedger    ChatProviderLedger
 	fxRates           FxRateSource
 	logger            *zap.Logger
+	metrics           settlementMetricsRecorder
+}
+
+// settlementMetricsRecorder 是结算路径需要的最小指标能力：兜底记账等「只靠日志会被淹没」的事件计数。
+type settlementMetricsRecorder interface {
+	IncSettlementRechargeRateFallback()
+}
+
+// WithMetrics 注入结算指标记录器（由 platform metrics 实现）；nil 表示不计数。
+func (s *ChatSettlementService) WithMetrics(recorder settlementMetricsRecorder) *ChatSettlementService {
+	if s != nil {
+		s.metrics = recorder
+	}
+	return s
+}
+
+func (s *ChatSettlementService) observeResolvedCost(cost resolvedSettlementCost) {
+	if s == nil || s.metrics == nil || !cost.rechargeRateFallback {
+		return
+	}
+	s.metrics.IncSettlementRechargeRateFallback()
 }
 
 // FxRateSource 提供成本币种 → USD 的最新汇率（由 core/fx.Service 实现）。
@@ -242,7 +263,9 @@ type resolvedSettlementCost struct {
 	costMultiplier            pgtype.Numeric
 	providerRechargeRateID    int64
 	providerRechargeRate      pgtype.Numeric
-	tierCostSource            string
+	// rechargeRateFallback 表示倍率路径没有命中任何充值汇率行、按 1.0 兜底记账（rate id 置 NULL）。
+	rechargeRateFallback bool
+	tierCostSource       string
 }
 
 // resolveSettlementCost 解析 settlement 计费应使用的真实成本（DEC-027 倍率 + DEC-031 单基数），优先级：
@@ -498,6 +521,7 @@ func resolveActiveSettlementCost(
 
 	rechargeRate := oneNumeric()
 	rechargeRateID := int64(0)
+	rechargeRateFallback := false
 	prr, err := queries.FindActiveProviderRechargeRate(ctx, sqlc.FindActiveProviderRechargeRateParams{
 		ProviderID: providerID, AtTime: at,
 	})
@@ -506,6 +530,7 @@ func resolveActiveSettlementCost(
 		rechargeRate = prr.Rate
 		rechargeRateID = prr.ID
 	case errors.Is(err, pgx.ErrNoRows):
+		rechargeRateFallback = true
 		// D-02 兜底：路由候选与渠道启用已拦截「无充值汇率」的服务商，走到这里说明结算与配置变更竞态
 		// 或历史数据缺 pin。不得丢弃成本记录——按 1.0 记账（rate id 置 NULL 即为明确的兜底标记）并告警。
 		if logger != nil {
@@ -531,6 +556,7 @@ func resolveActiveSettlementCost(
 		costMultiplier:          mult.Multiplier,
 		providerRechargeRateID:  rechargeRateID,
 		providerRechargeRate:    rechargeRate,
+		rechargeRateFallback:    rechargeRateFallback,
 		tierCostSource:          "derived",
 	}, nil
 }
@@ -984,6 +1010,7 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 	if err != nil {
 		return err
 	}
+	s.observeResolvedCost(cost)
 
 	// 收入快照：客户售价 = 模型基准价 × 线路倍率（DEC-026），由路由透传（params.SalePrice），不随命中哪条渠道变。
 	// price_id：覆盖路径指向命中的 channel_prices 行；倍率路径无该行 → 写 NULL（列可空、FK 对 NULL 豁免）。
@@ -1014,7 +1041,7 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		OutputPrice:                salePrice.OutputPrice,
 		ReasoningOutputPrice:       salePrice.ReasoningOutputPrice,
 		FormulaVersion:             billing.FormulaVersionV1,
-		SaleDiscount:                 params.SaleDiscount,
+		SaleDiscount:               params.SaleDiscount,
 		LongContextApplied:         longContextApplied,
 		ServiceTier:                pgtype.Text{String: string(tierSelection.settled), Valid: tierSelection.settled != ""},
 		ModelPriceServiceTierID:    nullableInt8(tierSelection.modelPriceServiceTierID),
@@ -1137,6 +1164,16 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 	// 只要形成非零 Provider 成本快照，就在同一事务中写入唯一消费流水。
 	// usage_source 明确区分上游真实 usage 与 Gateway partial estimate。
 	if s.providerLedger != nil && !numericIsZero(providerCost.TotalCostAmount) {
+		if params.FinalAccountID > 0 && s.logger != nil {
+			// 池型渠道由订阅账号供给，按量成本应恒为 0（配置入口已拦非零倍率）；这里出现非零成本
+			// 说明配置绕过或历史窗口残留，先告警不阻断结算，供运营核对渠道成本倍率。
+			s.logger.Warn("pool channel settlement produced non-zero provider cost",
+				zap.Int64("request_record_id", params.RequestRecord.ID),
+				zap.Int64("channel_id", params.FinalChannelID),
+				zap.Int64("account_id", params.FinalAccountID),
+				zap.String("total_cost_amount", numericLogString(providerCost.TotalCostAmount)),
+			)
+		}
 		channelName, err := txQueries.GetChannelName(ctx, params.FinalChannelID)
 		if err != nil {
 			return failure.Wrap(
@@ -1174,6 +1211,10 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 
 	reservationID := params.Authorization.ReservationID
 
+	// capturedSaleAmount 是客户本次真实承担的净额（冻结内实扣 + 超额补扣），余额不足被核销的部分不计。
+	// 账号终身统计与 000077 回填口径（ledger 净实扣）对齐，应收售卖额只留在 price snapshot。
+	capturedSaleAmount := pgtype.Numeric{Int: big.NewInt(0), Valid: true}
+
 	// ledger_entries.amount 要求大于 0；零金额请求保留 usage 和 price snapshot，但不写余额流水。
 	if numericIsZero(charge.Amount) {
 		_, err := s.ledgerCapturer.ReleaseWithQueries(ctx, txQueries, ledger.ReleaseParams{
@@ -1188,6 +1229,7 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 			RequestRecordID: params.RequestRecord.ID,
 			ReservationID:   &reservationID,
 			ActualAmount:    charge.Amount,
+			Currency:        charge.Currency,
 			IdempotencyKey:  fmt.Sprintf("chat:settle:%d", params.RequestRecord.ID),
 			Reason:          "chat completion settlement",
 		})
@@ -1220,6 +1262,11 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 					failure.WithMessage("add api key overage spent total"),
 				)
 			}
+		}
+		if captured := chatSettlementAddNumeric(reservation.CapturedAmount, reservation.OverageCapturedAmount); captured.Valid {
+			capturedSaleAmount = captured
+		} else if reservation.CapturedAmount.Valid {
+			capturedSaleAmount = reservation.CapturedAmount
 		}
 	}
 
@@ -1265,23 +1312,20 @@ func (s *ChatSettlementService) SettleSuccessfulChat(ctx context.Context, params
 		return err
 	}
 
-	// 池型账号生命周期累计（账号列表「用量」列）：请求数/token/售卖额随首次结算增量累加。
+	// 池型账号生命周期累计（账号列表「用量」列）：请求数/token/实收随首次结算增量累加。
 	// 幂等保障与 AddAPIKeySpentTotal 同源——重放在上方终态分支短路，绝不重复累加；
 	// 口径与账号 24H 聚合一致：只统计已归属账号（final_account_id）的结算终态。
 	// token 取账单口径（输入=uncached+cache read+三档 cache write，输出含 reasoning），
 	// 解析不出（partial 异常）按 0 计——请求数照常 +1，不因缺 usage 丢计数。
+	// 金额取客户实扣净额（capturedSaleAmount），与 000077 回填的 ledger 口径一致；核销部分不计。
 	if params.FinalAccountID > 0 {
 		inputTokens, _ := facts.Usage.ObservedInputTokens()
 		outputTokens, _ := facts.Usage.OutputTokensTotal.BillableValue()
-		saleAmount := charge.Amount
-		if !saleAmount.Valid {
-			saleAmount = pgtype.Numeric{Int: big.NewInt(0), Valid: true}
-		}
 		if err := txQueries.AddAccountLifetimeStats(ctx, sqlc.AddAccountLifetimeStatsParams{
 			AccountID:    params.FinalAccountID,
 			InputTokens:  inputTokens,
 			OutputTokens: outputTokens,
-			SaleAmount:   saleAmount,
+			SaleAmount:   capturedSaleAmount,
 		}); err != nil {
 			return failure.Wrap(
 				failure.CodeGatewayChatSettlementFailed,

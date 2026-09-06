@@ -133,6 +133,34 @@ func TestCreateRejectsNegativeMultiplier(t *testing.T) {
 	}
 }
 
+// 池型渠道没有按量成本：非零倍率在入口拒绝，0 倍率放行。
+func TestCreateRejectsNonZeroMultiplierForPoolChannel(t *testing.T) {
+	store := &fakeStore{
+		channel: sqlc.Channel{ID: 3, SupplyForm: "pool"},
+		createReturn: sqlc.ChannelCostMultiplier{
+			ID: 9, ChannelID: 3, Multiplier: mustNumeric(t, "0"), Status: "enabled", EffectiveFrom: ts(time.Now()),
+		},
+	}
+	svc := NewService(store)
+	_, err := svc.Create(context.Background(), CreateInput{
+		ChannelID:     3,
+		Multiplier:    "1.0",
+		Status:        "enabled",
+		EffectiveFrom: time.Now(),
+	})
+	if failure.CodeOf(err) != failure.CodeAdminInvalidArgument {
+		t.Fatalf("expected invalid argument for non-zero pool multiplier, got %v", err)
+	}
+	if _, err := svc.Create(context.Background(), CreateInput{
+		ChannelID:     3,
+		Multiplier:    "0",
+		Status:        "enabled",
+		EffectiveFrom: time.Now(),
+	}); err != nil {
+		t.Fatalf("zero multiplier must be accepted for pool channels: %v", err)
+	}
+}
+
 func mustNumeric(t *testing.T, s string) pgtype.Numeric {
 	t.Helper()
 	var n pgtype.Numeric

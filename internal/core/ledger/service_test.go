@@ -883,6 +883,62 @@ func TestCaptureWritesOffActualAmountAboveAuthorization(t *testing.T) {
 	}
 }
 
+// capture 传入币种时必须与冻结记录一致：金额按 reservation.Currency 入账，跨币种直接拒绝而不是静默记账。
+func TestCaptureRejectsCurrencyMismatchWithReservation(t *testing.T) {
+	ctx, pool, _, service, cleanup := newServiceTestDeps(t)
+	defer cleanup()
+
+	userID := createLedgerTestUser(t, ctx, pool)
+	defer cleanupLedgerTestUser(t, context.Background(), pool, userID)
+	requestRecordID := createLedgerTestRequestRecord(t, ctx, pool, userID)
+
+	if _, err := service.Credit(ctx, CreditParams{
+		UserID:         userID,
+		Amount:         numeric(50),
+		Currency:       "USD",
+		IdempotencyKey: fmt.Sprintf("capture-currency-credit-%d", time.Now().UnixNano()),
+		Reason:         "seed currency guard balance",
+	}); err != nil {
+		t.Fatalf("seed credit: %v", err)
+	}
+	reservation, err := service.PreAuthorize(ctx, PreAuthorizeParams{
+		UserID:          userID,
+		RequestRecordID: requestRecordID,
+		EstimatedAmount: numeric(10),
+		Currency:        "USD",
+		IdempotencyKey:  fmt.Sprintf("capture-currency-preauthorize-%d", time.Now().UnixNano()),
+		Reason:          "test currency guard preauthorize",
+	})
+	if err != nil {
+		t.Fatalf("preauthorize: %v", err)
+	}
+
+	_, err = service.Capture(ctx, CaptureParams{
+		RequestRecordID: requestRecordID,
+		ReservationID:   &reservation.ID,
+		ActualAmount:    numeric(10),
+		Currency:        "CNY",
+		IdempotencyKey:  fmt.Sprintf("capture-currency-%d", time.Now().UnixNano()),
+		Reason:          "test currency guard capture",
+	})
+	if !errors.Is(err, ErrCurrencyMismatch) || failure.CodeOf(err) != failure.CodeLedgerCurrencyMismatch {
+		t.Fatalf("expected currency mismatch failure, got %v", err)
+	}
+
+	captured, err := service.Capture(ctx, CaptureParams{
+		RequestRecordID: requestRecordID,
+		ReservationID:   &reservation.ID,
+		ActualAmount:    numeric(10),
+		Currency:        "USD",
+		IdempotencyKey:  fmt.Sprintf("capture-currency-ok-%d", time.Now().UnixNano()),
+		Reason:          "test currency guard capture",
+	})
+	if err != nil {
+		t.Fatalf("capture with matching currency: %v", err)
+	}
+	assertNumericEquals(t, captured.CapturedAmount, 10)
+}
+
 func TestCaptureCollectsOverageFromAvailableBalanceWithoutWriteOff(t *testing.T) {
 	ctx, pool, queries, service, cleanup := newServiceTestDeps(t)
 	defer cleanup()

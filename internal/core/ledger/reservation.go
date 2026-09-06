@@ -64,10 +64,13 @@ type AuthorizedRequest struct {
 
 // CaptureParams 表示把预授权转换为真实扣费所需参数。
 // ReservationID 可选；传入时用于校验调用方正在结算的就是这笔冻结记录。
+// Currency 可选；传入时必须与冻结记录币种一致——金额按 reservation.Currency 入账，
+// 这条断言是防止未来重构把另一币种的金额写进本币账本的纵深守卫。
 type CaptureParams struct {
 	RequestRecordID int64
 	ReservationID   *int64
 	ActualAmount    pgtype.Numeric
+	Currency        string
 	IdempotencyKey  string
 	Reason          string
 }
@@ -264,6 +267,15 @@ func (s *Service) captureWithQueries(ctx context.Context, queries *sqlc.Queries,
 	// ReservationID 是调用方持有的冻结事实 ID，用于防止参数错乱。
 	if params.ReservationID != nil && reservation.ID != *params.ReservationID {
 		return Reservation{}, ledgerFailure(failure.CodeLedgerIdempotencyConflict, ErrIdempotencyConflict, ErrIdempotencyConflict.Error())
+	}
+	if params.Currency != "" && params.Currency != reservation.Currency {
+		return Reservation{}, failure.Wrap(
+			failure.CodeLedgerCurrencyMismatch,
+			ErrCurrencyMismatch,
+			failure.WithMessage(ErrCurrencyMismatch.Error()),
+			failure.WithField("reservation_currency", reservation.Currency),
+			failure.WithField("charge_currency", params.Currency),
+		)
 	}
 
 	// 用户在冻结额度内最多扣已冻结金额；真实金额超出冻结额度时，先尝试从未冻结可用余额二次补扣

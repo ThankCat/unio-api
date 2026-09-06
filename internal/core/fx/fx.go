@@ -143,6 +143,10 @@ func RatFromNumeric(value pgtype.Numeric) (*big.Rat, error) {
 }
 
 // NumericFromRat 将有理数四舍五入到固定小数位（单次舍入，匹配 NUMERIC(20,10) 时 scale=10）。
+//
+// 这是全仓金额「有理数 → NUMERIC」的唯一 half-up 实现：billing 的分项金额、providerledger 的
+// 余额校正差额都经由此处舍入，避免三处各自演化出不同的舍入边界。
+// 只服务非负值（价格、汇率、金额）；负数按绝对值舍入后保留符号，方向仍为 half-up（远离零）。
 func NumericFromRat(value *big.Rat, scale int32) pgtype.Numeric {
 	multiplier := pow10(scale)
 	scaled := new(big.Rat).Mul(value, new(big.Rat).SetInt(multiplier))
@@ -150,11 +154,15 @@ func NumericFromRat(value *big.Rat, scale int32) pgtype.Numeric {
 }
 
 func roundHalfUp(value *big.Rat) *big.Int {
+	negative := value.Sign() < 0
+	abs := new(big.Rat).Abs(value)
 	quotient, remainder := new(big.Int), new(big.Int)
-	quotient.QuoRem(value.Num(), value.Denom(), remainder)
-	// 负数场景本包不出现（汇率与金额均非负），按非负 half-up 处理。
-	if new(big.Int).Mul(remainder, big.NewInt(2)).Cmp(value.Denom()) >= 0 {
+	quotient.QuoRem(abs.Num(), abs.Denom(), remainder)
+	if new(big.Int).Mul(remainder, big.NewInt(2)).Cmp(abs.Denom()) >= 0 {
 		quotient.Add(quotient, big.NewInt(1))
+	}
+	if negative {
+		quotient.Neg(quotient)
 	}
 	return quotient
 }

@@ -3,8 +3,10 @@ package billing
 import (
 	"math/big"
 
-	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/jackc/pgx/v5/pgtype"
+
+	"github.com/ThankCat/unio-gateway/internal/core/fx"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 )
 
 // requiredNonNegativeNumeric 将必填 NUMERIC 单价转换成非负有理数。
@@ -70,16 +72,9 @@ func tokenCost(unitPrice *big.Rat, tokens int64) *big.Rat {
 	return new(big.Rat).Mul(unitPrice, big.NewRat(tokens, 1))
 }
 
-// ratToNumeric 将金额四舍五入到固定小数位，匹配 NUMERIC(20,10)。
+// ratToNumeric 将金额四舍五入到固定小数位，匹配 NUMERIC(20,10)；舍入实现统一在 fx.NumericFromRat。
 func ratToNumeric(value *big.Rat, scale int32) pgtype.Numeric {
-	multiplier := pow10(scale)
-	scaled := new(big.Rat).Mul(value, new(big.Rat).SetInt(multiplier))
-
-	return pgtype.Numeric{
-		Int:   roundHalfUp(scaled),
-		Exp:   -scale,
-		Valid: true,
-	}
+	return fx.NumericFromRat(value, scale)
 }
 
 // sumRoundedNumerics 汇总一组由 ratToNumeric 生成、已经具有相同固定精度的金额。
@@ -95,18 +90,6 @@ func sumRoundedNumerics(scale int32, values ...pgtype.Numeric) pgtype.Numeric {
 		Exp:   -scale,
 		Valid: true,
 	}
-}
-
-// roundHalfUp 对非负有理数执行四舍五入。
-func roundHalfUp(value *big.Rat) *big.Int {
-	quotient, remainder := new(big.Int), new(big.Int)
-	quotient.QuoRem(value.Num(), value.Denom(), remainder)
-
-	if new(big.Int).Mul(remainder, big.NewInt(2)).Cmp(value.Denom()) >= 0 {
-		quotient.Add(quotient, big.NewInt(1))
-	}
-
-	return quotient
 }
 
 // pow10 返回 10 的 exp 次方。

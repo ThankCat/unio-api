@@ -22,6 +22,9 @@ var (
 
 	// ErrReservationNotFound 表示请求没有可结算的余额预授权记录
 	ErrReservationNotFound = errors.New("ledger: reservation not found")
+
+	// ErrCurrencyMismatch 表示结算金额币种与冻结记录币种不一致。
+	ErrCurrencyMismatch = errors.New("ledger: reservation currency mismatch")
 )
 
 // isUniqueViolation 判断数据库错误是否是唯一约束冲突。
