@@ -44,8 +44,13 @@ type WorkerServerAppDeps struct {
 }
 
 // WorkerServerApp 表示当前 worker-server 进程已经装配完成的后台任务应用。
+//
+// 后台任务分成两个并行 Runner：
+//   - settlement：结算补偿与预授权清扫，是资金一致性的关键路径，必须按自身节奏尽快 claim；
+//   - maintenance：令牌保活、渠道探测、模型发现/验证、目录与汇率同步、工单维护等外呼或周期任务，
+//     单轮可能长达数十秒，不允许推迟 settlement 组的下一轮。
 type WorkerServerApp struct {
-	Runner *workers.Runner
+	Runner *workers.Group
 }
 
 // NewWorkerServerApp 装配当前 worker-server 进程的后台任务应用。
@@ -116,10 +121,10 @@ func NewWorkerServerApp(ctx context.Context, deps WorkerServerAppDeps) (*WorkerS
 	)
 	tokenRefreshWorker := subscription.NewRefreshWorker(queries, subscriptionOutbound, deps.Logger, subscription.RefreshWorkerOptions{})
 
-	units := []workers.Unit{
+	settlementUnits := []workers.Unit{
 		settlementRecoveryWorker, orphanReservationSweeperWorker, strandedReservationSweeperWorker,
-		tokenRefreshWorker,
 	}
+	units := []workers.Unit{tokenRefreshWorker}
 
 	if deps.Config.ModelCatalogSync.Enabled {
 		syncer, store := buildModelCatalogSync(deps.Config.ModelCatalogSync, queries)
@@ -217,13 +222,32 @@ func NewWorkerServerApp(ctx context.Context, deps WorkerServerAppDeps) (*WorkerS
 		zap.String("interval", channelTestCfg.Interval.String()),
 		zap.Int("log_retention_per_channel", channelTestCfg.LogRetentionPerChannel),
 	)
-	runner := workers.NewRunner(
+	settlementRunner := workers.NewRunner(
+		deps.Logger,
+		deps.Config.Worker.RunnerIdleInterval,
+		settlementUnits...,
+	).WithName("settlement")
+	maintenanceRunner := workers.NewRunner(
 		deps.Logger,
 		deps.Config.Worker.RunnerIdleInterval,
 		units...,
+	).WithName("maintenance")
+	deps.Logger.Info("worker runners assembled",
+		zap.Strings("settlement", unitNames(settlementUnits)),
+		zap.Strings("maintenance", unitNames(units)),
 	)
 
-	return &WorkerServerApp{Runner: runner}, nil
+	return &WorkerServerApp{Runner: workers.NewGroup(settlementRunner, maintenanceRunner)}, nil
+}
+
+func unitNames(units []workers.Unit) []string {
+	names := make([]string, 0, len(units))
+	for _, unit := range units {
+		if unit != nil {
+			names = append(names, unit.Name())
+		}
+	}
+	return names
 }
 
 // NewModelCatalogSyncer 装配一个独立的 models.dev 同步编排器，供 worker-server 子命令（如 sync-models）使用。

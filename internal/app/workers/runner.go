@@ -2,6 +2,8 @@ package workers
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -20,7 +22,11 @@ type Unit interface {
 }
 
 // Runner 顺序调度一组后台 worker，并在空闲时按固定间隔休眠。
+//
+// 同一 Runner 内的 unit 串行执行：一个慢单元（如外呼上游的渠道探测）会推迟同组其它单元的下一轮。
+// 需要隔离延迟的任务分到不同 Runner，再由 Group 并行运行。
 type Runner struct {
+	name         string
 	logger       *zap.Logger
 	idleInterval time.Duration
 	workers      []Unit
@@ -40,6 +46,14 @@ func NewRunner(logger *zap.Logger, idleInterval time.Duration, units ...Unit) *R
 		idleInterval: idleInterval,
 		workers:      units,
 	}
+}
+
+// WithName 给 runner 一个用于日志归因的名字（如 settlement / maintenance）。
+func (r *Runner) WithName(name string) *Runner {
+	if r != nil {
+		r.name = name
+	}
+	return r
 }
 
 // Run 持续执行 worker，直到 ctx 被取消。
@@ -64,7 +78,11 @@ func (r *Runner) Run(ctx context.Context) error {
 			// didWork 表示这次是否真的处理了任务。
 			didWork, err := unit.RunOnce(ctx)
 			if err != nil {
-				fields := append([]zap.Field{zap.String("worker", unit.Name())}, failure.LogFields(err)...)
+				fields := []zap.Field{zap.String("worker", unit.Name())}
+				if r.name != "" {
+					fields = append(fields, zap.String("runner", r.name))
+				}
+				fields = append(fields, failure.LogFields(err)...)
 				r.logger.Error("worker run failed", fields...)
 			}
 
@@ -98,4 +116,57 @@ func (r *Runner) Run(ctx context.Context) error {
 			// idleInterval 到了，继续下一轮循环。
 		}
 	}
+}
+
+// Group 并行运行多个独立 Runner，让账务补偿这类关键路径不被慢探测拖住。
+//
+// 任一 Runner 返回错误时取消其余 Runner 并返回首个错误；全部因 ctx 取消而正常退出时返回 nil。
+type Group struct {
+	runners []*Runner
+}
+
+// NewGroup 创建并行 runner 组；nil runner 被忽略。
+func NewGroup(runners ...*Runner) *Group {
+	group := &Group{}
+	for _, runner := range runners {
+		if runner != nil {
+			group.runners = append(group.runners, runner)
+		}
+	}
+	return group
+}
+
+// Run 阻塞运行全部 runner，直到 ctx 取消或任一 runner 出错。
+func (g *Group) Run(ctx context.Context) error {
+	if g == nil || len(g.runners) == 0 {
+		<-ctx.Done()
+		return nil
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var (
+		wg       sync.WaitGroup
+		mu       sync.Mutex
+		firstErr error
+	)
+	for _, runner := range g.runners {
+		wg.Add(1)
+		go func(runner *Runner) {
+			defer wg.Done()
+			if err := runner.Run(runCtx); err != nil {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = err
+				}
+				mu.Unlock()
+				cancel()
+			}
+		}(runner)
+	}
+	wg.Wait()
+	if firstErr != nil && !errors.Is(firstErr, context.Canceled) {
+		return firstErr
+	}
+	return nil
 }
