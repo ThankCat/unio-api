@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-ARG GO_BUILD_IMAGE=golang:1.26.5-alpine
+ARG GO_BUILD_IMAGE=golang:1.26.6-alpine
 ARG APP_RUNTIME_IMAGE=alpine:3.22
 ARG MIGRATE_TOOL_IMAGE=migrate/migrate:v4.18.3
 
