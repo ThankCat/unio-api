@@ -12,6 +12,7 @@ import (
 
 	"github.com/ThankCat/unio-gateway/internal/core/adminauth"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
 )
 
 type fakeLoginAuthenticator struct {
@@ -86,7 +87,7 @@ func TestLoginInvalidCredentialsRemainUnauthorized(t *testing.T) {
 	limiter := &fakeLoginLimiter{allowed: true}
 	sessions := &fakeLoginSessions{}
 
-	rec := performLoginRequest(t, handleLogin(authenticator, limiter, sessions, 3600))
+	rec := performLoginRequest(t, handleLogin(authenticator, limiter, sessions, 3600, nil))
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
@@ -100,7 +101,7 @@ func TestLoginRateLimitedReturnsRetryAfterWithoutCheckingPassword(t *testing.T) 
 	limiter := &fakeLoginLimiter{allowed: false, retryAfter: 90*time.Second + time.Millisecond}
 	sessions := &fakeLoginSessions{}
 
-	rec := performLoginRequest(t, handleLogin(authenticator, limiter, sessions, 3600))
+	rec := performLoginRequest(t, handleLogin(authenticator, limiter, sessions, 3600, nil))
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
@@ -117,15 +118,56 @@ func TestLoginSuccessResetsLimiterBeforeIssuingSession(t *testing.T) {
 	limiter := &fakeLoginLimiter{allowed: true}
 	sessions := &fakeLoginSessions{}
 
-	rec := performLoginRequest(t, handleLogin(authenticator, limiter, sessions, 3600))
+	rec := performLoginRequest(t, handleLogin(authenticator, limiter, sessions, 3600, nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 	if limiter.resetCalls != 1 || sessions.issueCalls != 1 {
 		t.Fatalf("calls = reset %d issue %d", limiter.resetCalls, sessions.issueCalls)
 	}
-	if limiter.lastUsername != "admin" || limiter.lastRemote != "192.0.2.10:1234" {
+	// 来源分桶只取 IP：同一来源的不同临时端口必须落在同一个失败桶里。
+	if limiter.lastUsername != "admin" || limiter.lastRemote != "192.0.2.10" {
 		t.Fatalf("limiter subject = %q %q", limiter.lastUsername, limiter.lastRemote)
+	}
+}
+
+// 反代之后 RemoteAddr 恒为代理地址；来源分桶必须沿可信代理链回溯真实客户端，
+// 否则任何人对 admin 用户名打 5 次错口令就能把真实管理员锁在门外。
+func TestLoginLimiterUsesTrustedProxyAwareSource(t *testing.T) {
+	authenticator := &fakeLoginAuthenticator{}
+	limiter := &fakeLoginLimiter{allowed: true}
+	sessions := &fakeLoginSessions{}
+	resolver, err := httpx.NewTrustedClientIPResolver([]string{"192.0.2.0/24"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	body, err := json.Marshal(loginRequest{Username: "admin", Password: "secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/v1/login", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Forwarded-For", "198.51.100.23")
+	req.RemoteAddr = "192.0.2.10:1234"
+	rec := httptest.NewRecorder()
+	handleLogin(authenticator, limiter, sessions, 3600, resolver).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if limiter.lastRemote != "198.51.100.23" {
+		t.Fatalf("limiter source = %q, want the client behind the trusted proxy", limiter.lastRemote)
+	}
+
+	// 对端不在可信网段时，XFF 是客户端可伪造的：必须忽略并回落到 RemoteAddr。
+	req = httptest.NewRequest(http.MethodPost, "/v1/login", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Forwarded-For", "198.51.100.23")
+	req.RemoteAddr = "203.0.113.5:4321"
+	rec = httptest.NewRecorder()
+	handleLogin(authenticator, limiter, sessions, 3600, resolver).ServeHTTP(rec, req)
+	if limiter.lastRemote != "203.0.113.5" {
+		t.Fatalf("limiter source = %q, want RemoteAddr for untrusted peer", limiter.lastRemote)
 	}
 }
 
@@ -135,7 +177,7 @@ func TestLoginLimiterStoreFailureReturnsServiceUnavailable(t *testing.T) {
 	limiter := &fakeLoginLimiter{allowErr: storeErr}
 	sessions := &fakeLoginSessions{}
 
-	rec := performLoginRequest(t, handleLogin(authenticator, limiter, sessions, 3600))
+	rec := performLoginRequest(t, handleLogin(authenticator, limiter, sessions, 3600, nil))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
@@ -152,7 +194,7 @@ func TestLoginResetFailureDoesNotIssueSession(t *testing.T) {
 	}
 	sessions := &fakeLoginSessions{issueErr: errors.New("must not be called")}
 
-	rec := performLoginRequest(t, handleLogin(authenticator, limiter, sessions, 3600))
+	rec := performLoginRequest(t, handleLogin(authenticator, limiter, sessions, 3600, nil))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}

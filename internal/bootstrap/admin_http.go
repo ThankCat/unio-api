@@ -22,6 +22,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/ticket"
 	"github.com/ThankCat/unio-gateway/internal/app/adminapi/user"
 	"github.com/ThankCat/unio-gateway/internal/platform/config"
+	"github.com/ThankCat/unio-gateway/internal/platform/httpmw"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
 	adminproxy "github.com/ThankCat/unio-gateway/internal/service/admin/proxy"
 	subscriptionaccountadmin "github.com/ThankCat/unio-gateway/internal/service/admin/subscriptionaccount"
@@ -35,6 +36,7 @@ type adminHTTPDeps struct {
 	// CredentialAuthenticator 校验登录口令，LoginAttemptLimiter 限制失败尝试，Sessions 签发与吊销会话 token。
 	CredentialAuthenticator adminapi.CredentialAuthenticator
 	LoginAttemptLimiter     adminapi.LoginAttemptLimiter
+	LoginSourceResolver     adminapi.LoginSourceResolver
 	Sessions                adminapi.SessionIssuer
 	SessionTTLSeconds       int64
 
@@ -109,6 +111,8 @@ type adminHTTPDeps struct {
 	HTTPConfig    config.HTTPConfig
 
 	MetricsRecorder *metrics.Metrics
+	// GatewayInternalToken 非空时保护 /metrics（Bearer）；与 gateway 共用同一 token。
+	GatewayInternalToken string
 }
 
 // NewAdminHTTPHandler 创建 admin-server 进程使用的 HTTP handler。
@@ -118,6 +122,7 @@ func NewAdminHTTPHandler(deps adminHTTPDeps) http.Handler {
 		AdminAuthenticator:      deps.Authenticator,
 		CredentialAuthenticator: deps.CredentialAuthenticator,
 		LoginAttemptLimiter:     deps.LoginAttemptLimiter,
+		LoginSourceResolver:     deps.LoginSourceResolver,
 		Sessions:                deps.Sessions,
 		SessionTTLSeconds:       deps.SessionTTLSeconds,
 
@@ -180,7 +185,8 @@ func NewAdminHTTPHandler(deps adminHTTPDeps) http.Handler {
 
 	if deps.MetricsRecorder != nil {
 		routerDeps.HTTPMetrics = deps.MetricsRecorder
-		routerDeps.MetricsHandler = deps.MetricsRecorder.Handler()
+		// 与 gateway 同一把 GATEWAY_INTERNAL_TOKEN 保护 /metrics（Admin 与 Gateway 本就共用该 token）。
+		routerDeps.MetricsHandler = httpmw.RequireBearer(deps.GatewayInternalToken, deps.MetricsRecorder.Handler())
 	}
 
 	return adminapi.NewRouter(routerDeps)

@@ -23,6 +23,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/adminsession"
 	"github.com/ThankCat/unio-gateway/internal/platform/breakerstore"
 	"github.com/ThankCat/unio-gateway/internal/platform/config"
+	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/tracing"
@@ -134,6 +135,12 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		deps.Config.Admin.LoginAccountFailureLimit,
 		deps.Config.Admin.LoginFailureWindow,
 	)
+	// 登录限速的来源维度：只信任 ADMIN_TRUSTED_PROXY_CIDRS 内的对端回溯 X-Forwarded-For，
+	// 否则按 RemoteAddr 分桶；不配置时行为与直连部署一致。
+	loginSourceResolver, err := httpx.NewTrustedClientIPResolver(deps.Config.Admin.TrustedProxyCIDRs)
+	if err != nil {
+		return nil, failure.Wrap(failure.CodeConfigInvalid, err, failure.WithMessage("parse ADMIN_TRUSTED_PROXY_CIDRS"))
+	}
 
 	authenticator, err := adminauth.NewSessionAuthenticator(sessions)
 	if err != nil {
@@ -350,6 +357,7 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		Authenticator:           authenticator,
 		CredentialAuthenticator: credentialAuthenticator,
 		LoginAttemptLimiter:     loginAttemptLimiter,
+		LoginSourceResolver:     loginSourceResolver,
 		Sessions:                sessions,
 		SessionTTLSeconds:       int64(deps.Config.Admin.SessionTTL.Seconds()),
 
@@ -397,6 +405,7 @@ func NewAdminServerApp(ctx context.Context, deps AdminServerAppDeps) (*AdminServ
 		RecoveryJobQueryService:   recoveryJobQueryService,
 		RuntimeDiagnosticsService: runtimeDiagnosticsService,
 		GatewayLoggingService:     gatewayLoggingService,
+		GatewayInternalToken:      deps.Config.Admin.GatewayInternalToken,
 		MessageService:            adminMessageService,
 		EmailLogService:           emaillog.NewService(queries),
 		EmailSMTPService:          providerSettingsService,

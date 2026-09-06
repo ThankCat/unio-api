@@ -122,6 +122,10 @@ type AdminConfig struct {
 	LoginAccountFailureLimit int
 	// LoginFailureWindow 来自 ADMIN_LOGIN_FAILURE_WINDOW；登录尝试计数的固定窗口，默认 15m。
 	LoginFailureWindow time.Duration
+	// TrustedProxyCIDRs 来自 ADMIN_TRUSTED_PROXY_CIDRS（逗号分隔）；登录限速按来源分桶时，
+	// 只有 TCP 对端落在这些网段内才沿 X-Forwarded-For 回溯真实客户端，否则直接用 RemoteAddr。
+	// 反代之后不配置会让「同一来源」退化为代理地址，全网共享一个失败桶。
+	TrustedProxyCIDRs []string
 
 	// GatewayInternalURLs 来自 GATEWAY_INTERNAL_URLS（逗号分隔）；admin 拉取熔断快照的 gateway 基址列表。
 	// 空且 InternalToken 非空时，若 GATEWAY_HTTP_ADDR 形如 ":port" 则默认 http://127.0.0.1:port。
@@ -856,6 +860,7 @@ func Load() (Config, error) {
 			LoginSourceFailureLimit:  adminLoginSourceFailureLimit,
 			LoginAccountFailureLimit: adminLoginAccountFailureLimit,
 			LoginFailureWindow:       adminLoginFailureWindow,
+			TrustedProxyCIDRs:        splitCommaSeparated(os.Getenv("ADMIN_TRUSTED_PROXY_CIDRS")),
 			GatewayInternalURLs:      resolveGatewayInternalURLs(),
 			GatewayInternalToken:     getEnv("GATEWAY_INTERNAL_TOKEN", ""),
 			LokiURL:                  getEnv("LOKI_URL", "http://127.0.0.1:3100"),

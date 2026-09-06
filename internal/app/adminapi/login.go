@@ -3,6 +3,7 @@ package adminapi
 import (
 	"context"
 	"math"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -32,6 +33,25 @@ type LoginAttemptLimiter interface {
 	Reset(ctx context.Context, username, remoteAddr string) error
 }
 
+// LoginSourceResolver 解析登录限速使用的来源地址。反代之后 RemoteAddr 恒为代理地址，
+// 直接拿它分桶会让「同一来源 5 次/15 分钟」退化为全网共享一个桶；这里注入可信代理感知的解析器。
+type LoginSourceResolver interface {
+	Resolve(r *http.Request) string
+}
+
+// loginSource 返回限速分桶用的来源地址；无解析器时回落 RemoteAddr（去端口）。
+func loginSource(resolver LoginSourceResolver, r *http.Request) string {
+	if resolver != nil {
+		if source := strings.TrimSpace(resolver.Resolve(r)); source != "" {
+			return source
+		}
+	}
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil && host != "" {
+		return host
+	}
+	return r.RemoteAddr
+}
+
 // loginRequest 是登录入口接受的请求体。
 type loginRequest struct {
 	Username string `json:"username"`
@@ -51,7 +71,13 @@ type loginResponse struct {
 //
 // 会话存储故障与凭据错误分开渲染：前者是依赖故障（503），把它伪装成 401 会让管理员
 // 反复尝试登录而看不到真正原因。
-func handleLogin(authenticator CredentialAuthenticator, limiter LoginAttemptLimiter, sessions SessionIssuer, ttlSeconds int64) http.HandlerFunc {
+func handleLogin(
+	authenticator CredentialAuthenticator,
+	limiter LoginAttemptLimiter,
+	sessions SessionIssuer,
+	ttlSeconds int64,
+	sourceResolver LoginSourceResolver,
+) http.HandlerFunc {
 	const invalidMessage = "用户名或密码错误"
 
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -62,7 +88,8 @@ func handleLogin(authenticator CredentialAuthenticator, limiter LoginAttemptLimi
 		}
 
 		username := strings.TrimSpace(body.Username)
-		allowed, retryAfter, err := limiter.Allow(r.Context(), username, r.RemoteAddr)
+		source := loginSource(sourceResolver, r)
+		allowed, retryAfter, err := limiter.Allow(r.Context(), username, source)
 		if err != nil {
 			adminhttp.WriteServiceError(w, err)
 			return
@@ -84,7 +111,7 @@ func handleLogin(authenticator CredentialAuthenticator, limiter LoginAttemptLimi
 			_ = httpx.WriteError(w, http.StatusUnauthorized, "adminauth_invalid_credentials", invalidMessage)
 			return
 		}
-		if err := limiter.Reset(r.Context(), username, r.RemoteAddr); err != nil {
+		if err := limiter.Reset(r.Context(), username, source); err != nil {
 			adminhttp.WriteServiceError(w, err)
 			return
 		}

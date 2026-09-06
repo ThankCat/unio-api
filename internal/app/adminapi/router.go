@@ -50,6 +50,8 @@ type RouterDeps struct {
 	LoginAttemptLimiter     LoginAttemptLimiter
 	Sessions                SessionIssuer
 	SessionTTLSeconds       int64
+	// LoginSourceResolver 给登录限速提供可信代理感知的来源 IP；nil 时按 RemoteAddr 分桶。
+	LoginSourceResolver LoginSourceResolver
 
 	ProviderService              provider.ProviderService
 	ProviderOpsService           provider.ProviderOpsService
@@ -177,6 +179,7 @@ func NewRouter(deps RouterDeps) http.Handler {
 				deps.LoginAttemptLimiter,
 				deps.Sessions,
 				deps.SessionTTLSeconds,
+				deps.LoginSourceResolver,
 			))
 			if deps.LabLogos != nil {
 				r.Get("/labs/{slug}/logo.svg", handleLabLogo(deps.LabLogos))

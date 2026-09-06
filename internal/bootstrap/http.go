@@ -12,6 +12,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
 	"github.com/ThankCat/unio-gateway/internal/core/ledger"
 	"github.com/ThankCat/unio-gateway/internal/core/modelcatalog"
+	"github.com/ThankCat/unio-gateway/internal/platform/httpmw"
 	"github.com/ThankCat/unio-gateway/internal/platform/logging"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
@@ -31,7 +32,7 @@ func NewHTTPHandler(
 	internalToken string,
 	loggingStatus *logging.GatewayRuntime,
 ) http.Handler {
-	apiKeyAuthenticator := auth.NewAPIKeyAuthenticator(queries)
+	apiKeyAuthenticator := auth.NewAPIKeyAuthenticator(queries).WithLogger(logger)
 	balanceEligibilityService := ledger.NewBalanceEligibilityService(queries)
 	modelCatalogService := modelcatalog.NewService(queries)
 
@@ -53,7 +54,8 @@ func NewHTTPHandler(
 	if metricsRecorder != nil {
 		deps.PositiveBalanceMetrics = metricsRecorder
 		deps.HTTPMetrics = metricsRecorder
-		deps.MetricsHandler = metricsRecorder.Handler()
+		// /metrics 复用 GATEWAY_INTERNAL_TOKEN 做 Bearer 纵深防护：反代屏蔽是第一道，这是漏配时的第二道。
+		deps.MetricsHandler = httpmw.RequireBearer(internalToken, metricsRecorder.Handler())
 	}
 
 	return gatewayapi.NewRouter(deps)
