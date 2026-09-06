@@ -6,13 +6,13 @@ import (
 
 	"go.uber.org/zap"
 
-	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
 	responsesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/responses"
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/openai/responses/dto"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/tpmobserver"
 )
 
@@ -190,7 +190,7 @@ func responsesSafeMessage(code string) string {
 // vs 桥接 chat tokenizer）。allowDirect=false（CompactHistory 等强制桥接）退回纯 chat 桥接能力与估算。
 // 与 chatcompletions 一致按 stream 选择 Stream/NonStream 变体，避免仅支持一种模式的候选误选/误排。
 // stickyChannelID 是会话粘性既有绑定渠道（0=无），非 0 时置顶该渠道（大 uncache 缺口 P0）。
-func (s *ResponsesService) prepareResponsesCandidates(ctx context.Context, req gatewayapi.ResponsesRequest, candidates []routing.ChatRouteCandidate, stream bool, allowDirect bool, stickyChannelID int64) (lifecycle.CandidatePlan, error) {
+func (s *ResponsesService) prepareResponsesCandidates(ctx context.Context, req dto.ResponsesRequest, candidates []routing.ChatRouteCandidate, stream bool, allowDirect bool, stickyChannelID int64) (lifecycle.CandidatePlan, error) {
 	var capabilities []lifecycle.AdapterCapability
 	if allowDirect {
 		capabilities = []lifecycle.AdapterCapability{lifecycle.AdapterCapabilityResponsesServeTokenizer}
@@ -221,7 +221,7 @@ func (s *ResponsesService) prepareResponsesCandidates(ctx context.Context, req g
 //
 // 直传候选（allowDirect 且 HasResponses）用 responses tokenizer 对即将上送的请求体做保守估算；
 // 其余候选先用 mapResponsesRequestToChat 翻译成内部 ChatRequest 再交给 chat tokenizer（桥接复用）。
-func (s *ResponsesService) responsesInputTokenEstimator(req gatewayapi.ResponsesRequest, allowDirect bool) lifecycle.CandidateInputTokenEstimator {
+func (s *ResponsesService) responsesInputTokenEstimator(req dto.ResponsesRequest, allowDirect bool) lifecycle.CandidateInputTokenEstimator {
 	return func(_ context.Context, candidate routing.ChatRouteCandidate) (int64, error) {
 		if allowDirect && s.registry.HasResponses(candidate.AdapterKey) {
 			tokenizer, ok := s.registry.ResponsesInputTokenizer(candidate.AdapterKey)
@@ -281,7 +281,7 @@ func (s *ResponsesService) responsesInputTokenEstimator(req gatewayapi.Responses
 
 // estimateMaxCompletionTokens 返回客户显式给出的输出 token 上限；客户未给出时返回 0。
 // 客户缺失时的兜底（候选模型 max_output_tokens → 进程级 fallback）由 authorization 统一决定。
-func estimateMaxCompletionTokens(req gatewayapi.ResponsesRequest) int64 {
+func estimateMaxCompletionTokens(req dto.ResponsesRequest) int64 {
 	if req.MaxOutputTokens != nil && req.MaxOutputTokens.Int() > 0 {
 		return int64(req.MaxOutputTokens.Int())
 	}

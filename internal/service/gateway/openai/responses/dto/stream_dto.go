@@ -1,4 +1,4 @@
-package responses
+package dto
 
 import "encoding/json"
 

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 
-	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/anthropic/messages"
 	messagesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/anthropic/messages"
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
@@ -13,11 +12,12 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/sessionhint"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/anthropic/messages/dto"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
 
 // CreateMessage 编排非流式 Anthropic Messages 请求，并返回公开 DTO 与内部交付 finalizer。
-func (s *MessagesService) CreateMessage(ctx context.Context, req gatewayapi.MessageRequest) (*lifecycle.NonStreamResult[*gatewayapi.MessageResponse], error) {
+func (s *MessagesService) CreateMessage(ctx context.Context, req dto.MessageRequest) (*lifecycle.NonStreamResult[*dto.MessageResponse], error) {
 	principal, ok := auth.APIKeyPrincipalFromContext(ctx)
 	if !ok {
 		return nil, failure.Wrap(

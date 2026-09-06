@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/chatcompletions"
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	chatbridge "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatbridge"
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
@@ -17,6 +16,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/openai/chatcompletions/dto"
 )
 
 // partialOutputTokenCounter 按 upstream model 估算一段可见输出文本的 token 数，供 partial settlement 使用。
@@ -30,7 +30,7 @@ func partialOutputTokenCounter(model string, text string) int64 {
 }
 
 // StreamChatCompletion 编排流式 chat completion 请求，并通过 emit 写出 OpenAI-compatible SSE chunk。
-func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req gatewayapi.ChatCompletionRequest, emit func(gatewayapi.ChatCompletionStreamResponse) error) error {
+func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req dto.ChatCompletionRequest, emit func(dto.ChatCompletionStreamResponse) error) error {
 	principal, ok := auth.APIKeyPrincipalFromContext(ctx)
 	if !ok {
 		return failure.Wrap(
@@ -217,8 +217,8 @@ func (s *ChatCompletionService) StreamChatCompletion(ctx context.Context, req ga
 
 // emitClientStreamUsage 在流式成功结算后，按 OpenAI 约定向客户端写出 usage chunk。
 func emitClientStreamUsage(
-	emit func(gatewayapi.ChatCompletionStreamResponse) error,
-	req gatewayapi.ChatCompletionRequest,
+	emit func(dto.ChatCompletionStreamResponse) error,
+	req dto.ChatCompletionRequest,
 	streamID string,
 	usage adapter.ChatUsage,
 ) error {
@@ -227,12 +227,12 @@ func emitClientStreamUsage(
 	}
 
 	usageResp := mapAdapterUsageToGateway(usage)
-	return emit(gatewayapi.ChatCompletionStreamResponse{
+	return emit(dto.ChatCompletionStreamResponse{
 		ID:      streamID,
 		Object:  "chat.completion.chunk",
 		Created: time.Now().Unix(),
 		Model:   req.Model,
-		Choices: []gatewayapi.ChatCompletionStreamChoice{},
+		Choices: []dto.ChatCompletionStreamChoice{},
 		Usage:   &usageResp,
 	})
 }

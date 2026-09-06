@@ -5,11 +5,11 @@ import (
 	"errors"
 	"testing"
 
-	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/chatcompletions"
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/openai/chatcompletions/dto"
 )
 
 type openAICandidateCapabilityRegistry struct {
@@ -61,9 +61,9 @@ func TestPrepareChatCandidatesUsesEachAdapterTokenizerAndMaximumEstimate(t *test
 		candidates: lifecycle.NewExecutor(capabilities),
 	}
 	req := chatRequestWithParams()
-	req.Tools = []gatewayapi.ChatCompletionTool{{
+	req.Tools = []dto.ChatCompletionTool{{
 		Type: "function",
-		Function: gatewayapi.ChatCompletionFunctionTool{
+		Function: dto.ChatCompletionFunctionTool{
 			Name:       "search_docs",
 			Parameters: []byte(`{"type":"object"}`),
 		},

@@ -18,8 +18,8 @@ import (
 	"encoding/json"
 	"strings"
 
-	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/openai/responses/dto"
 )
 
 // requestTranslation 记录 Responses→Chat 翻译的副作用，供 service 层写入请求审计。
@@ -55,7 +55,7 @@ const roleAssistant = "assistant"
 // mapResponsesRequestToChat 把 Responses 请求翻译为内部 chatcompletionsadapter.ChatRequest。
 //
 // upstreamModel 是 routing 解析出的上游模型名（方案 A，DEC-014）；客户模型名只用于 routing。
-func mapResponsesRequestToChat(req gatewayapi.ResponsesRequest, upstreamModel string) (chatcompletionsadapter.ChatRequest, requestTranslation) {
+func mapResponsesRequestToChat(req dto.ResponsesRequest, upstreamModel string) (chatcompletionsadapter.ChatRequest, requestTranslation) {
 	var tr requestTranslation
 
 	chat := chatcompletionsadapter.ChatRequest{
@@ -110,7 +110,7 @@ func mapResponsesRequestToChat(req gatewayapi.ResponsesRequest, upstreamModel st
 }
 
 // recordContractlessDrops 记录契约无承载字段的桥接层 Drop（BRIDGE §1）。
-func recordContractlessDrops(req gatewayapi.ResponsesRequest, tr *requestTranslation) {
+func recordContractlessDrops(req dto.ResponsesRequest, tr *requestTranslation) {
 	if req.PreviousResponseID != nil {
 		tr.drop("previous_response_id")
 	}
@@ -134,7 +134,7 @@ func recordContractlessDrops(req gatewayapi.ResponsesRequest, tr *requestTransla
 // instructions 注入顶部 system；input 是字符串时为单条 user message；input 是 item 数组时按
 // §2 规则展开：连续 function_call 合并进同一条 assistant.tool_calls；function_call_output 生成
 // 按 call_id 对齐的 tool message。
-func buildChatMessages(req gatewayapi.ResponsesRequest) []chatcompletionsadapter.ChatMessage {
+func buildChatMessages(req dto.ResponsesRequest) []chatcompletionsadapter.ChatMessage {
 	msgs := make([]chatcompletionsadapter.ChatMessage, 0, len(req.Input.Items)+1)
 
 	if req.Instructions != nil && strings.TrimSpace(*req.Instructions) != "" {
@@ -273,7 +273,7 @@ func decodeReasoningCarrier(encrypted string) (string, bool) {
 //
 // 优先级：encrypted_content（Unio 载体，无状态规范回放路径）→ content 的 reasoning_text part
 // （Unio 出站可见形态）→ summary 的 summary_text part（OpenAI 标准回放形态）。三者皆空返回空串。
-func extractReasoningText(item gatewayapi.ResponseInputItem) string {
+func extractReasoningText(item dto.ResponseInputItem) string {
 	if item.EncryptedContent != nil {
 		if text, ok := decodeReasoningCarrier(*item.EncryptedContent); ok {
 			return text
@@ -312,7 +312,7 @@ func reasoningPartsText(raw json.RawMessage, partType string) string {
 //
 // MCP namespace 工具回传时带 namespace 字段：拍平为与出站 tools 一致的名称（BRIDGE §3.3 方案 B），
 // 保证 function_call 与声明的 tools[] 名称对齐。
-func functionCallName(item gatewayapi.ResponseInputItem) string {
+func functionCallName(item dto.ResponseInputItem) string {
 	name := derefString(item.Name)
 	if item.Namespace != nil && *item.Namespace != "" {
 		return joinNamespaceToolName(*item.Namespace, name)
@@ -321,7 +321,7 @@ func functionCallName(item gatewayapi.ResponseInputItem) string {
 }
 
 // toolCallArguments 按 item 类型还原 Chat tool_call 的 arguments。
-func toolCallArguments(itemType string, item gatewayapi.ResponseInputItem) string {
+func toolCallArguments(itemType string, item dto.ResponseInputItem) string {
 	if itemType == itemTypeCustomToolCall {
 		return encodeCustomToolArguments(customToolInputFromItem(item.Input))
 	}
@@ -343,7 +343,7 @@ func functionCallArguments(raw json.RawMessage) string {
 }
 
 // buildMessageItem 把 message input item 翻译成单条 Chat message。
-func buildMessageItem(item gatewayapi.ResponseInputItem) chatcompletionsadapter.ChatMessage {
+func buildMessageItem(item dto.ResponseInputItem) chatcompletionsadapter.ChatMessage {
 	return chatcompletionsadapter.ChatMessage{
 		Role:    item.Role,
 		Content: translateInputContent(item.Content),
@@ -356,7 +356,7 @@ func buildMessageItem(item gatewayapi.ResponseInputItem) chatcompletionsadapter.
 //   - namespace（Codex MCP 分组）→ 拍平内层 function 工具，名称用 <namespace><name>（方案 B）。
 //   - 内置工具（web_search/image_generation/file_search/...）/ custom / local_shell：契约无 function
 //     承载或本阶段不消费 → Drop 并记审计（GAP-11-002 / GAP-11-004）。
-func mapResponsesToolsToChat(tools []gatewayapi.ResponsesTool, tr *requestTranslation) []chatcompletionsadapter.ChatTool {
+func mapResponsesToolsToChat(tools []dto.ResponsesTool, tr *requestTranslation) []chatcompletionsadapter.ChatTool {
 	if len(tools) == 0 {
 		return nil
 	}

@@ -3,12 +3,12 @@ package chatcompletions
 import (
 	"encoding/json"
 
-	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/chatcompletions"
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/openai/chatcompletions/dto"
 )
 
-func mapGatewayMessagesToAdapter(messages []gatewayapi.ChatMessage) []chatcompletionsadapter.ChatMessage {
+func mapGatewayMessagesToAdapter(messages []dto.ChatMessage) []chatcompletionsadapter.ChatMessage {
 	out := make([]chatcompletionsadapter.ChatMessage, 0, len(messages))
 	for _, msg := range messages {
 		out = append(out, chatcompletionsadapter.ChatMessage{
@@ -22,7 +22,7 @@ func mapGatewayMessagesToAdapter(messages []gatewayapi.ChatMessage) []chatcomple
 	return out
 }
 
-func mapGatewayToolCallsToAdapter(calls []gatewayapi.ChatCompletionToolCall) []chatcompletionsadapter.ChatToolCall {
+func mapGatewayToolCallsToAdapter(calls []dto.ChatCompletionToolCall) []chatcompletionsadapter.ChatToolCall {
 	if len(calls) == 0 {
 		return nil
 	}
@@ -42,7 +42,7 @@ func mapGatewayToolCallsToAdapter(calls []gatewayapi.ChatCompletionToolCall) []c
 	return out
 }
 
-func mapGatewayToolsToAdapter(tools []gatewayapi.ChatCompletionTool) []chatcompletionsadapter.ChatTool {
+func mapGatewayToolsToAdapter(tools []dto.ChatCompletionTool) []chatcompletionsadapter.ChatTool {
 	if len(tools) == 0 {
 		return nil
 	}
@@ -63,7 +63,7 @@ func mapGatewayToolsToAdapter(tools []gatewayapi.ChatCompletionTool) []chatcompl
 	return out
 }
 
-func mapGatewayResponseFormatToAdapter(format *gatewayapi.ChatCompletionResponseFormat) *chatcompletionsadapter.ChatResponseFormat {
+func mapGatewayResponseFormatToAdapter(format *dto.ChatCompletionResponseFormat) *chatcompletionsadapter.ChatResponseFormat {
 	if format == nil {
 		return nil
 	}
@@ -74,7 +74,7 @@ func mapGatewayResponseFormatToAdapter(format *gatewayapi.ChatCompletionResponse
 	}
 }
 
-func mapGatewayRequestToAdapter(req gatewayapi.ChatCompletionRequest, upstreamModel string) chatcompletionsadapter.ChatRequest {
+func mapGatewayRequestToAdapter(req dto.ChatCompletionRequest, upstreamModel string) chatcompletionsadapter.ChatRequest {
 	extensions := make(map[string]json.RawMessage, len(req.Extensions))
 	for k, v := range req.Extensions {
 		extensions[k] = append(json.RawMessage(nil), v...)
@@ -125,17 +125,17 @@ func cloneRawMessage(src json.RawMessage) json.RawMessage {
 	return append(json.RawMessage(nil), src...)
 }
 
-func mapAdapterToolCallsToGateway(calls []chatcompletionsadapter.ChatToolCall) []gatewayapi.ChatCompletionToolCall {
+func mapAdapterToolCallsToGateway(calls []chatcompletionsadapter.ChatToolCall) []dto.ChatCompletionToolCall {
 	if len(calls) == 0 {
 		return nil
 	}
 
-	out := make([]gatewayapi.ChatCompletionToolCall, 0, len(calls))
+	out := make([]dto.ChatCompletionToolCall, 0, len(calls))
 	for _, call := range calls {
-		out = append(out, gatewayapi.ChatCompletionToolCall{
+		out = append(out, dto.ChatCompletionToolCall{
 			ID:   call.ID,
 			Type: call.Type,
-			Function: gatewayapi.ChatCompletionToolCallFunction{
+			Function: dto.ChatCompletionToolCallFunction{
 				Name:      call.Function.Name,
 				Arguments: call.Function.Arguments,
 			},
@@ -145,31 +145,31 @@ func mapAdapterToolCallsToGateway(calls []chatcompletionsadapter.ChatToolCall) [
 	return out
 }
 
-func mapAdapterUsageToGateway(usage adapter.ChatUsage) gatewayapi.ChatCompletionUsage {
-	out := gatewayapi.ChatCompletionUsage{
+func mapAdapterUsageToGateway(usage adapter.ChatUsage) dto.ChatCompletionUsage {
+	out := dto.ChatCompletionUsage{
 		PromptTokens:     usage.PromptTokens,
 		CompletionTokens: usage.CompletionTokens,
 		TotalTokens:      usage.TotalTokens,
 	}
 	if usage.CachedTokens > 0 {
-		out.PromptTokensDetails = &gatewayapi.ChatCompletionPromptDetails{
+		out.PromptTokensDetails = &dto.ChatCompletionPromptDetails{
 			CachedTokens: usage.CachedTokens,
 		}
 	}
 	if usage.ReasoningTokens > 0 {
-		out.CompletionTokensDetails = &gatewayapi.ChatCompletionCompletionDetails{
+		out.CompletionTokensDetails = &dto.ChatCompletionCompletionDetails{
 			ReasoningTokens: usage.ReasoningTokens,
 		}
 	}
 	return out
 }
 
-func mapAdapterResponseToGateway(reqModel string, resp chatcompletionsadapter.ChatResponse) gatewayapi.ChatCompletionResponse {
+func mapAdapterResponseToGateway(reqModel string, resp chatcompletionsadapter.ChatResponse) dto.ChatCompletionResponse {
 	finishReason := resp.FinishReason
 	if finishReason == "" {
 		finishReason = "stop"
 	}
-	msg := gatewayapi.ChatMessage{
+	msg := dto.ChatMessage{
 		Role:             "assistant",
 		ReasoningContent: resp.ReasoningContent,
 		ToolCalls:        mapAdapterToolCallsToGateway(resp.ToolCalls),
@@ -180,12 +180,12 @@ func mapAdapterResponseToGateway(reqModel string, resp chatcompletionsadapter.Ch
 	if resp.Content != "" {
 		msg.Content = jsonStringContent(resp.Content)
 	}
-	return gatewayapi.ChatCompletionResponse{
+	return dto.ChatCompletionResponse{
 		ID:      resp.ID,
 		Object:  "chat.completion",
 		Created: resp.Created,
 		Model:   reqModel,
-		Choices: []gatewayapi.ChatCompletionChoice{{
+		Choices: []dto.ChatCompletionChoice{{
 			Index:        0,
 			Message:      msg,
 			FinishReason: finishReason,
@@ -197,8 +197,8 @@ func mapAdapterResponseToGateway(reqModel string, resp chatcompletionsadapter.Ch
 	}
 }
 
-func mapAdapterStreamChunkToGateway(reqModel string, chunk chatcompletionsadapter.ChatStreamChunk, emitUsageNull bool) gatewayapi.ChatCompletionStreamResponse {
-	delta := gatewayapi.ChatCompletionStreamDelta{
+func mapAdapterStreamChunkToGateway(reqModel string, chunk chatcompletionsadapter.ChatStreamChunk, emitUsageNull bool) dto.ChatCompletionStreamResponse {
+	delta := dto.ChatCompletionStreamDelta{
 		Role:             chunk.Role,
 		Content:          chunk.Content,
 		ReasoningContent: chunk.ReasoningContent,
@@ -207,13 +207,13 @@ func mapAdapterStreamChunkToGateway(reqModel string, chunk chatcompletionsadapte
 		FunctionCall:     cloneRawMessage(chunk.FunctionCall),
 	}
 
-	return gatewayapi.ChatCompletionStreamResponse{
+	return dto.ChatCompletionStreamResponse{
 		ID:              chunk.ID,
 		Object:          "chat.completion.chunk",
 		Created:         chunk.Created,
 		Model:           reqModel,
 		EmitUsageAsNull: emitUsageNull,
-		Choices: []gatewayapi.ChatCompletionStreamChoice{{
+		Choices: []dto.ChatCompletionStreamChoice{{
 			Index:        chunk.Index,
 			Delta:        delta,
 			FinishReason: chunk.FinishReason,

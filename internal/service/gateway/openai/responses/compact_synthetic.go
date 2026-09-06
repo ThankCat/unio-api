@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"strings"
 
-	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/openai/responses/dto"
 )
 
 // compact_synthetic.go 实现 SyntheticCompact：无状态降级压缩（DEC-014 / GAP-11-007）。
@@ -29,7 +29,7 @@ const defaultCompactionInstruction = "Summarize the conversation so far into a c
 func (s *ResponsesService) invokeSyntheticCompact(
 	ctx context.Context,
 	candidate routing.ChatRouteCandidate,
-	req gatewayapi.ResponsesRequest,
+	req dto.ResponsesRequest,
 	chatAdapter chatcompletionsadapter.ChatAdapter,
 	result *compactResult,
 ) (lifecycle.AttemptSuccess, error) {
@@ -56,22 +56,22 @@ func (s *ResponsesService) invokeSyntheticCompact(
 //
 // 第一版只承载摘要文本为单条 assistant message（output_text）；摘要为空时返回空 output，
 // 由 Codex 决定回退策略。
-func mapChatResponseToCompaction(chatResp chatcompletionsadapter.ChatResponse) gatewayapi.CompactHistoryResponse {
-	output := make([]gatewayapi.ResponseOutputItem, 0, 1)
+func mapChatResponseToCompaction(chatResp chatcompletionsadapter.ChatResponse) dto.CompactHistoryResponse {
+	output := make([]dto.ResponseOutputItem, 0, 1)
 
 	summary := strings.TrimSpace(chatResp.Content)
 	if summary != "" {
-		output = append(output, gatewayapi.ResponseOutputItem{
+		output = append(output, dto.ResponseOutputItem{
 			Type:   "message",
 			ID:     newResponsesID("msg"),
 			Role:   "assistant",
 			Status: "completed",
-			Content: []gatewayapi.ResponseOutputContent{{
+			Content: []dto.ResponseOutputContent{{
 				Type: "output_text",
 				Text: summary,
 			}},
 		})
 	}
 
-	return gatewayapi.CompactHistoryResponse{Output: output}
+	return dto.CompactHistoryResponse{Output: output}
 }

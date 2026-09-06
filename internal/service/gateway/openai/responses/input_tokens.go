@@ -3,10 +3,10 @@ package responses
 import (
 	"context"
 
-	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/openai/responses/dto"
 )
 
 // input_tokens.go 实现 POST /v1/responses/input_tokens 的本地估算（DEC-014 / GAP-11-008）。
@@ -20,7 +20,7 @@ import (
 const inputTokenCountObject = "response.input_tokens"
 
 // CountInputTokens 本地估算请求 input token 数。
-func (s *ResponsesService) CountInputTokens(ctx context.Context, req gatewayapi.ResponsesRequest) (*gatewayapi.InputTokenCountResponse, error) {
+func (s *ResponsesService) CountInputTokens(ctx context.Context, req dto.ResponsesRequest) (*dto.InputTokenCountResponse, error) {
 	principal, ok := auth.APIKeyPrincipalFromContext(ctx)
 	if !ok {
 		return nil, failure.Wrap(
@@ -77,7 +77,7 @@ func (s *ResponsesService) CountInputTokens(ctx context.Context, req gatewayapi.
 		)
 	}
 
-	return &gatewayapi.InputTokenCountResponse{
+	return &dto.InputTokenCountResponse{
 		InputTokens: int(count),
 		Object:      inputTokenCountObject,
 	}, nil

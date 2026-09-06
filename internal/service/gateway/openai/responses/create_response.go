@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 
-	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
 	responsesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/responses"
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
@@ -16,6 +15,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/openai/responses/dto"
 )
 
 // CreateResponse 编排非流式 Responses 请求，并返回公开 DTO 与内部交付 finalizer。
@@ -25,7 +25,7 @@ import (
 //   - 桥接候选（chat-only 第三方，如 deepseek）：沿用 DEC-014 responses→chat 桥接，再翻译回 Responses 响应。
 //
 // 两条路径产出统一 adapter.ResponseFacts，资金关键循环、attempt 审计与终态写入由共享 AttemptRunner 承担。
-func (s *ResponsesService) CreateResponse(ctx context.Context, req gatewayapi.ResponsesRequest) (*lifecycle.NonStreamResult[*gatewayapi.ResponsesResponse], error) {
+func (s *ResponsesService) CreateResponse(ctx context.Context, req dto.ResponsesRequest) (*lifecycle.NonStreamResult[*dto.ResponsesResponse], error) {
 	tierRequest, err := servicetier.NormalizeOpenAIRequest(req.ServiceTier)
 	if err != nil {
 		return nil, err
@@ -37,7 +37,7 @@ func (s *ResponsesService) CreateResponse(ctx context.Context, req gatewayapi.Re
 	if result.direct != nil {
 		// 直传：原文透传上游响应体，仅改写顶层 model 回显为客户请求名（零转换）。
 		data := rewriteResponsesModel(result.direct.Raw, req.Model)
-		return lifecycle.NewNonStreamResult(gatewayapi.RawResponsesResponse(data), delivery), nil
+		return lifecycle.NewNonStreamResult(dto.RawResponsesResponse(data), delivery), nil
 	}
 	resp := mapChatResponseToResponses(req, *result.chat)
 	return lifecycle.NewNonStreamResult(&resp, delivery), nil
@@ -88,7 +88,7 @@ func multiAgentBridgeUnsupported() error {
 //
 // allowDirect=false 时强制全部走桥接（与 CompactHistory 的 synthetic 估算口径一致）。协议差异（直传/
 // 桥接调用与响应捕获）由 resolve/invoke 闭包按候选注入，scaffold 复用 runNonStream。
-func (s *ResponsesService) executeResponse(ctx context.Context, req gatewayapi.ResponsesRequest, requestedTier servicetier.Tier, allowDirect bool) (responseResult, lifecycle.DeliveryFinalizer, error) {
+func (s *ResponsesService) executeResponse(ctx context.Context, req dto.ResponsesRequest, requestedTier servicetier.Tier, allowDirect bool) (responseResult, lifecycle.DeliveryFinalizer, error) {
 	var (
 		chatAdapter   chatcompletionsadapter.ChatAdapter
 		directAdapter responsesadapter.ResponsesAdapter
@@ -168,7 +168,7 @@ func (s *ResponsesService) executeResponse(ctx context.Context, req gatewayapi.R
 // 本方法承担 routing、authorization、共享候选循环、metrics outcome 与终态写入；协议/路径差异（候选能力
 // 过滤口径、per-candidate 上游调用与响应捕获）由 strat 注入。CreateResponse（直传/桥接）与 CompactHistory
 // （native/synthetic）共用本 scaffold，资金关键链路只此一份。
-func (s *ResponsesService) runNonStream(ctx context.Context, req gatewayapi.ResponsesRequest, requestedTier servicetier.Tier, strat nonStreamStrategy) (lifecycle.DeliveryFinalizer, error) {
+func (s *ResponsesService) runNonStream(ctx context.Context, req dto.ResponsesRequest, requestedTier servicetier.Tier, strat nonStreamStrategy) (lifecycle.DeliveryFinalizer, error) {
 	principal, ok := auth.APIKeyPrincipalFromContext(ctx)
 	if !ok {
 		return nil, failure.Wrap(

@@ -85,13 +85,6 @@ type MessageDeltaBody struct {
 	StopSequence *string `json:"stop_sequence,omitempty"`
 }
 
-// StreamMessageStop 标记整个 message 流结束。
-type StreamMessageStop struct {
-	Type string `json:"type"`
-}
-
-func (StreamMessageStop) EventName() string { return "message_stop" }
-
 // StreamPing 是保活事件。
 type StreamPing struct {
 	Type string `json:"type"`
@@ -106,12 +99,6 @@ type StreamError struct {
 }
 
 func (StreamError) EventName() string { return "error" }
-
-// StreamFrame 是 service 层交给 HTTP 层写出的一个 Anthropic 原生 SSE 事件帧。
-type StreamFrame struct {
-	EventType string
-	Data      json.RawMessage
-}
 
 // EncodeStreamEvent 把一个具名事件编码为 Anthropic SSE 帧（含结尾空行）。
 func EncodeStreamEvent(ev StreamEvent) ([]byte, error) {

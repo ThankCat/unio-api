@@ -5,18 +5,18 @@ import (
 	"strings"
 	"testing"
 
-	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	responsesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/responses"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
 	"github.com/ThankCat/unio-gateway/internal/core/sessionhint"
 	"github.com/ThankCat/unio-gateway/internal/core/usage"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/openai/responses/dto"
 )
 
 // TestCreateResponse_PassesUpstreamAffinityToAdapter 验证非流式编排把 Sticky 同源的会话键与客户
 // API Key 身份经 ctx 交给直传 adapter：显式 prompt_cache_key 原值直达；无显式信号时落内容派生哈希。
 func TestCreateResponse_PassesUpstreamAffinityToAdapter(t *testing.T) {
-	run := func(t *testing.T, req gatewayapi.ResponsesRequest) sessionhint.UpstreamAffinity {
+	run := func(t *testing.T, req dto.ResponsesRequest) sessionhint.UpstreamAffinity {
 		t.Helper()
 		directAdapter := &fakeResponsesAdapter{resp: directResponse()}
 		registry := &fakeRegistry{responsesAdapters: map[string]responsesadapter.ResponsesAdapter{"codex": directAdapter}}
@@ -76,7 +76,7 @@ func TestStreamResponse_PassesUpstreamAffinityToAdapter(t *testing.T) {
 	req := directRequest()
 	key := "01a06086-5391-7d71-a82e-e5638a243ec4"
 	req.PromptCacheKey = &key
-	if err := svc.StreamResponse(ctxWithPrincipal(), req, func(gatewayapi.ResponsesStreamEvent) error { return nil }); err != nil {
+	if err := svc.StreamResponse(ctxWithPrincipal(), req, func(dto.ResponsesStreamEvent) error { return nil }); err != nil {
 		t.Fatalf("StreamResponse: %v", err)
 	}
 	if directStream.called != 1 {

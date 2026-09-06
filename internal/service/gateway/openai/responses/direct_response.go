@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"sort"
 
-	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
 	responsesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/responses"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/openai/responses/dto"
 	"github.com/buger/jsonparser"
 )
 
@@ -22,7 +22,7 @@ import (
 // 仅改写 model（→ candidate upstream model）与 stream（→ 本次调用方式）。
 //
 // 无原始请求体时（如单测直接构造 ResponsesRequest）回退到 typed 重编码 + 合并 Extensions。
-func encodeUpstreamResponsesBody(req gatewayapi.ResponsesRequest, upstreamModel string, stream bool) (json.RawMessage, error) {
+func encodeUpstreamResponsesBody(req dto.ResponsesRequest, upstreamModel string, stream bool) (json.RawMessage, error) {
 	base := req.RawBody()
 	if len(base) > 0 {
 		body, err := rewriteUpstreamResponsesRequest(base, upstreamModel, stream, req.ServiceTier)
@@ -387,7 +387,7 @@ func isDirectResponsesSuccessTerminal(eventType string) bool {
 }
 
 // emitDirectStreamEvent 把上游 responses 事件（改写 model 回显后）原文透传给客户 SSE。
-func emitDirectStreamEvent(emit func(gatewayapi.ResponsesStreamEvent) error, clientModel string, chunk responsesadapter.StreamChunk) error {
+func emitDirectStreamEvent(emit func(dto.ResponsesStreamEvent) error, clientModel string, chunk responsesadapter.StreamChunk) error {
 	data := rewriteResponsesModel(chunk.Data, clientModel)
-	return emit(gatewayapi.RawResponsesStreamEvent(chunk.EventType, data))
+	return emit(dto.RawResponsesStreamEvent(chunk.EventType, data))
 }

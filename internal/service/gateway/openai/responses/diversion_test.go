@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"testing"
 
-	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
 	responsesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/responses"
@@ -19,6 +18,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/usage"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/openai/responses/dto"
 )
 
 // fakeResponsesAdapter 是 responses 直传 adapter 的测试替身：记录上送请求体、ctx 携带的会话亲和事实，
@@ -63,11 +63,11 @@ func directResponse() *responsesadapter.Response {
 	}
 }
 
-func directRequest() gatewayapi.ResponsesRequest {
+func directRequest() dto.ResponsesRequest {
 	text := "hello"
-	return gatewayapi.ResponsesRequest{
+	return dto.ResponsesRequest{
 		Model: "gpt-5.5",
-		Input: gatewayapi.ResponsesInput{Text: &text},
+		Input: dto.ResponsesInput{Text: &text},
 	}
 }
 
@@ -477,9 +477,9 @@ func TestStreamResponse_DirectPassthrough(t *testing.T) {
 
 	svc := newServiceForTest(router, registry, settlement, authorizer, requestLog)
 
-	var events []gatewayapi.ResponsesStreamEvent
+	var events []dto.ResponsesStreamEvent
 	terminalAfterSettlement := false
-	err := svc.StreamResponse(ctxWithPrincipal(), directRequest(), func(ev gatewayapi.ResponsesStreamEvent) error {
+	err := svc.StreamResponse(ctxWithPrincipal(), directRequest(), func(ev dto.ResponsesStreamEvent) error {
 		events = append(events, ev)
 		if ev.Type == "response.completed" {
 			terminalAfterSettlement = len(settlement.params) == 1
@@ -570,9 +570,9 @@ func TestStreamResponse_DirectPartialSettlementCountsVisibleText(t *testing.T) {
 
 	svc := newServiceForTest(router, registry, settlement, authorizer, requestLog)
 
-	var events []gatewayapi.ResponsesStreamEvent
+	var events []dto.ResponsesStreamEvent
 	terminalAfterSettlement := false
-	err := svc.StreamResponse(ctxWithPrincipal(), directRequest(), func(ev gatewayapi.ResponsesStreamEvent) error {
+	err := svc.StreamResponse(ctxWithPrincipal(), directRequest(), func(ev dto.ResponsesStreamEvent) error {
 		events = append(events, ev)
 		if ev.Type == "response.completed" {
 			terminalAfterSettlement = len(settlement.params) == 1
@@ -638,8 +638,8 @@ func TestStreamResponse_DirectZeroOutputSettlesWithoutGatewayFirstToken(t *testi
 		newFakeRequestLog(),
 	)
 
-	var events []gatewayapi.ResponsesStreamEvent
-	err := svc.StreamResponse(ctxWithPrincipal(), directRequest(), func(ev gatewayapi.ResponsesStreamEvent) error {
+	var events []dto.ResponsesStreamEvent
+	err := svc.StreamResponse(ctxWithPrincipal(), directRequest(), func(ev dto.ResponsesStreamEvent) error {
 		events = append(events, ev)
 		return nil
 	})
@@ -696,8 +696,8 @@ func TestStreamResponse_PreludeLimitFallsBackWithoutLeakingFirstCandidate(t *tes
 		newFakeRequestLog(), settlement, &fakeAuthorizer{}, nil, nil,
 	)
 
-	var events []gatewayapi.ResponsesStreamEvent
-	err := svc.StreamResponse(ctxWithPrincipal(), directRequest(), func(event gatewayapi.ResponsesStreamEvent) error {
+	var events []dto.ResponsesStreamEvent
+	err := svc.StreamResponse(ctxWithPrincipal(), directRequest(), func(event dto.ResponsesStreamEvent) error {
 		events = append(events, event)
 		return nil
 	})
@@ -743,8 +743,8 @@ func TestStreamResponse_BridgeRefusalIsDeliveredBeforePartialSettlementTerminal(
 	settlement := &fakeSettlement{}
 	svc := newServiceForTest(router, registry, settlement, &fakeAuthorizer{}, newFakeRequestLog())
 
-	var events []gatewayapi.ResponsesStreamEvent
-	err := svc.StreamResponse(ctxWithPrincipal(), directRequest(), func(event gatewayapi.ResponsesStreamEvent) error {
+	var events []dto.ResponsesStreamEvent
+	err := svc.StreamResponse(ctxWithPrincipal(), directRequest(), func(event dto.ResponsesStreamEvent) error {
 		events = append(events, event)
 		return nil
 	})
@@ -757,12 +757,12 @@ func TestStreamResponse_BridgeRefusalIsDeliveredBeforePartialSettlementTerminal(
 	refusalIndex, completedIndex := -1, -1
 	for i, event := range events {
 		switch event.Type {
-		case gatewayapi.EventRefusalDelta:
+		case dto.EventRefusalDelta:
 			if event.Delta != "refused" {
 				t.Fatalf("refusal delta = %q, want refused", event.Delta)
 			}
 			refusalIndex = i
-		case gatewayapi.EventResponseCompleted:
+		case dto.EventResponseCompleted:
 			completedIndex = i
 		}
 	}
@@ -820,8 +820,8 @@ func TestStreamResponse_BridgeTokenWriteFailureDoesNotFallbackOrCharge(t *testin
 	writeErr := errors.New("client rejected first token frame")
 	var delivered []string
 	tokenWriteAttempted := false
-	err := svc.StreamResponse(ctxWithPrincipal(), directRequest(), func(event gatewayapi.ResponsesStreamEvent) error {
-		if event.Type == gatewayapi.EventOutputTextDelta {
+	err := svc.StreamResponse(ctxWithPrincipal(), directRequest(), func(event dto.ResponsesStreamEvent) error {
+		if event.Type == dto.EventOutputTextDelta {
 			tokenWriteAttempted = true
 			return writeErr
 		}
@@ -832,7 +832,7 @@ func TestStreamResponse_BridgeTokenWriteFailureDoesNotFallbackOrCharge(t *testin
 	if !errors.Is(err, writeErr) {
 		t.Fatalf("stream error = %v, want client write error", err)
 	}
-	if !tokenWriteAttempted || len(delivered) == 0 || delivered[0] != gatewayapi.EventResponseCreated {
+	if !tokenWriteAttempted || len(delivered) == 0 || delivered[0] != dto.EventResponseCreated {
 		t.Fatalf("successful prelude=%v token_write_attempted=%v", delivered, tokenWriteAttempted)
 	}
 	if first.called != 1 || second.called != 0 {

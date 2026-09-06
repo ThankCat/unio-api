@@ -5,20 +5,20 @@ import (
 	"errors"
 	"testing"
 
-	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/openai/responses/dto"
 )
 
 // collectEvents 驱动 encoder 并收集发出的命名事件，供断言序列/形状。
-func collectEvents(t *testing.T, drive func(enc *streamEncoder) error) []gatewayapi.ResponsesStreamEvent {
+func collectEvents(t *testing.T, drive func(enc *streamEncoder) error) []dto.ResponsesStreamEvent {
 	t.Helper()
-	var events []gatewayapi.ResponsesStreamEvent
+	var events []dto.ResponsesStreamEvent
 	enc := newStreamEncoder(
-		gatewayapi.ResponsesRequest{Model: "unio-deepseek"},
+		dto.ResponsesRequest{Model: "unio-deepseek"},
 		"resp_fixed",
 		1700000000,
-		func(ev gatewayapi.ResponsesStreamEvent) error {
+		func(ev dto.ResponsesStreamEvent) error {
 			events = append(events, ev)
 			return nil
 		},
@@ -29,7 +29,7 @@ func collectEvents(t *testing.T, drive func(enc *streamEncoder) error) []gateway
 	return events
 }
 
-func eventTypes(events []gatewayapi.ResponsesStreamEvent) []string {
+func eventTypes(events []dto.ResponsesStreamEvent) []string {
 	types := make([]string, len(events))
 	for i, ev := range events {
 		types[i] = ev.Type
@@ -55,22 +55,22 @@ func TestStreamEncoder_ReasoningThenTextHappyPath(t *testing.T) {
 	})
 
 	want := []string{
-		gatewayapi.EventResponseCreated,
-		gatewayapi.EventOutputItemAdded,    // reasoning
-		gatewayapi.EventContentPartAdded,   // reasoning_text part
-		gatewayapi.EventReasoningTextDelta, // "think "
-		gatewayapi.EventReasoningTextDelta, // "more"
-		gatewayapi.EventOutputItemAdded,    // message
-		gatewayapi.EventContentPartAdded,   // output_text part
-		gatewayapi.EventOutputTextDelta,    // "hello "
-		gatewayapi.EventOutputTextDelta,    // "world"
-		gatewayapi.EventReasoningTextDone,  // reasoning收口
-		gatewayapi.EventContentPartDone,    // reasoning_text part收口
-		gatewayapi.EventOutputItemDone,     // reasoning (index 0)
-		gatewayapi.EventOutputTextDone,     // message收口
-		gatewayapi.EventContentPartDone,    // output_text part收口
-		gatewayapi.EventOutputItemDone,     // message (index 1)
-		gatewayapi.EventResponseCompleted,
+		dto.EventResponseCreated,
+		dto.EventOutputItemAdded,    // reasoning
+		dto.EventContentPartAdded,   // reasoning_text part
+		dto.EventReasoningTextDelta, // "think "
+		dto.EventReasoningTextDelta, // "more"
+		dto.EventOutputItemAdded,    // message
+		dto.EventContentPartAdded,   // output_text part
+		dto.EventOutputTextDelta,    // "hello "
+		dto.EventOutputTextDelta,    // "world"
+		dto.EventReasoningTextDone,  // reasoning收口
+		dto.EventContentPartDone,    // reasoning_text part收口
+		dto.EventOutputItemDone,     // reasoning (index 0)
+		dto.EventOutputTextDone,     // message收口
+		dto.EventContentPartDone,    // output_text part收口
+		dto.EventOutputItemDone,     // message (index 1)
+		dto.EventResponseCompleted,
 	}
 	if got := eventTypes(events); !equalStrings(got, want) {
 		t.Fatalf("event sequence mismatch:\n got=%v\nwant=%v", got, want)
@@ -151,12 +151,12 @@ func TestStreamEncoder_ToolCallAccumulation(t *testing.T) {
 	})
 
 	want := []string{
-		gatewayapi.EventResponseCreated,
-		gatewayapi.EventOutputItemAdded,       // function_call
-		gatewayapi.EventFunctionCallArgsDelta, // {"cmd":
-		gatewayapi.EventFunctionCallArgsDelta, // "ls"}
-		gatewayapi.EventOutputItemDone,        // function_call
-		gatewayapi.EventResponseCompleted,
+		dto.EventResponseCreated,
+		dto.EventOutputItemAdded,       // function_call
+		dto.EventFunctionCallArgsDelta, // {"cmd":
+		dto.EventFunctionCallArgsDelta, // "ls"}
+		dto.EventOutputItemDone,        // function_call
+		dto.EventResponseCompleted,
 	}
 	if got := eventTypes(events); !equalStrings(got, want) {
 		t.Fatalf("tool event sequence mismatch:\n got=%v\nwant=%v", got, want)
@@ -201,7 +201,7 @@ func TestStreamEncoder_EmptyStreamStillEmitsCreatedAndCompleted(t *testing.T) {
 	events := collectEvents(t, func(enc *streamEncoder) error {
 		return enc.Complete("stop", &adapter.ChatUsage{TotalTokens: 0})
 	})
-	want := []string{gatewayapi.EventResponseCreated, gatewayapi.EventResponseCompleted}
+	want := []string{dto.EventResponseCreated, dto.EventResponseCompleted}
 	if got := eventTypes(events); !equalStrings(got, want) {
 		t.Fatalf("empty stream sequence=%v, want %v", got, want)
 	}
@@ -219,7 +219,7 @@ func TestStreamEncoder_LengthFinishYieldsIncomplete(t *testing.T) {
 	})
 
 	last := events[len(events)-1]
-	if last.Type != gatewayapi.EventResponseIncomplete {
+	if last.Type != dto.EventResponseIncomplete {
 		t.Fatalf("expected response.incomplete terminal event, got %q", last.Type)
 	}
 	if last.Response == nil || last.Response.Status != "incomplete" {
@@ -233,11 +233,11 @@ func TestStreamEncoder_LengthFinishYieldsIncomplete(t *testing.T) {
 // TestStreamEncoder_ReasoningCarrierWhenRequested 验证流式 reasoning output_item.done 在客户请求
 // reasoning.encrypted_content 时携带可解码的回放载体（U1，Codex 走流式以 done 事件为权威）。
 func TestStreamEncoder_ReasoningCarrierWhenRequested(t *testing.T) {
-	var events []gatewayapi.ResponsesStreamEvent
+	var events []dto.ResponsesStreamEvent
 	enc := newStreamEncoder(
-		gatewayapi.ResponsesRequest{Model: "m", Include: []string{"reasoning.encrypted_content"}},
+		dto.ResponsesRequest{Model: "m", Include: []string{"reasoning.encrypted_content"}},
 		"resp_x", 0,
-		func(ev gatewayapi.ResponsesStreamEvent) error { events = append(events, ev); return nil },
+		func(ev dto.ResponsesStreamEvent) error { events = append(events, ev); return nil },
 	)
 	if err := enc.Handle(chatcompletionsadapter.ChatStreamChunk{ReasoningContent: strptr("alpha")}); err != nil {
 		t.Fatalf("handle: %v", err)
@@ -249,9 +249,9 @@ func TestStreamEncoder_ReasoningCarrierWhenRequested(t *testing.T) {
 		t.Fatalf("complete: %v", err)
 	}
 
-	var reasoningDone *gatewayapi.ResponseOutputItem
+	var reasoningDone *dto.ResponseOutputItem
 	for i := range events {
-		if events[i].Type == gatewayapi.EventOutputItemDone && events[i].Item != nil && events[i].Item.Type == "reasoning" {
+		if events[i].Type == dto.EventOutputItemDone && events[i].Item != nil && events[i].Item.Type == "reasoning" {
 			reasoningDone = events[i].Item
 		}
 	}
@@ -268,7 +268,7 @@ func TestStreamEncoder_ReasoningCarrierWhenRequested(t *testing.T) {
 }
 
 func TestStreamEncoder_StartedReflectsFirstEmit(t *testing.T) {
-	enc := newStreamEncoder(gatewayapi.ResponsesRequest{Model: "m"}, "resp_1", 0, func(gatewayapi.ResponsesStreamEvent) error { return nil })
+	enc := newStreamEncoder(dto.ResponsesRequest{Model: "m"}, "resp_1", 0, func(dto.ResponsesStreamEvent) error { return nil })
 	if enc.Started() {
 		t.Fatal("encoder should not be started before any chunk")
 	}
@@ -283,10 +283,10 @@ func TestStreamEncoder_StartedReflectsFirstEmit(t *testing.T) {
 func TestStreamEncoderFailedCreatedWriteDoesNotCommitStartedState(t *testing.T) {
 	writeErr := errors.New("write response.created")
 	enc := newStreamEncoder(
-		gatewayapi.ResponsesRequest{Model: "m"},
+		dto.ResponsesRequest{Model: "m"},
 		"resp_1",
 		0,
-		func(gatewayapi.ResponsesStreamEvent) error { return writeErr },
+		func(dto.ResponsesStreamEvent) error { return writeErr },
 	)
 	if err := enc.Handle(chatcompletionsadapter.ChatStreamChunk{Content: "x"}); !errors.Is(err, writeErr) {
 		t.Fatalf("handle error = %v, want %v", err, writeErr)
@@ -312,9 +312,9 @@ func TestStreamEncoder_RefusalAfterText(t *testing.T) {
 		return enc.Complete("content_filter", &adapter.ChatUsage{TotalTokens: 4})
 	})
 
-	var messageDone *gatewayapi.ResponseOutputItem
+	var messageDone *dto.ResponseOutputItem
 	for i := range events {
-		if events[i].Type == gatewayapi.EventOutputItemDone && events[i].Item != nil && events[i].Item.Type == "message" {
+		if events[i].Type == dto.EventOutputItemDone && events[i].Item != nil && events[i].Item.Type == "message" {
 			messageDone = events[i].Item
 		}
 	}
@@ -347,9 +347,9 @@ func TestStreamEncoder_RefusalOnly(t *testing.T) {
 		return enc.Complete("content_filter", &adapter.ChatUsage{TotalTokens: 1})
 	})
 
-	var messageDone *gatewayapi.ResponseOutputItem
+	var messageDone *dto.ResponseOutputItem
 	for i := range events {
-		if events[i].Type == gatewayapi.EventOutputItemDone && events[i].Item != nil && events[i].Item.Type == "message" {
+		if events[i].Type == dto.EventOutputItemDone && events[i].Item != nil && events[i].Item.Type == "message" {
 			messageDone = events[i].Item
 		}
 	}
@@ -362,12 +362,12 @@ func TestStreamEncoder_RefusalOnly(t *testing.T) {
 	refusalDeltaIndex, itemDoneIndex := -1, -1
 	for i, event := range events {
 		switch event.Type {
-		case gatewayapi.EventRefusalDelta:
+		case dto.EventRefusalDelta:
 			if event.Delta != "refused" {
 				t.Fatalf("refusal delta = %q, want refused", event.Delta)
 			}
 			refusalDeltaIndex = i
-		case gatewayapi.EventOutputItemDone:
+		case dto.EventOutputItemDone:
 			itemDoneIndex = i
 		}
 	}

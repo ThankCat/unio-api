@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/openai/responses/dto"
 )
 
 // applyPatchToolJSON 是 Codex v0.147 抓包实测的 custom 工具定义（lark grammar 已截断保留首尾）。
@@ -210,8 +210,8 @@ func TestCustomToolStreamEvents(t *testing.T) {
 		"tools": [`+applyPatchToolJSON+`]
 	}`)
 
-	var events []gatewayapi.ResponsesStreamEvent
-	enc := newStreamEncoder(req, "resp_test", 1700000000, func(ev gatewayapi.ResponsesStreamEvent) error {
+	var events []dto.ResponsesStreamEvent
+	enc := newStreamEncoder(req, "resp_test", 1700000000, func(ev dto.ResponsesStreamEvent) error {
 		events = append(events, ev)
 		return nil
 	})
@@ -235,23 +235,23 @@ func TestCustomToolStreamEvents(t *testing.T) {
 	var sawItemAdded, sawInputDelta, sawInputDone, sawItemDone bool
 	for _, ev := range events {
 		switch ev.Type {
-		case gatewayapi.EventOutputItemAdded:
+		case dto.EventOutputItemAdded:
 			if ev.Item != nil && ev.Item.Type == "custom_tool_call" {
 				sawItemAdded = true
 			}
-		case gatewayapi.EventFunctionCallArgsDelta:
+		case dto.EventFunctionCallArgsDelta:
 			t.Errorf("custom tool must not emit function_call_arguments.delta")
-		case gatewayapi.EventCustomToolCallInputDelta:
+		case dto.EventCustomToolCallInputDelta:
 			sawInputDelta = true
 			if ev.Delta != applyPatchDocument {
 				t.Errorf("delta should carry restored patch text, got %q", ev.Delta)
 			}
-		case gatewayapi.EventCustomToolCallInputDone:
+		case dto.EventCustomToolCallInputDone:
 			sawInputDone = true
 			if ev.Input != applyPatchDocument {
 				t.Errorf("done should carry restored patch text, got %q", ev.Input)
 			}
-		case gatewayapi.EventOutputItemDone:
+		case dto.EventOutputItemDone:
 			if ev.Item != nil && ev.Item.Type == "custom_tool_call" {
 				sawItemDone = true
 				if ev.Item.Input != applyPatchDocument {

@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/chatcompletions"
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
 	responsesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/responses"
@@ -25,6 +24,7 @@ import (
 	observabilitymetrics "github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-gateway/internal/platform/store/sqlc"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/openai/chatcompletions/dto"
 	"go.uber.org/zap"
 )
 
@@ -595,15 +595,15 @@ func contextWithPrincipal(userID int64) context.Context {
 }
 
 // chatRequest 创建测试用 HTTP chat completion 请求。
-func chatRequest() gatewayapi.ChatCompletionRequest {
-	return gatewayapi.ChatCompletionRequest{
+func chatRequest() dto.ChatCompletionRequest {
+	return dto.ChatCompletionRequest{
 		Model:    "openai/gpt-4.1",
-		Messages: []gatewayapi.ChatMessage{{Role: "user", Content: jsonContent("hello")}},
+		Messages: []dto.ChatMessage{{Role: "user", Content: jsonContent("hello")}},
 	}
 }
 
 // chatRequestWithParams 创建带 OpenAI-compatible 可透传参数的测试请求。
-func chatRequestWithParams() gatewayapi.ChatCompletionRequest {
+func chatRequestWithParams() dto.ChatCompletionRequest {
 	temperature := 0.0
 	topP := 0.8
 	maxTokens := 128
@@ -787,7 +787,7 @@ func TestChatCompletionServiceCreateChatCompletionRoutesAndCallsAdapter(t *testi
 	if len(requestLog.markDeliveryCompletedIDs) != 0 || len(requestLog.markDeliveryInterruptedIDs) != 0 {
 		t.Fatalf("delivery must stay not_started before the handler write, completed=%v interrupted=%v", requestLog.markDeliveryCompletedIDs, requestLog.markDeliveryInterruptedIDs)
 	}
-	if err := result.FinalizeDelivery(func(*gatewayapi.ChatCompletionResponse) error { return nil }); err != nil {
+	if err := result.FinalizeDelivery(func(*dto.ChatCompletionResponse) error { return nil }); err != nil {
 		t.Fatalf("finalize delivery: %v", err)
 	}
 	if len(requestLog.markDeliveryCompletedIDs) != 1 || len(requestLog.markDeliveryInterruptedIDs) != 0 {
@@ -1806,8 +1806,8 @@ func TestChatCompletionServiceStreamChatCompletionRoutesAndCallsAdapter(t *testi
 	}
 	service := newChatCompletionServiceForTestWithAuthorizer(router, registry, nil, requestLog, settlement, authorizer)
 
-	chunks := make([]gatewayapi.ChatCompletionStreamResponse, 0)
-	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequestWithParams(), func(chunk gatewayapi.ChatCompletionStreamResponse) error {
+	chunks := make([]dto.ChatCompletionStreamResponse, 0)
+	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequestWithParams(), func(chunk dto.ChatCompletionStreamResponse) error {
 		chunks = append(chunks, chunk)
 		return nil
 	})
@@ -1939,12 +1939,12 @@ func TestChatCompletionServiceStreamChatCompletionEmitsClientUsageWhenRequested(
 
 	req := chatRequest()
 	includeUsage := true
-	req.StreamOptions = &gatewayapi.ChatCompletionStreamOptions{
+	req.StreamOptions = &dto.ChatCompletionStreamOptions{
 		IncludeUsage: &includeUsage,
 	}
 
-	chunks := make([]gatewayapi.ChatCompletionStreamResponse, 0)
-	err := service.StreamChatCompletion(contextWithPrincipal(42), req, func(chunk gatewayapi.ChatCompletionStreamResponse) error {
+	chunks := make([]dto.ChatCompletionStreamResponse, 0)
+	err := service.StreamChatCompletion(contextWithPrincipal(42), req, func(chunk dto.ChatCompletionStreamResponse) error {
 		chunks = append(chunks, chunk)
 		return nil
 	})
@@ -1983,7 +1983,7 @@ func TestChatCompletionServiceStreamFirstWriteFailureDoesNotMarkDeliveryStarted(
 		newChatCompletionSettlementForTest(),
 	)
 
-	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(gatewayapi.ChatCompletionStreamResponse) error {
+	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(dto.ChatCompletionStreamResponse) error {
 		return writeErr
 	})
 	if !errors.Is(err, writeErr) {
@@ -2016,10 +2016,10 @@ func TestChatCompletionServiceStreamFinalWriteFailureMarksDeliveryInterrupted(t 
 	)
 	req := chatRequest()
 	includeUsage := true
-	req.StreamOptions = &gatewayapi.ChatCompletionStreamOptions{IncludeUsage: &includeUsage}
+	req.StreamOptions = &dto.ChatCompletionStreamOptions{IncludeUsage: &includeUsage}
 	writes := 0
 
-	err := service.StreamChatCompletion(contextWithPrincipal(42), req, func(gatewayapi.ChatCompletionStreamResponse) error {
+	err := service.StreamChatCompletion(contextWithPrincipal(42), req, func(dto.ChatCompletionStreamResponse) error {
 		writes++
 		if writes == 2 {
 			return writeErr
@@ -2055,7 +2055,7 @@ func TestChatCompletionServiceStreamChatCompletionReturnsMissingAdapterWithoutRe
 		newChatCompletionSettlementForTest(),
 	)
 
-	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk gatewayapi.ChatCompletionStreamResponse) error {
+	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk dto.ChatCompletionStreamResponse) error {
 		return nil
 	})
 	if err == nil {
@@ -2092,7 +2092,7 @@ func TestChatCompletionServiceStreamChatCompletionDoesNotCallAdapterWhenAuthoriz
 	traceStore := &fakeChatRoutingTraceStore{}
 	service.SetRoutingTraceRecorder(lifecycle.NewRoutingTraceRecorder(traceStore, zap.NewNop()))
 
-	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk gatewayapi.ChatCompletionStreamResponse) error {
+	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk dto.ChatCompletionStreamResponse) error {
 		t.Fatalf("expected no stream chunk after authorization failure, got %#v", chunk)
 		return nil
 	})
@@ -2154,7 +2154,7 @@ func TestChatCompletionServiceStreamChatCompletionReleasesAuthorizationWhenAttem
 		authorizer,
 	)
 
-	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk gatewayapi.ChatCompletionStreamResponse) error {
+	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk dto.ChatCompletionStreamResponse) error {
 		t.Fatalf("expected no stream chunk after attempt creation failure, got %#v", chunk)
 		return nil
 	})
@@ -2196,7 +2196,7 @@ func TestChatCompletionServiceStreamChatCompletionReleasesAuthorizationWhenFallb
 		authorizer,
 	)
 
-	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk gatewayapi.ChatCompletionStreamResponse) error {
+	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk dto.ChatCompletionStreamResponse) error {
 		t.Fatalf("expected no stream chunk, got %#v", chunk)
 		return nil
 	})
@@ -2252,7 +2252,7 @@ func TestChatCompletionServiceStreamChatCompletionReleasesAuthorizationOnNonRetr
 		authorizer,
 	)
 
-	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk gatewayapi.ChatCompletionStreamResponse) error {
+	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk dto.ChatCompletionStreamResponse) error {
 		t.Fatalf("expected no stream chunk after non-retryable error, got %#v", chunk)
 		return nil
 	})
@@ -2320,8 +2320,8 @@ func TestChatCompletionServiceStreamChatCompletionPartialSettlesWhenFinalUsageMi
 		authorizer,
 	)
 
-	chunks := make([]gatewayapi.ChatCompletionStreamResponse, 0)
-	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk gatewayapi.ChatCompletionStreamResponse) error {
+	chunks := make([]dto.ChatCompletionStreamResponse, 0)
+	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk dto.ChatCompletionStreamResponse) error {
 		chunks = append(chunks, chunk)
 		return nil
 	})
@@ -2390,7 +2390,7 @@ func TestChatCompletionServiceStreamChatCompletionMarksRequestFailedOnSettlement
 		authorizer,
 	)
 
-	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk gatewayapi.ChatCompletionStreamResponse) error {
+	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk dto.ChatCompletionStreamResponse) error {
 		return nil
 	})
 	if !errors.Is(err, settlementErr) {
@@ -2464,8 +2464,8 @@ func TestChatCompletionServiceStreamChatCompletionSettlesAfterFinalUsageWithAdap
 		metricsRecorder,
 	)
 
-	chunks := make([]gatewayapi.ChatCompletionStreamResponse, 0)
-	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk gatewayapi.ChatCompletionStreamResponse) error {
+	chunks := make([]dto.ChatCompletionStreamResponse, 0)
+	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk dto.ChatCompletionStreamResponse) error {
 		chunks = append(chunks, chunk)
 		return nil
 	})
@@ -2564,7 +2564,7 @@ func TestChatCompletionServiceStreamChatCompletionSettlesAfterFinalUsageWithClie
 		metricsRecorder,
 	)
 
-	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk gatewayapi.ChatCompletionStreamResponse) error {
+	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk dto.ChatCompletionStreamResponse) error {
 		return nil
 	})
 	if !errors.Is(err, context.Canceled) {
@@ -2654,8 +2654,8 @@ func TestChatCompletionServiceStreamChatCompletionFallsBackBeforeFirstChunk(t *t
 		authorizer,
 	)
 
-	chunks := make([]gatewayapi.ChatCompletionStreamResponse, 0)
-	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk gatewayapi.ChatCompletionStreamResponse) error {
+	chunks := make([]dto.ChatCompletionStreamResponse, 0)
+	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk dto.ChatCompletionStreamResponse) error {
 		chunks = append(chunks, chunk)
 		return nil
 	})
@@ -2761,8 +2761,8 @@ func TestChatCompletionServiceStreamChatCompletionDoesNotFallbackAfterFirstChunk
 		authorizer,
 	)
 
-	chunks := make([]gatewayapi.ChatCompletionStreamResponse, 0)
-	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk gatewayapi.ChatCompletionStreamResponse) error {
+	chunks := make([]dto.ChatCompletionStreamResponse, 0)
+	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk dto.ChatCompletionStreamResponse) error {
 		chunks = append(chunks, chunk)
 		return nil
 	})
@@ -2858,7 +2858,7 @@ func TestChatCompletionServiceStreamChatCompletionMarksCanceledWithoutFallback(t
 		authorizer,
 	)
 
-	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk gatewayapi.ChatCompletionStreamResponse) error {
+	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk dto.ChatCompletionStreamResponse) error {
 		t.Fatalf("expected no stream chunk after client cancel, got %#v", chunk)
 		return nil
 	})
@@ -2937,8 +2937,8 @@ func TestChatCompletionServiceStreamChatCompletionPartialSettlesOnCancelAfterEmi
 		authorizer,
 	)
 
-	chunks := make([]gatewayapi.ChatCompletionStreamResponse, 0)
-	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk gatewayapi.ChatCompletionStreamResponse) error {
+	chunks := make([]dto.ChatCompletionStreamResponse, 0)
+	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk dto.ChatCompletionStreamResponse) error {
 		chunks = append(chunks, chunk)
 		return nil
 	})

@@ -4,9 +4,9 @@ import (
 	"errors"
 	"testing"
 
-	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/openai/responses/dto"
 )
 
 func TestCompactHistory_HappyPath(t *testing.T) {
@@ -30,7 +30,7 @@ func TestCompactHistory_HappyPath(t *testing.T) {
 	if len(requestLog.deliveryCompleted) != 0 || len(requestLog.deliveryInterrupted) != 0 {
 		t.Fatal("compact delivery must stay not_started before the handler write")
 	}
-	if err := result.FinalizeDelivery(func(*gatewayapi.CompactHistoryResponse) error { return nil }); err != nil {
+	if err := result.FinalizeDelivery(func(*dto.CompactHistoryResponse) error { return nil }); err != nil {
 		t.Fatalf("finalize compact delivery: %v", err)
 	}
 	if len(requestLog.deliveryCompleted) != 1 || len(requestLog.deliveryInterrupted) != 0 {
@@ -72,7 +72,7 @@ func TestCompactHistory_InjectsDefaultInstruction(t *testing.T) {
 	svc := newServiceForTest(router, registry, &fakeSettlement{}, &fakeAuthorizer{}, newFakeRequestLog())
 
 	text := "earlier conversation to compact"
-	req := gatewayapi.ResponsesRequest{Model: "unio-deepseek", Input: gatewayapi.ResponsesInput{Text: &text}}
+	req := dto.ResponsesRequest{Model: "unio-deepseek", Input: dto.ResponsesInput{Text: &text}}
 
 	if _, err := svc.CompactHistory(ctxWithPrincipal(), req); err != nil {
 		t.Fatalf("unexpected error: %v", err)

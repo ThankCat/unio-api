@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"sort"
 
-	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/openai/responses/dto"
 )
 
 // responses_stream.go 负责流式方向翻译：把内部 chatcompletionsadapter.ChatStreamChunk 序列（SSE delta）翻译成
@@ -36,7 +36,7 @@ import (
 // 流正常结束后调一次 Complete。created 事件在首个内容 chunk 处惰性发出，保证「客户帧写出前失败仍可 fallback」
 // 与非流式 emitted 语义一致（BRIDGE §6）。
 type streamEncoder struct {
-	emit func(gatewayapi.ResponsesStreamEvent) error
+	emit func(dto.ResponsesStreamEvent) error
 
 	responseID string
 	createdAt  int64
@@ -107,7 +107,7 @@ type streamToolCallDelta struct {
 }
 
 // newStreamEncoder 基于请求回显字段构造事件状态机。
-func newStreamEncoder(req gatewayapi.ResponsesRequest, responseID string, createdAt int64, emit func(gatewayapi.ResponsesStreamEvent) error) *streamEncoder {
+func newStreamEncoder(req dto.ResponsesRequest, responseID string, createdAt int64, emit func(dto.ResponsesStreamEvent) error) *streamEncoder {
 	return &streamEncoder{
 		emit:                 emit,
 		responseID:           responseID,
@@ -182,11 +182,11 @@ func (e *streamEncoder) Complete(finishReason string, usage *adapter.ChatUsage) 
 		resp.Usage = mapResponsesUsage(*usage)
 	}
 
-	completedType := gatewayapi.EventResponseCompleted
+	completedType := dto.EventResponseCompleted
 	if status == "incomplete" {
-		completedType = gatewayapi.EventResponseIncomplete
+		completedType = dto.EventResponseIncomplete
 	}
-	return e.emitEvent(gatewayapi.ResponsesStreamEvent{
+	return e.emitEvent(dto.ResponsesStreamEvent{
 		Type:     completedType,
 		Response: &resp,
 	})
@@ -197,9 +197,9 @@ func (e *streamEncoder) ensureStarted() error {
 	if e.started {
 		return nil
 	}
-	resp := e.snapshot("in_progress", []gatewayapi.ResponseOutputItem{})
-	if err := e.emitEvent(gatewayapi.ResponsesStreamEvent{
-		Type:     gatewayapi.EventResponseCreated,
+	resp := e.snapshot("in_progress", []dto.ResponseOutputItem{})
+	if err := e.emitEvent(dto.ResponsesStreamEvent{
+		Type:     dto.EventResponseCreated,
 		Response: &resp,
 	}); err != nil {
 		return err
@@ -211,10 +211,10 @@ func (e *streamEncoder) ensureStarted() error {
 func (e *streamEncoder) handleReasoningDelta(delta string) error {
 	if e.reasoning == nil {
 		e.reasoning = &streamItemState{id: newResponsesID("rs"), outputIndex: e.takeOutputIndex()}
-		item := gatewayapi.ResponseOutputItem{
+		item := dto.ResponseOutputItem{
 			Type:    "reasoning",
 			ID:      e.reasoning.id,
-			Summary: []gatewayapi.ResponseOutputContent{},
+			Summary: []dto.ResponseOutputContent{},
 		}
 		if err := e.emitItemAdded(e.reasoning.outputIndex, item); err != nil {
 			return err
@@ -222,9 +222,9 @@ func (e *streamEncoder) handleReasoningDelta(delta string) error {
 		// 文本增量前先建立活跃 part，否则 Codex 报 "*Delta without active item"。
 		// summary 形态用 reasoning_summary_part + summary_index，raw 形态用 content_part + content_index。
 		if e.reasoningAsSummary {
-			part := gatewayapi.ResponseOutputContent{Type: "summary_text"}
-			if err := e.emitEvent(gatewayapi.ResponsesStreamEvent{
-				Type:         gatewayapi.EventReasoningSummaryPartAdded,
+			part := dto.ResponseOutputContent{Type: "summary_text"}
+			if err := e.emitEvent(dto.ResponsesStreamEvent{
+				Type:         dto.EventReasoningSummaryPartAdded,
 				ItemID:       e.reasoning.id,
 				OutputIndex:  intPtr(e.reasoning.outputIndex),
 				SummaryIndex: intPtr(0),
@@ -232,7 +232,7 @@ func (e *streamEncoder) handleReasoningDelta(delta string) error {
 			}); err != nil {
 				return err
 			}
-		} else if err := e.emitContentPartAdded(e.reasoning.id, e.reasoning.outputIndex, gatewayapi.ResponseOutputContent{Type: "reasoning_text"}); err != nil {
+		} else if err := e.emitContentPartAdded(e.reasoning.id, e.reasoning.outputIndex, dto.ResponseOutputContent{Type: "reasoning_text"}); err != nil {
 			return err
 		}
 		e.reasoning.partOpen = true
@@ -240,16 +240,16 @@ func (e *streamEncoder) handleReasoningDelta(delta string) error {
 	e.reasoning.text += delta
 
 	if e.reasoningAsSummary {
-		return e.emitEvent(gatewayapi.ResponsesStreamEvent{
-			Type:         gatewayapi.EventReasoningSummaryTextDelta,
+		return e.emitEvent(dto.ResponsesStreamEvent{
+			Type:         dto.EventReasoningSummaryTextDelta,
 			ItemID:       e.reasoning.id,
 			OutputIndex:  intPtr(e.reasoning.outputIndex),
 			SummaryIndex: intPtr(0),
 			Delta:        delta,
 		})
 	}
-	return e.emitEvent(gatewayapi.ResponsesStreamEvent{
-		Type:         gatewayapi.EventReasoningTextDelta,
+	return e.emitEvent(dto.ResponsesStreamEvent{
+		Type:         dto.EventReasoningTextDelta,
 		ItemID:       e.reasoning.id,
 		OutputIndex:  intPtr(e.reasoning.outputIndex),
 		ContentIndex: intPtr(0),
@@ -263,7 +263,7 @@ func (e *streamEncoder) ensureMessageItem() error {
 		return nil
 	}
 	e.message = &streamItemState{id: newResponsesID("msg"), outputIndex: e.takeOutputIndex()}
-	return e.emitItemAdded(e.message.outputIndex, gatewayapi.ResponseOutputItem{
+	return e.emitItemAdded(e.message.outputIndex, dto.ResponseOutputItem{
 		Type:   "message",
 		ID:     e.message.id,
 		Role:   "assistant",
@@ -278,14 +278,14 @@ func (e *streamEncoder) handleTextDelta(delta string) error {
 	// 首个文本增量前惰性发出 content_part.added，建立 Codex 解析所需的「活跃 content part」。
 	// 惰性发出（而非 message item 创建时）确保「仅 refusal、无文本」的流不会落空的 output_text part。
 	if !e.message.partOpen {
-		if err := e.emitContentPartAdded(e.message.id, e.message.outputIndex, gatewayapi.ResponseOutputContent{Type: "output_text"}); err != nil {
+		if err := e.emitContentPartAdded(e.message.id, e.message.outputIndex, dto.ResponseOutputContent{Type: "output_text"}); err != nil {
 			return err
 		}
 		e.message.partOpen = true
 	}
 	e.message.text += delta
-	return e.emitEvent(gatewayapi.ResponsesStreamEvent{
-		Type:         gatewayapi.EventOutputTextDelta,
+	return e.emitEvent(dto.ResponsesStreamEvent{
+		Type:         dto.EventOutputTextDelta,
 		ItemID:       e.message.id,
 		OutputIndex:  intPtr(e.message.outputIndex),
 		ContentIndex: intPtr(0),
@@ -304,9 +304,9 @@ func (e *streamEncoder) handleRefusalDelta(delta string) error {
 		contentIndex = 1
 	}
 	if !e.message.refusalPartOpen {
-		part := gatewayapi.ResponseOutputContent{Type: "refusal"}
-		if err := e.emitEvent(gatewayapi.ResponsesStreamEvent{
-			Type:         gatewayapi.EventContentPartAdded,
+		part := dto.ResponseOutputContent{Type: "refusal"}
+		if err := e.emitEvent(dto.ResponsesStreamEvent{
+			Type:         dto.EventContentPartAdded,
 			ItemID:       e.message.id,
 			OutputIndex:  intPtr(e.message.outputIndex),
 			ContentIndex: intPtr(contentIndex),
@@ -316,8 +316,8 @@ func (e *streamEncoder) handleRefusalDelta(delta string) error {
 		}
 		e.message.refusalPartOpen = true
 	}
-	if err := e.emitEvent(gatewayapi.ResponsesStreamEvent{
-		Type:         gatewayapi.EventRefusalDelta,
+	if err := e.emitEvent(dto.ResponsesStreamEvent{
+		Type:         dto.EventRefusalDelta,
 		ItemID:       e.message.id,
 		OutputIndex:  intPtr(e.message.outputIndex),
 		ContentIndex: intPtr(contentIndex),
@@ -361,7 +361,7 @@ func (e *streamEncoder) handleToolCallDeltas(raw json.RawMessage) error {
 				itemType = itemTypeCustomToolCall
 				name = tool.name
 			}
-			item := gatewayapi.ResponseOutputItem{
+			item := dto.ResponseOutputItem{
 				Type:   itemType,
 				ID:     tool.id,
 				CallID: tool.callID,
@@ -381,8 +381,8 @@ func (e *streamEncoder) handleToolCallDeltas(raw json.RawMessage) error {
 			if tool.isCustom {
 				continue
 			}
-			if err := e.emitEvent(gatewayapi.ResponsesStreamEvent{
-				Type:        gatewayapi.EventFunctionCallArgsDelta,
+			if err := e.emitEvent(dto.ResponsesStreamEvent{
+				Type:        dto.EventFunctionCallArgsDelta,
 				ItemID:      tool.id,
 				OutputIndex: intPtr(tool.outputIndex),
 				Delta:       d.Function.Arguments,
@@ -397,7 +397,7 @@ func (e *streamEncoder) handleToolCallDeltas(raw json.RawMessage) error {
 // streamFinalItem 是桥接流式 encoder 终态 output 的一项（保留 output_index 供 SSE 与能力埋点）。
 type streamFinalItem struct {
 	outputIndex int
-	item        gatewayapi.ResponseOutputItem
+	item        dto.ResponseOutputItem
 }
 
 // closeItems 按 output_index 顺序发出每个 item 的收尾事件，并返回最终 output 数组。
@@ -405,16 +405,16 @@ type streamFinalItem struct {
 // 每个 item 在 output_item.done 之前，先把曾经打开的文本 content part 配对收口：
 // message → output_text.done + content_part.done(output_text)；reasoning → reasoning_text.done +
 // content_part.done(reasoning_text)。这与真实 OpenAI Responses 事件顺序一致，满足 Codex 的活跃 part 校验。
-func (e *streamEncoder) closeItems() ([]gatewayapi.ResponseOutputItem, error) {
+func (e *streamEncoder) closeItems() ([]dto.ResponseOutputItem, error) {
 	finals := e.collectFinalItems()
-	output := make([]gatewayapi.ResponseOutputItem, 0, len(finals))
+	output := make([]dto.ResponseOutputItem, 0, len(finals))
 	for _, f := range finals {
 		if err := e.emitItemContentDone(f); err != nil {
 			return nil, err
 		}
 		item := f.item
-		if err := e.emitEvent(gatewayapi.ResponsesStreamEvent{
-			Type:        gatewayapi.EventOutputItemDone,
+		if err := e.emitEvent(dto.ResponsesStreamEvent{
+			Type:        dto.EventOutputItemDone,
 			OutputIndex: intPtr(f.outputIndex),
 			Item:        &item,
 		}); err != nil {
@@ -430,8 +430,8 @@ func (e *streamEncoder) emitItemContentDone(f streamFinalItem) error {
 	switch {
 	case e.message != nil && f.item.ID == e.message.id:
 		if e.message.partOpen {
-			if err := e.emitEvent(gatewayapi.ResponsesStreamEvent{
-				Type:         gatewayapi.EventOutputTextDone,
+			if err := e.emitEvent(dto.ResponsesStreamEvent{
+				Type:         dto.EventOutputTextDone,
 				ItemID:       e.message.id,
 				OutputIndex:  intPtr(f.outputIndex),
 				ContentIndex: intPtr(0),
@@ -439,7 +439,7 @@ func (e *streamEncoder) emitItemContentDone(f streamFinalItem) error {
 			}); err != nil {
 				return err
 			}
-			if err := e.emitContentPartDone(e.message.id, f.outputIndex, gatewayapi.ResponseOutputContent{Type: "output_text", Text: e.message.text}); err != nil {
+			if err := e.emitContentPartDone(e.message.id, f.outputIndex, dto.ResponseOutputContent{Type: "output_text", Text: e.message.text}); err != nil {
 				return err
 			}
 		}
@@ -448,8 +448,8 @@ func (e *streamEncoder) emitItemContentDone(f streamFinalItem) error {
 			if e.message.partOpen || e.message.text != "" {
 				contentIndex = 1
 			}
-			if err := e.emitEvent(gatewayapi.ResponsesStreamEvent{
-				Type:         gatewayapi.EventRefusalDone,
+			if err := e.emitEvent(dto.ResponsesStreamEvent{
+				Type:         dto.EventRefusalDone,
 				ItemID:       e.message.id,
 				OutputIndex:  intPtr(f.outputIndex),
 				ContentIndex: intPtr(contentIndex),
@@ -457,9 +457,9 @@ func (e *streamEncoder) emitItemContentDone(f streamFinalItem) error {
 			}); err != nil {
 				return err
 			}
-			part := gatewayapi.ResponseOutputContent{Type: "refusal", Refusal: e.message.refusal}
-			return e.emitEvent(gatewayapi.ResponsesStreamEvent{
-				Type:         gatewayapi.EventContentPartDone,
+			part := dto.ResponseOutputContent{Type: "refusal", Refusal: e.message.refusal}
+			return e.emitEvent(dto.ResponsesStreamEvent{
+				Type:         dto.EventContentPartDone,
 				ItemID:       e.message.id,
 				OutputIndex:  intPtr(f.outputIndex),
 				ContentIndex: intPtr(contentIndex),
@@ -469,8 +469,8 @@ func (e *streamEncoder) emitItemContentDone(f streamFinalItem) error {
 		return nil
 	case e.reasoning != nil && f.item.ID == e.reasoning.id && e.reasoning.partOpen:
 		if e.reasoningAsSummary {
-			if err := e.emitEvent(gatewayapi.ResponsesStreamEvent{
-				Type:         gatewayapi.EventReasoningSummaryTextDone,
+			if err := e.emitEvent(dto.ResponsesStreamEvent{
+				Type:         dto.EventReasoningSummaryTextDone,
 				ItemID:       e.reasoning.id,
 				OutputIndex:  intPtr(f.outputIndex),
 				SummaryIndex: intPtr(0),
@@ -478,17 +478,17 @@ func (e *streamEncoder) emitItemContentDone(f streamFinalItem) error {
 			}); err != nil {
 				return err
 			}
-			part := gatewayapi.ResponseOutputContent{Type: "summary_text", Text: e.reasoning.text}
-			return e.emitEvent(gatewayapi.ResponsesStreamEvent{
-				Type:         gatewayapi.EventReasoningSummaryPartDone,
+			part := dto.ResponseOutputContent{Type: "summary_text", Text: e.reasoning.text}
+			return e.emitEvent(dto.ResponsesStreamEvent{
+				Type:         dto.EventReasoningSummaryPartDone,
 				ItemID:       e.reasoning.id,
 				OutputIndex:  intPtr(f.outputIndex),
 				SummaryIndex: intPtr(0),
 				Part:         &part,
 			})
 		}
-		if err := e.emitEvent(gatewayapi.ResponsesStreamEvent{
-			Type:         gatewayapi.EventReasoningTextDone,
+		if err := e.emitEvent(dto.ResponsesStreamEvent{
+			Type:         dto.EventReasoningTextDone,
 			ItemID:       e.reasoning.id,
 			OutputIndex:  intPtr(f.outputIndex),
 			ContentIndex: intPtr(0),
@@ -496,13 +496,13 @@ func (e *streamEncoder) emitItemContentDone(f streamFinalItem) error {
 		}); err != nil {
 			return err
 		}
-		return e.emitContentPartDone(e.reasoning.id, f.outputIndex, gatewayapi.ResponseOutputContent{Type: "reasoning_text", Text: e.reasoning.text})
+		return e.emitContentPartDone(e.reasoning.id, f.outputIndex, dto.ResponseOutputContent{Type: "reasoning_text", Text: e.reasoning.text})
 	case f.item.Type == itemTypeCustomToolCall:
 		// custom 工具的入参在此刻才完成还原：补发一次完整 delta 再收 done，使客户端的
 		// custom_tool_call_input 事件对仍然成对，与上游直传形状一致（仅失去逐字流式粒度）。
 		if f.item.Input != "" {
-			if err := e.emitEvent(gatewayapi.ResponsesStreamEvent{
-				Type:        gatewayapi.EventCustomToolCallInputDelta,
+			if err := e.emitEvent(dto.ResponsesStreamEvent{
+				Type:        dto.EventCustomToolCallInputDelta,
 				ItemID:      f.item.ID,
 				OutputIndex: intPtr(f.outputIndex),
 				Delta:       f.item.Input,
@@ -510,8 +510,8 @@ func (e *streamEncoder) emitItemContentDone(f streamFinalItem) error {
 				return err
 			}
 		}
-		return e.emitEvent(gatewayapi.ResponsesStreamEvent{
-			Type:        gatewayapi.EventCustomToolCallInputDone,
+		return e.emitEvent(dto.ResponsesStreamEvent{
+			Type:        dto.EventCustomToolCallInputDone,
 			ItemID:      f.item.ID,
 			OutputIndex: intPtr(f.outputIndex),
 			Input:       f.item.Input,
@@ -524,16 +524,16 @@ func (e *streamEncoder) collectFinalItems() []streamFinalItem {
 	finals := make([]streamFinalItem, 0, 2+len(e.tools))
 
 	if e.reasoning != nil {
-		reasoningItem := gatewayapi.ResponseOutputItem{
+		reasoningItem := dto.ResponseOutputItem{
 			Type:    "reasoning",
 			ID:      e.reasoning.id,
-			Summary: []gatewayapi.ResponseOutputContent{},
+			Summary: []dto.ResponseOutputContent{},
 		}
 		// 终态 item 的承载形态须与流中发出的事件一致，否则客户端两处对不上。
 		if e.reasoningAsSummary {
-			reasoningItem.Summary = []gatewayapi.ResponseOutputContent{{Type: "summary_text", Text: e.reasoning.text}}
+			reasoningItem.Summary = []dto.ResponseOutputContent{{Type: "summary_text", Text: e.reasoning.text}}
 		} else {
-			reasoningItem.Content = []gatewayapi.ResponseOutputContent{{Type: "reasoning_text", Text: e.reasoning.text}}
+			reasoningItem.Content = []dto.ResponseOutputContent{{Type: "reasoning_text", Text: e.reasoning.text}}
 		}
 		if e.emitReasoningCarrier && e.reasoning.text != "" {
 			carrier := encodeReasoningCarrier(e.reasoning.text)
@@ -542,14 +542,14 @@ func (e *streamEncoder) collectFinalItems() []streamFinalItem {
 		finals = append(finals, streamFinalItem{e.reasoning.outputIndex, reasoningItem})
 	}
 	if e.message != nil {
-		content := make([]gatewayapi.ResponseOutputContent, 0, 2)
+		content := make([]dto.ResponseOutputContent, 0, 2)
 		if e.message.text != "" {
-			content = append(content, gatewayapi.ResponseOutputContent{Type: "output_text", Text: e.message.text})
+			content = append(content, dto.ResponseOutputContent{Type: "output_text", Text: e.message.text})
 		}
 		if e.message.refusal != "" {
-			content = append(content, gatewayapi.ResponseOutputContent{Type: "refusal", Refusal: e.message.refusal})
+			content = append(content, dto.ResponseOutputContent{Type: "refusal", Refusal: e.message.refusal})
 		}
-		finals = append(finals, streamFinalItem{e.message.outputIndex, gatewayapi.ResponseOutputItem{
+		finals = append(finals, streamFinalItem{e.message.outputIndex, dto.ResponseOutputItem{
 			Type:    "message",
 			ID:      e.message.id,
 			Role:    "assistant",
@@ -563,7 +563,7 @@ func (e *streamEncoder) collectFinalItems() []streamFinalItem {
 			continue
 		}
 		namespace, name := splitNamespaceToolName(tool.name)
-		item := gatewayapi.ResponseOutputItem{
+		item := dto.ResponseOutputItem{
 			Type:      "function_call",
 			ID:        tool.id,
 			CallID:    tool.callID,
@@ -581,18 +581,18 @@ func (e *streamEncoder) collectFinalItems() []streamFinalItem {
 	return finals
 }
 
-func (e *streamEncoder) emitItemAdded(outputIndex int, item gatewayapi.ResponseOutputItem) error {
-	return e.emitEvent(gatewayapi.ResponsesStreamEvent{
-		Type:        gatewayapi.EventOutputItemAdded,
+func (e *streamEncoder) emitItemAdded(outputIndex int, item dto.ResponseOutputItem) error {
+	return e.emitEvent(dto.ResponsesStreamEvent{
+		Type:        dto.EventOutputItemAdded,
 		OutputIndex: intPtr(outputIndex),
 		Item:        &item,
 	})
 }
 
 // emitContentPartAdded 发出 response.content_part.added：在文本增量前建立活跃 content part。
-func (e *streamEncoder) emitContentPartAdded(itemID string, outputIndex int, part gatewayapi.ResponseOutputContent) error {
-	return e.emitEvent(gatewayapi.ResponsesStreamEvent{
-		Type:         gatewayapi.EventContentPartAdded,
+func (e *streamEncoder) emitContentPartAdded(itemID string, outputIndex int, part dto.ResponseOutputContent) error {
+	return e.emitEvent(dto.ResponsesStreamEvent{
+		Type:         dto.EventContentPartAdded,
 		ItemID:       itemID,
 		OutputIndex:  intPtr(outputIndex),
 		ContentIndex: intPtr(0),
@@ -601,9 +601,9 @@ func (e *streamEncoder) emitContentPartAdded(itemID string, outputIndex int, par
 }
 
 // emitContentPartDone 发出 response.content_part.done：收口此前打开的文本 content part。
-func (e *streamEncoder) emitContentPartDone(itemID string, outputIndex int, part gatewayapi.ResponseOutputContent) error {
-	return e.emitEvent(gatewayapi.ResponsesStreamEvent{
-		Type:         gatewayapi.EventContentPartDone,
+func (e *streamEncoder) emitContentPartDone(itemID string, outputIndex int, part dto.ResponseOutputContent) error {
+	return e.emitEvent(dto.ResponsesStreamEvent{
+		Type:         dto.EventContentPartDone,
 		ItemID:       itemID,
 		OutputIndex:  intPtr(outputIndex),
 		ContentIndex: intPtr(0),
@@ -612,8 +612,8 @@ func (e *streamEncoder) emitContentPartDone(itemID string, outputIndex int, part
 }
 
 // snapshot 构造当前 response 对象快照（response.created / completed 复用）。
-func (e *streamEncoder) snapshot(status string, output []gatewayapi.ResponseOutputItem) gatewayapi.ResponsesResponse {
-	return gatewayapi.ResponsesResponse{
+func (e *streamEncoder) snapshot(status string, output []dto.ResponseOutputItem) dto.ResponsesResponse {
+	return dto.ResponsesResponse{
 		ID:                e.responseID,
 		Object:            "response",
 		CreatedAt:         e.createdAt,
@@ -627,7 +627,7 @@ func (e *streamEncoder) snapshot(status string, output []gatewayapi.ResponseOutp
 	}
 }
 
-func (e *streamEncoder) emitEvent(ev gatewayapi.ResponsesStreamEvent) error {
+func (e *streamEncoder) emitEvent(ev dto.ResponsesStreamEvent) error {
 	ev.SequenceNumber = e.seq
 	e.seq++
 	return e.emit(ev)

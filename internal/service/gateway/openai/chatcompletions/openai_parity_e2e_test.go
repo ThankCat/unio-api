@@ -8,12 +8,12 @@ import (
 	"strings"
 	"testing"
 
-	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/chatcompletions"
 	openaiadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai"
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
 	"github.com/ThankCat/unio-gateway/internal/core/channel"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/openai/chatcompletions/dto"
 )
 
 // mockUpstream 记录最后一次 upstream chat/completions 请求体。
@@ -128,7 +128,7 @@ func TestOpenAISDKShapeNonStreamChatC1(t *testing.T) {
 
 	service, _ := newParityService(t, upstream)
 
-	var req gatewayapi.ChatCompletionRequest
+	var req dto.ChatCompletionRequest
 	if err := json.Unmarshal([]byte(`{
 		"model": "deepseek/deepseek-v4-pro",
 		"messages": [{"role": "user", "content": "hi"}],
@@ -197,7 +197,7 @@ func TestOpenAISDKShapeNonStreamPreservesResponseFields(t *testing.T) {
 
 	service, _ := newParityService(t, upstream)
 
-	var req gatewayapi.ChatCompletionRequest
+	var req dto.ChatCompletionRequest
 	if err := json.Unmarshal([]byte(`{
 		"model": "deepseek/deepseek-v4-pro",
 		"messages": [{"role": "user", "content": "hi"}]
@@ -259,7 +259,7 @@ func TestOpenAISDKShapeStreamIncludeUsageC2(t *testing.T) {
 
 	service, settlement := newParityService(t, upstream)
 
-	var req gatewayapi.ChatCompletionRequest
+	var req dto.ChatCompletionRequest
 	if err := json.Unmarshal([]byte(`{
 		"model": "deepseek/deepseek-v4-pro",
 		"messages": [{"role": "user", "content": "hi"}],
@@ -269,8 +269,8 @@ func TestOpenAISDKShapeStreamIncludeUsageC2(t *testing.T) {
 		t.Fatalf("unmarshal sdk-shaped request: %v", err)
 	}
 
-	chunks := make([]gatewayapi.ChatCompletionStreamResponse, 0)
-	if err := service.StreamChatCompletion(contextWithPrincipal(42), req, func(chunk gatewayapi.ChatCompletionStreamResponse) error {
+	chunks := make([]dto.ChatCompletionStreamResponse, 0)
+	if err := service.StreamChatCompletion(contextWithPrincipal(42), req, func(chunk dto.ChatCompletionStreamResponse) error {
 		chunks = append(chunks, chunk)
 		return nil
 	}); err != nil {
@@ -308,7 +308,7 @@ func TestOpenAISDKShapeStreamPreservesChunkFields(t *testing.T) {
 
 	service, _ := newParityService(t, upstream)
 
-	var req gatewayapi.ChatCompletionRequest
+	var req dto.ChatCompletionRequest
 	if err := json.Unmarshal([]byte(`{
 		"model": "deepseek/deepseek-v4-pro",
 		"messages": [{"role": "user", "content": "hi"}],
@@ -317,8 +317,8 @@ func TestOpenAISDKShapeStreamPreservesChunkFields(t *testing.T) {
 		t.Fatalf("unmarshal request: %v", err)
 	}
 
-	chunks := make([]gatewayapi.ChatCompletionStreamResponse, 0)
-	if err := service.StreamChatCompletion(contextWithPrincipal(42), req, func(chunk gatewayapi.ChatCompletionStreamResponse) error {
+	chunks := make([]dto.ChatCompletionStreamResponse, 0)
+	if err := service.StreamChatCompletion(contextWithPrincipal(42), req, func(chunk dto.ChatCompletionStreamResponse) error {
 		chunks = append(chunks, chunk)
 		return nil
 	}); err != nil {
@@ -371,9 +371,9 @@ func TestDeepSeekDS01NonStreamReasoning(t *testing.T) {
 
 	service, _ := newParityService(t, upstream)
 
-	result, err := service.CreateChatCompletion(contextWithPrincipal(42), gatewayapi.ChatCompletionRequest{
+	result, err := service.CreateChatCompletion(contextWithPrincipal(42), dto.ChatCompletionRequest{
 		Model: "deepseek/deepseek-v4-pro",
-		Messages: []gatewayapi.ChatMessage{
+		Messages: []dto.ChatMessage{
 			{Role: "user", Content: jsonContent("question")},
 		},
 	})
@@ -408,14 +408,14 @@ func TestDeepSeekDS02StreamReasoning(t *testing.T) {
 
 	service, _ := newParityService(t, upstream)
 
-	chunks := make([]gatewayapi.ChatCompletionStreamResponse, 0)
-	if err := service.StreamChatCompletion(contextWithPrincipal(42), gatewayapi.ChatCompletionRequest{
+	chunks := make([]dto.ChatCompletionStreamResponse, 0)
+	if err := service.StreamChatCompletion(contextWithPrincipal(42), dto.ChatCompletionRequest{
 		Model:  "deepseek/deepseek-v4-pro",
 		Stream: boolPtr(true),
-		Messages: []gatewayapi.ChatMessage{
+		Messages: []dto.ChatMessage{
 			{Role: "user", Content: jsonContent("question")},
 		},
-	}, func(chunk gatewayapi.ChatCompletionStreamResponse) error {
+	}, func(chunk dto.ChatCompletionStreamResponse) error {
 		chunks = append(chunks, chunk)
 		return nil
 	}); err != nil {
@@ -447,17 +447,17 @@ func TestDeepSeekDS03StreamIncludeUsage(t *testing.T) {
 	service, _ := newParityService(t, upstream)
 
 	includeUsage := true
-	chunks := make([]gatewayapi.ChatCompletionStreamResponse, 0)
-	if err := service.StreamChatCompletion(contextWithPrincipal(42), gatewayapi.ChatCompletionRequest{
+	chunks := make([]dto.ChatCompletionStreamResponse, 0)
+	if err := service.StreamChatCompletion(contextWithPrincipal(42), dto.ChatCompletionRequest{
 		Model:  "deepseek/deepseek-v4-pro",
 		Stream: boolPtr(true),
-		StreamOptions: &gatewayapi.ChatCompletionStreamOptions{
+		StreamOptions: &dto.ChatCompletionStreamOptions{
 			IncludeUsage: &includeUsage,
 		},
-		Messages: []gatewayapi.ChatMessage{
+		Messages: []dto.ChatMessage{
 			{Role: "user", Content: jsonContent("hi")},
 		},
-	}, func(chunk gatewayapi.ChatCompletionStreamResponse) error {
+	}, func(chunk dto.ChatCompletionStreamResponse) error {
 		chunks = append(chunks, chunk)
 		return nil
 	}); err != nil {
@@ -484,9 +484,9 @@ func TestDeepSeekDS04ThinkingDisabled(t *testing.T) {
 
 	service, _ := newParityService(t, upstream)
 
-	result, err := service.CreateChatCompletion(contextWithPrincipal(42), gatewayapi.ChatCompletionRequest{
+	result, err := service.CreateChatCompletion(contextWithPrincipal(42), dto.ChatCompletionRequest{
 		Model: "deepseek/deepseek-v4-pro",
-		Messages: []gatewayapi.ChatMessage{
+		Messages: []dto.ChatMessage{
 			{Role: "user", Content: jsonContent("hi")},
 		},
 		Extensions: map[string]json.RawMessage{
@@ -520,18 +520,18 @@ func TestDeepSeekDS05ToolsMultiTurn(t *testing.T) {
 
 	reasoning := "tool-thought"
 	toolCallID := "call_abc"
-	_, err := service.CreateChatCompletion(contextWithPrincipal(42), gatewayapi.ChatCompletionRequest{
+	_, err := service.CreateChatCompletion(contextWithPrincipal(42), dto.ChatCompletionRequest{
 		Model: "deepseek/deepseek-v4-pro",
-		Messages: []gatewayapi.ChatMessage{
+		Messages: []dto.ChatMessage{
 			{Role: "user", Content: jsonContent("weather?")},
 			{
 				Role:             "assistant",
 				Content:          jsonContent(""),
 				ReasoningContent: &reasoning,
-				ToolCalls: []gatewayapi.ChatCompletionToolCall{{
+				ToolCalls: []dto.ChatCompletionToolCall{{
 					ID:   "call_abc",
 					Type: "function",
-					Function: gatewayapi.ChatCompletionToolCallFunction{
+					Function: dto.ChatCompletionToolCallFunction{
 						Name:      "get_weather",
 						Arguments: "{}",
 					},
@@ -539,9 +539,9 @@ func TestDeepSeekDS05ToolsMultiTurn(t *testing.T) {
 			},
 			{Role: "tool", ToolCallID: &toolCallID, Content: jsonContent(`{"temp":20}`)},
 		},
-		Tools: []gatewayapi.ChatCompletionTool{{
+		Tools: []dto.ChatCompletionTool{{
 			Type: "function",
-			Function: gatewayapi.ChatCompletionFunctionTool{
+			Function: dto.ChatCompletionFunctionTool{
 				Name:       "get_weather",
 				Parameters: json.RawMessage(`{"type":"object"}`),
 			},
@@ -584,9 +584,9 @@ func TestDeepSeekDS06ThinkingPassthrough(t *testing.T) {
 
 	service, _ := newParityService(t, upstream)
 
-	_, err := service.CreateChatCompletion(contextWithPrincipal(42), gatewayapi.ChatCompletionRequest{
+	_, err := service.CreateChatCompletion(contextWithPrincipal(42), dto.ChatCompletionRequest{
 		Model: "deepseek/deepseek-v4-pro",
-		Messages: []gatewayapi.ChatMessage{
+		Messages: []dto.ChatMessage{
 			{Role: "user", Content: jsonContent("hi")},
 		},
 		Extensions: map[string]json.RawMessage{
@@ -619,9 +619,9 @@ func TestDeepSeekDS07SettlementUsage(t *testing.T) {
 
 	service, settlement := newParityService(t, upstream)
 
-	_, err := service.CreateChatCompletion(contextWithPrincipal(42), gatewayapi.ChatCompletionRequest{
+	_, err := service.CreateChatCompletion(contextWithPrincipal(42), dto.ChatCompletionRequest{
 		Model: "deepseek/deepseek-v4-pro",
-		Messages: []gatewayapi.ChatMessage{
+		Messages: []dto.ChatMessage{
 			{Role: "user", Content: jsonContent("hi")},
 		},
 	})
@@ -660,16 +660,16 @@ func TestOpenAIParityStreamUsageNullIntermediateChunk(t *testing.T) {
 	includeUsage := true
 	var intermediateRaw []byte
 	chunkIndex := 0
-	if err := service.StreamChatCompletion(contextWithPrincipal(42), gatewayapi.ChatCompletionRequest{
+	if err := service.StreamChatCompletion(contextWithPrincipal(42), dto.ChatCompletionRequest{
 		Model:  "deepseek/deepseek-v4-pro",
 		Stream: boolPtr(true),
-		StreamOptions: &gatewayapi.ChatCompletionStreamOptions{
+		StreamOptions: &dto.ChatCompletionStreamOptions{
 			IncludeUsage: &includeUsage,
 		},
-		Messages: []gatewayapi.ChatMessage{
+		Messages: []dto.ChatMessage{
 			{Role: "user", Content: jsonContent("hi")},
 		},
-	}, func(chunk gatewayapi.ChatCompletionStreamResponse) error {
+	}, func(chunk dto.ChatCompletionStreamResponse) error {
 		if chunkIndex == 0 {
 			intermediateRaw, _ = json.Marshal(chunk)
 		}

@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/openai/responses/dto"
 )
 
 // responses_response_map.go 负责响应方向翻译：把内部 chatcompletionsadapter.ChatResponse 翻译成 Responses
@@ -25,28 +25,28 @@ const mcpNamespacePrefix = "mcp" + namespaceToolSeparator
 //
 // model 回显客户模型名（req.Model，方案 A）；id 新生成 resp_*，上游 chat id 仅记入审计事实，
 // 不作为对外响应 id。created_at 优先透传上游 Created，缺失时回退本地时间，保持形状有值。
-func mapChatResponseToResponses(req gatewayapi.ResponsesRequest, chatResp chatcompletionsadapter.ChatResponse) gatewayapi.ResponsesResponse {
+func mapChatResponseToResponses(req dto.ResponsesRequest, chatResp chatcompletionsadapter.ChatResponse) dto.ResponsesResponse {
 	status, incomplete := responseStatusFromFinish(chatResp.FinishReason)
 
-	output := make([]gatewayapi.ResponseOutputItem, 0, 2+len(chatResp.ToolCalls))
+	output := make([]dto.ResponseOutputItem, 0, 2+len(chatResp.ToolCalls))
 
 	// reasoning：DeepSeek reasoning_content 是开源模型原始 CoT，落 reasoning item 的
 	// content:[{type:"reasoning_text"}]（BRIDGE §4/§6 已冻结，非 summary_text）。
 	if chatResp.ReasoningContent != nil && *chatResp.ReasoningContent != "" {
-		reasoningItem := gatewayapi.ResponseOutputItem{
+		reasoningItem := dto.ResponseOutputItem{
 			Type:    "reasoning",
 			ID:      newResponsesID("rs"),
-			Summary: []gatewayapi.ResponseOutputContent{},
+			Summary: []dto.ResponseOutputContent{},
 		}
 		// 按客户端索取的形态承载：请求 summary 的客户（Codex）只认 summary_text，
 		// 收到 raw reasoning_text 会丢弃整个 item。
 		if requestWantsReasoningSummary(req) {
-			reasoningItem.Summary = []gatewayapi.ResponseOutputContent{{
+			reasoningItem.Summary = []dto.ResponseOutputContent{{
 				Type: "summary_text",
 				Text: *chatResp.ReasoningContent,
 			}}
 		} else {
-			reasoningItem.Content = []gatewayapi.ResponseOutputContent{{
+			reasoningItem.Content = []dto.ResponseOutputContent{{
 				Type: "reasoning_text",
 				Text: *chatResp.ReasoningContent,
 			}}
@@ -62,21 +62,21 @@ func mapChatResponseToResponses(req gatewayapi.ResponsesRequest, chatResp chatco
 	}
 
 	// message：assistant 文本与 refusal 合并进单条 message item 的 content parts。
-	messageContent := make([]gatewayapi.ResponseOutputContent, 0, 2)
+	messageContent := make([]dto.ResponseOutputContent, 0, 2)
 	if chatResp.Content != "" {
-		messageContent = append(messageContent, gatewayapi.ResponseOutputContent{
+		messageContent = append(messageContent, dto.ResponseOutputContent{
 			Type: "output_text",
 			Text: chatResp.Content,
 		})
 	}
 	if chatResp.Refusal != nil && *chatResp.Refusal != "" {
-		messageContent = append(messageContent, gatewayapi.ResponseOutputContent{
+		messageContent = append(messageContent, dto.ResponseOutputContent{
 			Type:    "refusal",
 			Refusal: *chatResp.Refusal,
 		})
 	}
 	if len(messageContent) > 0 {
-		output = append(output, gatewayapi.ResponseOutputItem{
+		output = append(output, dto.ResponseOutputItem{
 			Type:    "message",
 			ID:      newResponsesID("msg"),
 			Role:    "assistant",
@@ -94,7 +94,7 @@ func mapChatResponseToResponses(req gatewayapi.ResponsesRequest, chatResp chatco
 			continue
 		}
 		namespace, name := splitNamespaceToolName(call.Function.Name)
-		item := gatewayapi.ResponseOutputItem{
+		item := dto.ResponseOutputItem{
 			Type:      "function_call",
 			ID:        newResponsesID("fc"),
 			CallID:    call.ID,
@@ -108,7 +108,7 @@ func mapChatResponseToResponses(req gatewayapi.ResponsesRequest, chatResp chatco
 		output = append(output, item)
 	}
 
-	resp := gatewayapi.ResponsesResponse{
+	resp := dto.ResponsesResponse{
 		ID:                newResponsesID("resp"),
 		Object:            "response",
 		CreatedAt:         chatResp.Created,
@@ -138,7 +138,7 @@ func mapChatResponseToResponses(req gatewayapi.ResponsesRequest, chatResp chatco
 // 事件状态机没有对应的活跃 item，会报 "ReasoningRawContentDelta without active item" 并
 // 丢弃整个 reasoning item——后续轮次便无法回传 encrypted_content，桥接也就无法回灌
 // reasoning_content，chat-only 上游（DeepSeek）随即以 400 拒绝整轮工具调用。
-func requestWantsReasoningSummary(req gatewayapi.ResponsesRequest) bool {
+func requestWantsReasoningSummary(req dto.ResponsesRequest) bool {
 	return req.Reasoning != nil && req.Reasoning.Summary != nil && strings.TrimSpace(*req.Reasoning.Summary) != ""
 }
 
@@ -146,7 +146,7 @@ func requestWantsReasoningSummary(req gatewayapi.ResponsesRequest) bool {
 //
 // Codex 无状态会带 include:["reasoning.encrypted_content"] 且 store:false；满足其一即附带载体，
 // 让客户能把思维链原样带回、在工具调用轮回灌 DeepSeek（U1）。
-func requestWantsEncryptedReasoning(req gatewayapi.ResponsesRequest) bool {
+func requestWantsEncryptedReasoning(req dto.ResponsesRequest) bool {
 	for _, inc := range req.Include {
 		if inc == "reasoning.encrypted_content" {
 			return true
@@ -156,12 +156,12 @@ func requestWantsEncryptedReasoning(req gatewayapi.ResponsesRequest) bool {
 }
 
 // responseStatusFromFinish 把 Chat finish_reason 映射为 Responses status + incomplete_details（BRIDGE §4.1）。
-func responseStatusFromFinish(finishReason string) (string, *gatewayapi.ResponsesIncompleteDetails) {
+func responseStatusFromFinish(finishReason string) (string, *dto.ResponsesIncompleteDetails) {
 	switch finishReason {
 	case "length":
-		return "incomplete", &gatewayapi.ResponsesIncompleteDetails{Reason: "max_output_tokens"}
+		return "incomplete", &dto.ResponsesIncompleteDetails{Reason: "max_output_tokens"}
 	case "content_filter":
-		return "incomplete", &gatewayapi.ResponsesIncompleteDetails{Reason: "content_filter"}
+		return "incomplete", &dto.ResponsesIncompleteDetails{Reason: "content_filter"}
 	default:
 		// stop / tool_calls / function_call / 空 → completed。
 		return "completed", nil
@@ -169,17 +169,17 @@ func responseStatusFromFinish(finishReason string) (string, *gatewayapi.Response
 }
 
 // mapResponsesUsage 把内部 ChatUsage 渲染成 Responses usage（BRIDGE §5，仅供客户读取，不作账务）。
-func mapResponsesUsage(u adapter.ChatUsage) *gatewayapi.ResponsesUsage {
-	out := &gatewayapi.ResponsesUsage{
+func mapResponsesUsage(u adapter.ChatUsage) *dto.ResponsesUsage {
+	out := &dto.ResponsesUsage{
 		InputTokens:  u.PromptTokens,
 		OutputTokens: u.CompletionTokens,
 		TotalTokens:  u.TotalTokens,
 	}
 	if u.CachedTokens > 0 {
-		out.InputTokensDetails = &gatewayapi.ResponsesInputTokensDetails{CachedTokens: u.CachedTokens}
+		out.InputTokensDetails = &dto.ResponsesInputTokensDetails{CachedTokens: u.CachedTokens}
 	}
 	if u.ReasoningTokens > 0 {
-		out.OutputTokensDetails = &gatewayapi.ResponsesOutputTokensDetails{ReasoningTokens: u.ReasoningTokens}
+		out.OutputTokensDetails = &dto.ResponsesOutputTokensDetails{ReasoningTokens: u.ReasoningTokens}
 	}
 	return out
 }

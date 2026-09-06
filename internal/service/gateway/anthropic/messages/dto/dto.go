@@ -5,7 +5,7 @@
 // Message 结构与 named SSE event，不转换成 OpenAI 形状。复杂 union（system、content block、
 // tools、tool_choice、thinking、output_config）当前先以 json.RawMessage 承载并在后续小步
 // 结构化校验，保证未建模字段不被 silent drop（保留原始 JSON）。
-package messages
+package dto
 
 import "encoding/json"
 

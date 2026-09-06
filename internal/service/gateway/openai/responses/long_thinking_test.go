@@ -8,13 +8,13 @@ import (
 	"testing"
 	"time"
 
-	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	responsesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/responses"
 	"github.com/ThankCat/unio-gateway/internal/core/channel"
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
 	"github.com/ThankCat/unio-gateway/internal/core/usage"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/openai/responses/dto"
 )
 
 // thinkingStreamAdapter 模拟 Codex 后端的 reasoning 长思考流：协议前导之后只有 reasoning item 事件
@@ -103,7 +103,7 @@ func TestStreamResponse_LongThinkingCommitsOnProgressAndTTFTFollowsMode(t *testi
 			svc := newServiceForTest(router, registry, settlement, &fakeAuthorizer{}, requestLog)
 
 			var events []string
-			err := svc.StreamResponse(ctxWithPrincipal(), directRequest(), func(ev gatewayapi.ResponsesStreamEvent) error {
+			err := svc.StreamResponse(ctxWithPrincipal(), directRequest(), func(ev dto.ResponsesStreamEvent) error {
 				events = append(events, ev.Type)
 				return nil
 			})
@@ -142,8 +142,13 @@ func TestStreamResponse_LongThinkingCommitsOnProgressAndTTFTFollowsMode(t *testi
 					t.Fatalf("visible TTFT must land on the text delta (%v), got %v", upstream.deltaEmittedAt, *firstToken)
 				}
 			}
-			if got := requestLog.gatewayFirstTokens.Load(); got == 0 {
-				t.Fatal("gateway first token must be persisted")
+			// 首字落库经 launchStreamAudit 异步写出（不阻塞客户流），只能断言「最终」写入而不是即时可见。
+			deadline := time.Now().Add(2 * time.Second)
+			for requestLog.gatewayFirstTokens.Load() == 0 {
+				if time.Now().After(deadline) {
+					t.Fatal("gateway first token must be persisted")
+				}
+				time.Sleep(5 * time.Millisecond)
 			}
 		})
 	}
@@ -171,7 +176,7 @@ func TestStreamResponse_UpstreamDiesDuringThinkingReleasesWithoutFallback(t *tes
 	svc := NewResponsesService(router, registry, passthroughPreparer{}, alwaysRetryClassifier{}, requestLog, settlement, authorizer, nil, nil)
 
 	var events []string
-	err := svc.StreamResponse(ctxWithPrincipal(), directRequest(), func(ev gatewayapi.ResponsesStreamEvent) error {
+	err := svc.StreamResponse(ctxWithPrincipal(), directRequest(), func(ev dto.ResponsesStreamEvent) error {
 		events = append(events, ev.Type)
 		return nil
 	})

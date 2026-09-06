@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
 	responsesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/responses"
@@ -20,6 +19,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/openai/responses/dto"
 )
 
 // --- 替身 ---
@@ -447,13 +447,13 @@ func newServiceForTest(router ChatRouter, registry AdapterRegistry, settlement l
 	)
 }
 
-func instructionsRequest() gatewayapi.ResponsesRequest {
+func instructionsRequest() dto.ResponsesRequest {
 	instructions := "You are Unio."
 	text := "create hello.txt"
-	return gatewayapi.ResponsesRequest{
+	return dto.ResponsesRequest{
 		Model:        "unio-deepseek",
 		Instructions: &instructions,
-		Input:        gatewayapi.ResponsesInput{Text: &text},
+		Input:        dto.ResponsesInput{Text: &text},
 	}
 }
 
@@ -474,7 +474,7 @@ func TestPrepareResponsesCandidatesStreamCapability(t *testing.T) {
 		nil,
 		nil,
 	)
-	req := gatewayapi.ResponsesRequest{Model: "m"}
+	req := dto.ResponsesRequest{Model: "m"}
 	cands := []routing.ChatRouteCandidate{candidate("deepseek", 1, "deepseek-v4-flash")}
 
 	// allowDirect=true（CreateResponse/StreamResponse 生产路径）：按 responses-serve 能力分流过滤，
@@ -527,7 +527,7 @@ func TestCreateResponse_HappyPath(t *testing.T) {
 	if len(requestLog.deliveryCompleted) != 0 || len(requestLog.deliveryInterrupted) != 0 {
 		t.Fatal("delivery must stay not_started before the handler write")
 	}
-	if err := result.FinalizeDelivery(func(*gatewayapi.ResponsesResponse) error { return nil }); err != nil {
+	if err := result.FinalizeDelivery(func(*dto.ResponsesResponse) error { return nil }); err != nil {
 		t.Fatalf("finalize delivery: %v", err)
 	}
 	if len(requestLog.deliveryCompleted) != 1 || len(requestLog.deliveryInterrupted) != 0 {
@@ -660,7 +660,7 @@ func TestStreamResponse_AuthorizationFailed(t *testing.T) {
 	svc := newServiceForTest(router, registry, settlement, authorizer, requestLog)
 
 	emitCalls := 0
-	err := svc.StreamResponse(ctxWithPrincipal(), instructionsRequest(), func(gatewayapi.ResponsesStreamEvent) error {
+	err := svc.StreamResponse(ctxWithPrincipal(), instructionsRequest(), func(dto.ResponsesStreamEvent) error {
 		emitCalls++
 		return nil
 	})

@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"strings"
 
-	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/openai/responses/dto"
 )
 
 // responses_custom_tool.go 承载 custom 工具（Codex v0.147 的 apply_patch）在 responses→chat
@@ -38,7 +38,7 @@ type customToolFormat struct {
 }
 
 // mapCustomToolToChat 把 custom 工具降级为等价的单参数 function 工具。
-func mapCustomToolToChat(tool gatewayapi.ResponsesTool) (name, description string, parameters json.RawMessage) {
+func mapCustomToolToChat(tool dto.ResponsesTool) (name, description string, parameters json.RawMessage) {
 	return tool.Name, customToolDescription(tool), customToolParametersSchema
 }
 
@@ -46,7 +46,7 @@ func mapCustomToolToChat(tool gatewayapi.ResponsesTool) (name, description strin
 //
 // grammar 无法随 Chat 协议下发，只能作为自然语言约束附在描述里；同时明确要求不要再包一层
 // JSON 或 markdown，否则模型容易把 patch 包进代码块导致下游解析失败。
-func customToolDescription(tool gatewayapi.ResponsesTool) string {
+func customToolDescription(tool dto.ResponsesTool) string {
 	var b strings.Builder
 	if desc := strings.TrimSpace(tool.Description); desc != "" {
 		b.WriteString(desc)
@@ -81,7 +81,7 @@ func parseCustomToolFormat(raw json.RawMessage) *customToolFormat {
 // customToolNames 收集本次请求中声明为 custom 的工具名，供响应方向判定还原目标形态。
 //
 // namespace 内层不支持 custom（Codex 不会这样发），不递归。
-func customToolNames(tools []gatewayapi.ResponsesTool) map[string]struct{} {
+func customToolNames(tools []dto.ResponsesTool) map[string]struct{} {
 	var names map[string]struct{}
 	for _, tool := range tools {
 		if !tool.IsCustom() || tool.Name == "" {
@@ -148,8 +148,8 @@ func customToolInputFromItem(raw json.RawMessage) string {
 // 上游违反降级 schema 时不静默产出空 input——那会让客户端以为工具执行过。此时原样透出上游
 // 文本（常见情形是模型直接吐了裸 payload 而未包 JSON，内容本身仍可用）并置 status=incomplete，
 // 把契约偏差显式暴露给客户端。
-func customToolCallOutputItem(call chatcompletionsadapter.ChatToolCall) gatewayapi.ResponseOutputItem {
-	item := gatewayapi.ResponseOutputItem{
+func customToolCallOutputItem(call chatcompletionsadapter.ChatToolCall) dto.ResponseOutputItem {
+	item := dto.ResponseOutputItem{
 		Type:   itemTypeCustomToolCall,
 		ID:     newResponsesID("ctc"),
 		CallID: call.ID,
@@ -167,8 +167,8 @@ func customToolCallOutputItem(call chatcompletionsadapter.ChatToolCall) gatewaya
 
 // customToolCallStreamItem 把流式累积的降级 function 调用收口为 custom_tool_call item。
 // 兜底口径与非流式一致：还原失败时原样透出并置 incomplete，不静默产出空 input。
-func customToolCallStreamItem(tool *streamToolState) gatewayapi.ResponseOutputItem {
-	item := gatewayapi.ResponseOutputItem{
+func customToolCallStreamItem(tool *streamToolState) dto.ResponseOutputItem {
+	item := dto.ResponseOutputItem{
 		Type:   itemTypeCustomToolCall,
 		ID:     tool.id,
 		CallID: tool.callID,

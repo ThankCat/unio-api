@@ -1,4 +1,4 @@
-package responses
+package dto
 
 import "encoding/json"
 
@@ -6,9 +6,9 @@ import "encoding/json"
 // v0.147 起 custom 承载 apply_patch（文件编辑的唯一手段），已升为主路径。
 // local_shell / 内置工具（web_search 等）仍为兜底或当前不消费。
 const (
-	toolTypeFunction  = "function"
-	toolTypeNamespace = "namespace"
-	toolTypeCustom    = "custom"
+	ToolTypeFunction  = "function"
+	ToolTypeNamespace = "namespace"
+	ToolTypeCustom    = "custom"
 )
 
 // ResponsesTool 表示 Responses tools[] 中的单个工具定义（按 type 区分的 union）。
@@ -36,10 +36,10 @@ type ResponsesTool struct {
 }
 
 // IsFunction 判断是否为 function 工具。
-func (t ResponsesTool) IsFunction() bool { return t.Type == toolTypeFunction }
+func (t ResponsesTool) IsFunction() bool { return t.Type == ToolTypeFunction }
 
 // IsNamespace 判断是否为 Codex MCP namespace 分组工具。
-func (t ResponsesTool) IsNamespace() bool { return t.Type == toolTypeNamespace }
+func (t ResponsesTool) IsNamespace() bool { return t.Type == ToolTypeNamespace }
 
 // IsCustom 判断是否为 custom（freeform 文本参数）工具。
-func (t ResponsesTool) IsCustom() bool { return t.Type == toolTypeCustom }
+func (t ResponsesTool) IsCustom() bool { return t.Type == ToolTypeCustom }

@@ -3,11 +3,11 @@ package chatcompletions
 import (
 	"context"
 
-	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/chatcompletions"
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
 	"github.com/ThankCat/unio-gateway/internal/core/servicetier"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/openai/chatcompletions/dto"
 )
 
 // chat_request_record.go 内的方法是 lifecycle.RequestLifecycle 的 receiver-bound forward。
@@ -16,7 +16,7 @@ import (
 // 在 lifecycle 包共享，OpenAI 与 Anthropic 两侧 service 调用同一份实现，避免逐字复制。
 // 协议族 ad-hoc string code 文案映射通过 service.go 注入的 chatCompletionsSafeMessage 闭包提供。
 
-func (s *ChatCompletionService) prepareRequestRecord(ctx context.Context, principal *auth.APIKeyPrincipal, req gatewayapi.ChatCompletionRequest, stream bool, tier servicetier.Tier) (requestlog.CreateRequestParams, error) {
+func (s *ChatCompletionService) prepareRequestRecord(ctx context.Context, principal *auth.APIKeyPrincipal, req dto.ChatCompletionRequest, stream bool, tier servicetier.Tier) (requestlog.CreateRequestParams, error) {
 	var effort string
 	if req.ReasoningEffort != nil {
 		effort = *req.ReasoningEffort

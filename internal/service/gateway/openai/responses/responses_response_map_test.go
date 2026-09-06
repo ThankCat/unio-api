@@ -4,15 +4,15 @@ import (
 	"strings"
 	"testing"
 
-	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/openai/responses/dto"
 )
 
 func strptr(s string) *string { return &s }
 
 func TestMapChatResponseToResponses_OutputOrderAndShape(t *testing.T) {
-	req := gatewayapi.ResponsesRequest{Model: "unio-deepseek"}
+	req := dto.ResponsesRequest{Model: "unio-deepseek"}
 	chatResp := chatcompletionsadapter.ChatResponse{
 		ID:               "chatcmpl-abc",
 		Content:          "hello world",
@@ -90,7 +90,7 @@ func TestMapChatResponseToResponses_OutputOrderAndShape(t *testing.T) {
 }
 
 func TestMapChatResponseToResponses_LengthBecomesIncomplete(t *testing.T) {
-	got := mapChatResponseToResponses(gatewayapi.ResponsesRequest{Model: "m"}, chatcompletionsadapter.ChatResponse{
+	got := mapChatResponseToResponses(dto.ResponsesRequest{Model: "m"}, chatcompletionsadapter.ChatResponse{
 		Content:      "partial",
 		FinishReason: "length",
 	})
@@ -103,7 +103,7 @@ func TestMapChatResponseToResponses_LengthBecomesIncomplete(t *testing.T) {
 }
 
 func TestMapChatResponseToResponses_RefusalPart(t *testing.T) {
-	got := mapChatResponseToResponses(gatewayapi.ResponsesRequest{Model: "m"}, chatcompletionsadapter.ChatResponse{
+	got := mapChatResponseToResponses(dto.ResponsesRequest{Model: "m"}, chatcompletionsadapter.ChatResponse{
 		Refusal:      strptr("I cannot help with that"),
 		FinishReason: "stop",
 	})
@@ -117,7 +117,7 @@ func TestMapChatResponseToResponses_RefusalPart(t *testing.T) {
 }
 
 func TestMapChatResponseToResponses_CreatedFallback(t *testing.T) {
-	got := mapChatResponseToResponses(gatewayapi.ResponsesRequest{Model: "m"}, chatcompletionsadapter.ChatResponse{
+	got := mapChatResponseToResponses(dto.ResponsesRequest{Model: "m"}, chatcompletionsadapter.ChatResponse{
 		Content:      "x",
 		FinishReason: "stop",
 		Created:      0,
@@ -130,11 +130,11 @@ func TestMapChatResponseToResponses_CreatedFallback(t *testing.T) {
 // TestMapChatResponseEmitsReasoningCarrierWhenRequested 验证 include 请求 encrypted_content 时附带回放载体（U1）。
 func TestMapChatResponseEmitsReasoningCarrierWhenRequested(t *testing.T) {
 	got := mapChatResponseToResponses(
-		gatewayapi.ResponsesRequest{Model: "m", Include: []string{"reasoning.encrypted_content"}},
+		dto.ResponsesRequest{Model: "m", Include: []string{"reasoning.encrypted_content"}},
 		chatcompletionsadapter.ChatResponse{ReasoningContent: strptr("deep thought"), Content: "answer", FinishReason: "stop"},
 	)
 
-	var reasoning *gatewayapi.ResponseOutputItem
+	var reasoning *dto.ResponseOutputItem
 	for i := range got.Output {
 		if got.Output[i].Type == "reasoning" {
 			reasoning = &got.Output[i]
@@ -155,7 +155,7 @@ func TestMapChatResponseEmitsReasoningCarrierWhenRequested(t *testing.T) {
 func TestMapChatResponseEmitsReasoningCarrierWhenStateless(t *testing.T) {
 	storeFalse := false
 	got := mapChatResponseToResponses(
-		gatewayapi.ResponsesRequest{Model: "m", Store: &storeFalse},
+		dto.ResponsesRequest{Model: "m", Store: &storeFalse},
 		chatcompletionsadapter.ChatResponse{ReasoningContent: strptr("x"), FinishReason: "stop"},
 	)
 	for _, it := range got.Output {
@@ -168,7 +168,7 @@ func TestMapChatResponseEmitsReasoningCarrierWhenStateless(t *testing.T) {
 // TestMapChatResponseOmitsReasoningCarrierByDefault 验证未请求 include 且非无状态时不附带载体。
 func TestMapChatResponseOmitsReasoningCarrierByDefault(t *testing.T) {
 	got := mapChatResponseToResponses(
-		gatewayapi.ResponsesRequest{Model: "m"},
+		dto.ResponsesRequest{Model: "m"},
 		chatcompletionsadapter.ChatResponse{ReasoningContent: strptr("x"), FinishReason: "stop"},
 	)
 	for _, it := range got.Output {

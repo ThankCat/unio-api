@@ -12,7 +12,6 @@ import (
 
 	"go.uber.org/zap"
 
-	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
 	responsesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/responses"
@@ -23,6 +22,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	observabilitymetrics "github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/openai/responses/dto"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/requestadmission"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/runtimefacts"
 )
@@ -232,13 +232,13 @@ func nativeCompactResponse() *responsesadapter.Response {
 	}
 }
 
-func compactNativeRequest() gatewayapi.ResponsesRequest {
+func compactNativeRequest() dto.ResponsesRequest {
 	instructions := "compact please"
 	text := "long history to compact"
-	return gatewayapi.ResponsesRequest{
+	return dto.ResponsesRequest{
 		Model:        "gpt-5.5",
 		Instructions: &instructions,
-		Input:        gatewayapi.ResponsesInput{Text: &text},
+		Input:        dto.ResponsesInput{Text: &text},
 	}
 }
 
@@ -477,7 +477,7 @@ func TestCompactHistory_NativeFallbackToSyntheticLocalUpstream(t *testing.T) {
 			if err != nil {
 				t.Fatalf("CompactHistory returned error: %v", err)
 			}
-			if err := result.FinalizeDelivery(func(*gatewayapi.CompactHistoryResponse) error { return nil }); err != nil {
+			if err := result.FinalizeDelivery(func(*dto.CompactHistoryResponse) error { return nil }); err != nil {
 				t.Fatalf("FinalizeDelivery returned error: %v", err)
 			}
 			if len(result.Response.Output) != 1 || len(result.Response.Output[0].Content) != 1 ||

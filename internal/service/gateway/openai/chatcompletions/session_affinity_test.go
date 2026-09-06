@@ -4,17 +4,17 @@ import (
 	"strings"
 	"testing"
 
-	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/chatcompletions"
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
 	"github.com/ThankCat/unio-gateway/internal/core/sessionhint"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/openai/chatcompletions/dto"
 )
 
 // TestCreateChatCompletionPassesUpstreamAffinityToAdapter 验证非流式 chat 编排把 Sticky 同源会话键与
 // 客户 API Key 身份经 ctx 交给 adapter（反向桥接到号池时 Codex wire 据此派生上游会话身份）：
 // 显式 prompt_cache_key 原值直达；无显式信号时落内容派生哈希。
 func TestCreateChatCompletionPassesUpstreamAffinityToAdapter(t *testing.T) {
-	run := func(t *testing.T, req gatewayapi.ChatCompletionRequest) sessionhint.UpstreamAffinity {
+	run := func(t *testing.T, req dto.ChatCompletionRequest) sessionhint.UpstreamAffinity {
 		t.Helper()
 		fakeAdapter := &fakeChatAdapter{chatResp: chatResponse("adapter response")}
 		router := &fakeChatRouter{plan: routePlan(routeCandidate("codex", 123, "gpt-5.5"))}
@@ -61,7 +61,7 @@ func TestStreamChatCompletionPassesUpstreamAffinityToAdapter(t *testing.T) {
 	req := chatRequest()
 	key := "01a06086-5391-7d71-a82e-e5638a243ec4"
 	req.PromptCacheKey = &key
-	if err := service.StreamChatCompletion(contextWithPrincipal(42), req, func(gatewayapi.ChatCompletionStreamResponse) error { return nil }); err != nil {
+	if err := service.StreamChatCompletion(contextWithPrincipal(42), req, func(dto.ChatCompletionStreamResponse) error { return nil }); err != nil {
 		t.Fatalf("StreamChatCompletion: %v", err)
 	}
 	if fakeAdapter.streamCalled != 1 {

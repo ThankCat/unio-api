@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/anthropic/messages"
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	messagesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/anthropic/messages"
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
@@ -17,6 +16,7 @@ import (
 	coreusage "github.com/ThankCat/unio-gateway/internal/core/usage"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/httpx"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/anthropic/messages/dto"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
 
@@ -303,12 +303,12 @@ func contextWithPrincipal(userID int64) context.Context {
 	})
 }
 
-func messageRequest() gatewayapi.MessageRequest {
+func messageRequest() dto.MessageRequest {
 	maxTokens := 1024
-	return gatewayapi.MessageRequest{
+	return dto.MessageRequest{
 		Model:     "anthropic/claude-sonnet-4",
 		MaxTokens: &maxTokens,
-		Messages:  []gatewayapi.Message{{Role: "user", Content: json.RawMessage(`"hello"`)}},
+		Messages:  []dto.Message{{Role: "user", Content: json.RawMessage(`"hello"`)}},
 	}
 }
 
@@ -402,7 +402,7 @@ func TestMessageAuthorizationFailedBeforePersistenceOrUpstream(t *testing.T) {
 			emitCalls := 0
 			var err error
 			if tc.stream {
-				err = service.StreamMessage(contextWithPrincipal(42), messageRequest(), func(gatewayapi.StreamFrame) error {
+				err = service.StreamMessage(contextWithPrincipal(42), messageRequest(), func(dto.StreamFrame) error {
 					emitCalls++
 					return nil
 				})
@@ -455,7 +455,7 @@ func TestCreateMessageReturnsResponseAndSettlesWithAnthropicFacts(t *testing.T) 
 	if len(service.requestLog.(*fakeMessagesRequestLog).deliveryCompleted) != 0 || len(service.requestLog.(*fakeMessagesRequestLog).deliveryInterrupted) != 0 {
 		t.Fatal("delivery must stay not_started before the handler write")
 	}
-	if err := result.FinalizeDelivery(func(*gatewayapi.MessageResponse) error { return nil }); err != nil {
+	if err := result.FinalizeDelivery(func(*dto.MessageResponse) error { return nil }); err != nil {
 		t.Fatalf("finalize delivery: %v", err)
 	}
 	if len(service.requestLog.(*fakeMessagesRequestLog).deliveryCompleted) != 1 {
@@ -660,8 +660,8 @@ func TestStreamMessageEmitsNativeEventsAndStopThenSettles(t *testing.T) {
 		&fakeMessagesAuthorizer{},
 	)
 
-	var frames []gatewayapi.StreamFrame
-	err := service.StreamMessage(contextWithPrincipal(42), messageRequest(), func(frame gatewayapi.StreamFrame) error {
+	var frames []dto.StreamFrame
+	err := service.StreamMessage(contextWithPrincipal(42), messageRequest(), func(frame dto.StreamFrame) error {
 		frames = append(frames, frame)
 		return nil
 	})
@@ -721,7 +721,7 @@ func TestStreamMessageReleasesWhenFinalUsageMissingAfterPreludeOnly(t *testing.T
 		authorizer,
 	)
 
-	err := service.StreamMessage(contextWithPrincipal(42), messageRequest(), func(frame gatewayapi.StreamFrame) error {
+	err := service.StreamMessage(contextWithPrincipal(42), messageRequest(), func(frame dto.StreamFrame) error {
 		return nil
 	})
 	// 仅前导帧 + 缺 usage：释放预扣、返回 usage-missing，不进入 partial settlement。
@@ -766,8 +766,8 @@ func TestStreamMessagePartialSettlesWhenFinalUsageMissingAfterEmit(t *testing.T)
 		authorizer,
 	)
 
-	var frames []gatewayapi.StreamFrame
-	err := service.StreamMessage(contextWithPrincipal(42), messageRequest(), func(frame gatewayapi.StreamFrame) error {
+	var frames []dto.StreamFrame
+	err := service.StreamMessage(contextWithPrincipal(42), messageRequest(), func(frame dto.StreamFrame) error {
 		frames = append(frames, frame)
 		return nil
 	})

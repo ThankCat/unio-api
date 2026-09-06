@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
 	responsesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/responses"
 	"github.com/ThankCat/unio-gateway/internal/core/requestlog"
@@ -13,6 +12,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/servicetier"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/openai/responses/dto"
 )
 
 // compact_orchestrator.go 实现 POST /v1/responses/compact 的双路径编排（GAP-11-014）：
@@ -36,7 +36,7 @@ type compactResult struct {
 //
 // 缺省 instructions 时注入兜底压缩指令（Codex 通常自带；缺省时直发历史会让模型续写而非压缩）。
 // 注入对 Native 透传无害（instructions 是 compact 合法字段，且原始 RawBody 透传优先），对 Synthetic 必要。
-func (s *ResponsesService) CompactHistory(ctx context.Context, req gatewayapi.ResponsesRequest) (*lifecycle.NonStreamResult[*gatewayapi.CompactHistoryResponse], error) {
+func (s *ResponsesService) CompactHistory(ctx context.Context, req dto.ResponsesRequest) (*lifecycle.NonStreamResult[*dto.CompactHistoryResponse], error) {
 	tierRequest, err := servicetier.NormalizeOpenAIRequest(req.ServiceTier)
 	if err != nil {
 		return nil, err
@@ -53,7 +53,7 @@ func (s *ResponsesService) CompactHistory(ctx context.Context, req gatewayapi.Re
 	if result.native != nil {
 		// NativeCompact：原文透传上游压缩响应体，仅改写顶层 model 回显为客户请求名。
 		data := rewriteResponsesModel(result.native.Raw, req.Model)
-		return lifecycle.NewNonStreamResult(gatewayapi.RawCompactHistoryResponse(data), delivery), nil
+		return lifecycle.NewNonStreamResult(dto.RawCompactHistoryResponse(data), delivery), nil
 	}
 	if result.synthetic == nil {
 		return nil, failure.New(
@@ -69,7 +69,7 @@ func (s *ResponsesService) CompactHistory(ctx context.Context, req gatewayapi.Re
 //
 // 候选过滤/估算复用 chat 桥接口径（allowDirect=false，与历史 compact 行为一致，零回归）。Native
 // 404/405 回落由 lifecycle 作为同候选的第二次独立 transport 执行，拥有新的 permit 和 attempt。
-func (s *ResponsesService) executeCompact(ctx context.Context, req gatewayapi.ResponsesRequest, requestedTier servicetier.Tier) (compactResult, lifecycle.DeliveryFinalizer, error) {
+func (s *ResponsesService) executeCompact(ctx context.Context, req dto.ResponsesRequest, requestedTier servicetier.Tier) (compactResult, lifecycle.DeliveryFinalizer, error) {
 	var (
 		compactAdapter responsesadapter.ResponsesCompactAdapter
 		chatAdapter    chatcompletionsadapter.ChatAdapter

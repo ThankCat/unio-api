@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
 	responsesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/responses"
@@ -17,6 +16,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/openai/responses/dto"
 )
 
 // partialOutputTokenCounter 按 upstream model 估算可见输出文本的 token 数，供 partial settlement 使用。
@@ -43,7 +43,7 @@ func partialOutputTokenCounter(model string, text string) int64 {
 //
 // 每个桥接 attempt 都构造独立 streamEncoder，确保首字前 fallback 不会继承上一候选的协议状态；
 // 直传候选不触碰 encoder。
-func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.ResponsesRequest, emit func(gatewayapi.ResponsesStreamEvent) error) error {
+func (s *ResponsesService) StreamResponse(ctx context.Context, req dto.ResponsesRequest, emit func(dto.ResponsesStreamEvent) error) error {
 	principal, ok := auth.APIKeyPrincipalFromContext(ctx)
 	if !ok {
 		return failure.Wrap(
@@ -162,7 +162,7 @@ func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.Re
 		directTerminal      *responsesadapter.StreamChunk
 	)
 	var activeWriteAcks lifecycle.StreamWriteAcks
-	acknowledgedBridgeEmit := func(event gatewayapi.ResponsesStreamEvent) error {
+	acknowledgedBridgeEmit := func(event dto.ResponsesStreamEvent) error {
 		if err := emit(event); err != nil {
 			return err
 		}
@@ -302,15 +302,15 @@ func (s *ResponsesService) StreamResponse(ctx context.Context, req gatewayapi.Re
 	return err
 }
 
-func bridgeResponsesEventHasFirstToken(event gatewayapi.ResponsesStreamEvent) bool {
+func bridgeResponsesEventHasFirstToken(event dto.ResponsesStreamEvent) bool {
 	switch event.Type {
-	case gatewayapi.EventOutputTextDelta,
-		gatewayapi.EventReasoningTextDelta,
-		gatewayapi.EventReasoningSummaryTextDelta,
-		gatewayapi.EventRefusalDelta,
-		gatewayapi.EventFunctionCallArgsDelta:
+	case dto.EventOutputTextDelta,
+		dto.EventReasoningTextDelta,
+		dto.EventReasoningSummaryTextDelta,
+		dto.EventRefusalDelta,
+		dto.EventFunctionCallArgsDelta:
 		return event.Delta != ""
-	case gatewayapi.EventOutputItemAdded:
+	case dto.EventOutputItemAdded:
 		return event.Item != nil && event.Item.Type == "function_call" &&
 			(event.Item.Name != "" || event.Item.Arguments != "")
 	default:

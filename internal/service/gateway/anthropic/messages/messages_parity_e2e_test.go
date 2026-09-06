@@ -13,7 +13,7 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/routing"
 	coreusage "github.com/ThankCat/unio-gateway/internal/core/usage"
 
-	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/anthropic/messages"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/anthropic/messages/dto"
 )
 
 // mockMessagesUpstream 是一个最小的 Anthropic Messages 上游替身。
@@ -204,8 +204,8 @@ func TestAnthropicSDKShapeStreamMessage(t *testing.T) {
 	req := messageRequest()
 	req.Stream = &stream
 
-	var frames []gatewayapi.StreamFrame
-	if err := service.StreamMessage(contextWithPrincipal(42), req, func(frame gatewayapi.StreamFrame) error {
+	var frames []dto.StreamFrame
+	if err := service.StreamMessage(contextWithPrincipal(42), req, func(frame dto.StreamFrame) error {
 		frames = append(frames, frame)
 		return nil
 	}); err != nil {

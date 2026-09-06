@@ -1,8 +1,8 @@
 package responses
 
-import gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
+import "github.com/ThankCat/unio-gateway/internal/service/gateway/openai/responses/dto"
 
-func responsesIntPtr(v *gatewayapi.ResponsesInt) *int {
+func responsesIntPtr(v *dto.ResponsesInt) *int {
 	if v == nil {
 		return nil
 	}

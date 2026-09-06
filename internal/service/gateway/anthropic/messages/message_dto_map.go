@@ -3,11 +3,11 @@ package messages
 import (
 	"encoding/json"
 
-	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/anthropic/messages"
 	messagesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/anthropic/messages"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/anthropic/messages/dto"
 )
 
-func mapGatewayMessagesToAdapter(messages []gatewayapi.Message) []messagesadapter.Message {
+func mapGatewayMessagesToAdapter(messages []dto.Message) []messagesadapter.Message {
 	out := make([]messagesadapter.Message, 0, len(messages))
 	for _, msg := range messages {
 		out = append(out, messagesadapter.Message{
@@ -18,7 +18,7 @@ func mapGatewayMessagesToAdapter(messages []gatewayapi.Message) []messagesadapte
 	return out
 }
 
-func mapGatewayRequestToAdapter(req gatewayapi.MessageRequest, upstreamModel string) messagesadapter.MessageRequest {
+func mapGatewayRequestToAdapter(req dto.MessageRequest, upstreamModel string) messagesadapter.MessageRequest {
 	extensions := make(map[string]json.RawMessage, len(req.Extensions))
 	for k, v := range req.Extensions {
 		extensions[k] = append(json.RawMessage(nil), v...)
@@ -48,8 +48,8 @@ func mapGatewayRequestToAdapter(req gatewayapi.MessageRequest, upstreamModel str
 	}
 }
 
-func mapAdapterUsageToGateway(usage messagesadapter.MessageUsage) gatewayapi.MessageUsage {
-	out := gatewayapi.MessageUsage{
+func mapAdapterUsageToGateway(usage messagesadapter.MessageUsage) dto.MessageUsage {
+	out := dto.MessageUsage{
 		InputTokens:  usage.InputTokens,
 		OutputTokens: usage.OutputTokens,
 	}
@@ -60,18 +60,18 @@ func mapAdapterUsageToGateway(usage messagesadapter.MessageUsage) gatewayapi.Mes
 		out.CacheReadInputTokens = usage.CacheReadInputTokens
 	}
 	if usage.CacheCreation != nil {
-		out.CacheCreation = &gatewayapi.CacheCreation{
+		out.CacheCreation = &dto.CacheCreation{
 			Ephemeral5mInputTokens: usage.CacheCreation.Ephemeral5mInputTokens,
 			Ephemeral1hInputTokens: usage.CacheCreation.Ephemeral1hInputTokens,
 		}
 	}
 	if usage.ThinkingOutputTokens != nil {
-		out.OutputTokensDetails = &gatewayapi.OutputTokensDetails{
+		out.OutputTokensDetails = &dto.OutputTokensDetails{
 			ThinkingTokens: usage.ThinkingOutputTokens,
 		}
 	}
 	if usage.ServerToolUse != nil {
-		out.ServerToolUse = &gatewayapi.ServerToolUse{
+		out.ServerToolUse = &dto.ServerToolUse{
 			WebSearchRequests: usage.ServerToolUse.WebSearchRequests,
 			WebFetchRequests:  usage.ServerToolUse.WebFetchRequests,
 		}
@@ -82,7 +82,7 @@ func mapAdapterUsageToGateway(usage messagesadapter.MessageUsage) gatewayapi.Mes
 	return out
 }
 
-func mapAdapterResponseToGateway(catalogModel string, resp messagesadapter.MessageResponse) gatewayapi.MessageResponse {
+func mapAdapterResponseToGateway(catalogModel string, resp messagesadapter.MessageResponse) dto.MessageResponse {
 	content := make([]json.RawMessage, len(resp.Content))
 	for i, block := range resp.Content {
 		content[i] = append(json.RawMessage(nil), block...)
@@ -93,7 +93,7 @@ func mapAdapterResponseToGateway(catalogModel string, resp messagesadapter.Messa
 		role = "assistant"
 	}
 
-	return gatewayapi.MessageResponse{
+	return dto.MessageResponse{
 		ID:           resp.ID,
 		Type:         "message",
 		Role:         role,

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/anthropic/messages"
 	"github.com/ThankCat/unio-gateway/internal/core/adapter"
 	messagesadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/anthropic/messages"
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
@@ -14,11 +13,12 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/core/sessionhint"
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/anthropic/messages/dto"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
 )
 
 // StreamMessage 编排流式 Anthropic Messages 请求，并通过 emit 写出原生 SSE 事件。
-func (s *MessagesService) StreamMessage(ctx context.Context, req gatewayapi.MessageRequest, emit func(gatewayapi.StreamFrame) error) error {
+func (s *MessagesService) StreamMessage(ctx context.Context, req dto.MessageRequest, emit func(dto.StreamFrame) error) error {
 	principal, ok := auth.APIKeyPrincipalFromContext(ctx)
 	if !ok {
 		return failure.Wrap(
@@ -150,7 +150,7 @@ func (s *MessagesService) StreamMessage(ctx context.Context, req gatewayapi.Mess
 			return streamOutcome.Facts, streamErr
 		},
 		EmitChunk: func(ev messagesadapter.MessageStreamEvent, acks lifecycle.StreamWriteAcks) error {
-			if err := emit(gatewayapi.StreamFrame{
+			if err := emit(dto.StreamFrame{
 				EventType: ev.Type,
 				Data:      patchStreamEventCatalogModel(req.Model, ev),
 			}); err != nil {
@@ -163,11 +163,11 @@ func (s *MessagesService) StreamMessage(ctx context.Context, req gatewayapi.Mess
 			return nil
 		},
 		Finish: func(_ string, _ *adapter.ChatUsage, _ string, acks lifecycle.StreamWriteAcks) error {
-			stopPayload, marshalErr := json.Marshal(gatewayapi.StreamMessageStop{Type: "message_stop"})
+			stopPayload, marshalErr := json.Marshal(dto.StreamMessageStop{Type: "message_stop"})
 			if marshalErr != nil {
 				return marshalErr
 			}
-			if err := emit(gatewayapi.StreamFrame{EventType: "message_stop", Data: stopPayload}); err != nil {
+			if err := emit(dto.StreamFrame{EventType: "message_stop", Data: stopPayload}); err != nil {
 				return err
 			}
 			acks.Frame()

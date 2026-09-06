@@ -3,7 +3,9 @@
 //
 // 架构（DEC-014，responses-to-chat 桥接）：
 //
-//   - 本子包只负责 Responses 协议的 ingress DTO、decode、协议结构校验与原生错误渲染。
+//   - 本子包只负责 Responses 协议的 ingress 解码入口、协议结构校验与原生错误渲染；
+//     DTO 类型与 JSON 编解码定义在 service/gateway/openai/responses/dto（service 输入输出契约），
+//     此处以类型别名重新导出。
 //   - Responses 请求在 service 层桥接为内部 openai.ChatRequest 契约，复用既有 OpenAI
 //     adapter / routing / lifecycle / settlement，不新增上游 Responses adapter。
 //   - 字段语义映射（Pass/Adapt/Drop/Reject）见 Unio Blueprint Gateway 协议兼容文档：
@@ -13,5 +15,5 @@
 //
 //   - ingress 只校验协议合法性（DEC-012「协议为先」）；合法但 provider 无法转换的字段不在
 //     此 Reject，保留进 Extensions 由 adapter 出站 Drop。
-//   - HTTP 层只处理协议、DTO、错误渲染；业务编排在 service/gateway/openai/responses。
+//   - HTTP 层只处理协议解码、校验与错误渲染；业务编排在 service/gateway/openai/responses。
 package responses

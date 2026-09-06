@@ -1,4 +1,4 @@
-package messages
+package dto
 
 import "encoding/json"
 

@@ -4,10 +4,10 @@ import (
 	"testing"
 	"time"
 
-	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/chatcompletions"
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/openai/chatcompletions/dto"
 )
 
 // fakeMetricsRecorder 捕获 gateway 上报的业务指标调用，供传播测试断言。
@@ -136,7 +136,7 @@ func TestChatCompletionServiceRecordsStreamSuccessMetrics(t *testing.T) {
 		recorder,
 	)
 
-	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(gatewayapi.ChatCompletionStreamResponse) error {
+	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(dto.ChatCompletionStreamResponse) error {
 		return nil
 	})
 	if err != nil {

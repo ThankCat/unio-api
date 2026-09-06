@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/chatcompletions"
 	chatbridge "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatbridge"
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
 	"github.com/ThankCat/unio-gateway/internal/core/auth"
@@ -17,10 +16,11 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/failure"
 	"github.com/ThankCat/unio-gateway/internal/platform/observability/metrics"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/openai/chatcompletions/dto"
 )
 
 // CreateChatCompletion 编排非流式 chat completion 请求，并返回公开 DTO 与内部交付 finalizer。
-func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req gatewayapi.ChatCompletionRequest) (*lifecycle.NonStreamResult[*gatewayapi.ChatCompletionResponse], error) {
+func (s *ChatCompletionService) CreateChatCompletion(ctx context.Context, req dto.ChatCompletionRequest) (*lifecycle.NonStreamResult[*dto.ChatCompletionResponse], error) {
 	principal, ok := auth.APIKeyPrincipalFromContext(ctx)
 	if !ok {
 		return nil, failure.Wrap(

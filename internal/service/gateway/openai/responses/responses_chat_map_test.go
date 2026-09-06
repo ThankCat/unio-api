@@ -4,13 +4,13 @@ import (
 	"encoding/json"
 	"testing"
 
-	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/responses"
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/openai/responses/dto"
 )
 
-func decodeRequest(t *testing.T, body string) gatewayapi.ResponsesRequest {
+func decodeRequest(t *testing.T, body string) dto.ResponsesRequest {
 	t.Helper()
-	var req gatewayapi.ResponsesRequest
+	var req dto.ResponsesRequest
 	if err := json.Unmarshal([]byte(body), &req); err != nil {
 		t.Fatalf("decode request: %v", err)
 	}
@@ -423,7 +423,7 @@ func TestMapReasoningBackfillsMergedParallelToolCalls(t *testing.T) {
 // TestReasoningRoundTripOutputToInput 验证出站 reasoning 载体与入站回灌的 emit↔parse 对称（U1）。
 func TestReasoningRoundTripOutputToInput(t *testing.T) {
 	out := mapChatResponseToResponses(
-		gatewayapi.ResponsesRequest{Model: "m", Include: []string{"reasoning.encrypted_content"}},
+		dto.ResponsesRequest{Model: "m", Include: []string{"reasoning.encrypted_content"}},
 		chatcompletionsadapter.ChatResponse{
 			ReasoningContent: strptr("chain of thought"),
 			FinishReason:     "tool_calls",
@@ -434,7 +434,7 @@ func TestReasoningRoundTripOutputToInput(t *testing.T) {
 		},
 	)
 
-	var rs, fc gatewayapi.ResponseOutputItem
+	var rs, fc dto.ResponseOutputItem
 	for _, it := range out.Output {
 		switch it.Type {
 		case "reasoning":
@@ -450,7 +450,7 @@ func TestReasoningRoundTripOutputToInput(t *testing.T) {
 	// 模拟客户原样回传 reasoning(encrypted_content) + function_call。
 	callID, name, args := fc.CallID, fc.Name, fc.Arguments
 	rawArgs, _ := json.Marshal(args)
-	inReq := gatewayapi.ResponsesRequest{Input: gatewayapi.ResponsesInput{Items: []gatewayapi.ResponseInputItem{
+	inReq := dto.ResponsesRequest{Input: dto.ResponsesInput{Items: []dto.ResponseInputItem{
 		{Type: "reasoning", ID: &rs.ID, EncryptedContent: rs.EncryptedContent},
 		{Type: "function_call", CallID: &callID, Name: &name, Arguments: rawArgs},
 	}}}

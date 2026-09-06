@@ -4,9 +4,9 @@ import (
 	"errors"
 	"testing"
 
-	gatewayapi "github.com/ThankCat/unio-gateway/internal/app/gatewayapi/openai/chatcompletions"
 	chatcompletionsadapter "github.com/ThankCat/unio-gateway/internal/core/adapter/openai/chatcompletions"
 	"github.com/ThankCat/unio-gateway/internal/service/gateway/lifecycle"
+	"github.com/ThankCat/unio-gateway/internal/service/gateway/openai/chatcompletions/dto"
 )
 
 func TestChatCompletionServiceCreateChatCompletionReturnsResponseWhenRecoveryScheduled(t *testing.T) {
@@ -67,7 +67,7 @@ func TestChatCompletionServiceStreamReturnsNilWhenRecoveryScheduledAfterFinalUsa
 		authorizer,
 	)
 
-	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk gatewayapi.ChatCompletionStreamResponse) error {
+	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk dto.ChatCompletionStreamResponse) error {
 		return nil
 	})
 	if err != nil {
@@ -108,7 +108,7 @@ func TestChatCompletionServiceStreamKeepsTailErrorWhenRecoveryScheduled(t *testi
 		&fakeChatAuthorizer{authorization: lifecycle.ChatAuthorization{ReservationID: 8841}},
 	)
 
-	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk gatewayapi.ChatCompletionStreamResponse) error {
+	err := service.StreamChatCompletion(contextWithPrincipal(42), chatRequest(), func(chunk dto.ChatCompletionStreamResponse) error {
 		return nil
 	})
 	if !errors.Is(err, upstreamErr) {
