@@ -227,6 +227,8 @@ func (s *Service) byID(ctx context.Context, id int64) (Proxy, error) {
 	return Proxy{}, notFound("proxy not found")
 }
 
+// validateInput 校验代理实体输入。host 只查非空、不拦内网地址：出站代理常常就是内网网关
+// （已知边界，与 provider.NormalizeOrigin 同一权衡）。
 func validateInput(in Input, isUpdate bool) error {
 	if strings.TrimSpace(in.Name) == "" {
 		return invalidArgument("name", "代理名称不能为空")

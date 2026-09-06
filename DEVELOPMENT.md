@@ -2,7 +2,7 @@
 
 ## 环境
 
-- `go.mod` 声明项目使用 Go `1.26.5`。
+- `go.mod` 声明项目使用 Go `1.26.6`。
 - 本地 PostgreSQL、Redis 与观测组件可由 `deploy/compose.dev.yml` 启动。
 - 热加载命令需要 `air`：`go install github.com/air-verse/air@latest`。
 - 重新生成数据库访问代码时使用 sqlc；当前生成文件标记的版本为 `1.31.1`。
@@ -57,6 +57,21 @@ Dev Redis 当前 DB。快照包含完整 Schema 和业务数据，本地代码�
   读取查询。
 - `internal/platform/store/sqlc` 是生成目录，修改 Schema 或查询后运行 `sqlc generate`。
 
+### 迁移规范：已有大表上的新索引
+
+发布流程是 `migrate` 容器先行、旧 Gateway 容器仍在服务。普通 `CREATE INDEX` 会持有目标表的 SHARE 锁直到
+建完，期间全部写入阻塞；对 `request_records`、`request_attempts`、`routing_decision_traces`、`usage_records`、
+`ledger_entries` 这类只增不减的大表，新索引一律使用 `CREATE INDEX CONCURRENTLY IF NOT EXISTS`，并遵守：
+
+1. **一个索引一个迁移文件，文件内只有这一条语句。** golang-migrate 把整个文件作为一次 `Exec` 发送，
+   多语句串会被 PostgreSQL 视为隐式事务块，`CONCURRENTLY` 会直接报错；单语句文件不在事务块内，才能并发建索引。
+2. `down` 同样单语句：`DROP INDEX CONCURRENTLY IF EXISTS <name>;`。
+3. `CONCURRENTLY` 中途失败会留下 `INVALID` 索引；重跑前先 `DROP INDEX` 该名称（`IF NOT EXISTS` 不会替换无效索引）。
+4. 需要回填全表的迁移（如按历史聚合初始化统计表）在文件头注明预期数据量、锁面与预估时长，发布前在 Test 快照上
+   实测一次。
+
+新建表随建的索引不受此限制（表为空且尚无人写）。
+
 ## Test Docker 部署
 
 完整步骤（架构、Cloudflare、Caddy、环境变量、前端发布与排障）见
@@ -104,6 +119,17 @@ docker compose --env-file deploy/env/.env.docker --env-file deploy/env/.env.test
 代码时则必须按实际依赖范围构建全部受影响服务。Test 在一台服务器运行全部服务，构建制品边界与未来
 Production 保持一致。Test 使用固定的 `unio-test` 项目、network 和 volume 名称与 Dev 隔离，不连接本地
 开发数据。停止环境时使用 `down` 保留 Test 数据卷；仅在确认不再需要 Test 数据时才使用 `down --volumes`。
+
+部署拓扑的硬性约束：
+
+- **worker-server 只能单实例运行。** 有分布式锁的只有结算补偿（`FOR UPDATE SKIP LOCKED`）、权限复检（Redis claim）
+  与令牌刷新（Redis 锁）；孤儿/搁浅清扫、汇率同步、模型目录同步、渠道检测、发现验证、工单维护均无锁，双实例会重复
+  探测（重复消耗上游额度）与重复扫描。`VerifySingleNodeDeployment` 只拒绝 Redis Cluster，拦不住第二个 worker 进程。
+- **反代必须屏蔽 `/metrics` 与 `/internal/*`**（`deploy/nginx/test.conf` 已对 API 域显式 404）。进程内另有第二道防线：
+  配置 `GATEWAY_INTERNAL_TOKEN` 后，Gateway 与 Admin 的 `/metrics` 都要求 `Authorization: Bearer <token>`；
+  不配置 token 时端点不鉴权，只能依赖反代。
+- **Admin 位于反代之后时必须配置 `ADMIN_TRUSTED_PROXY_CIDRS`**，否则登录限速的「来源」退化为代理地址，全网共享一个
+  失败桶（与 `CONSOLE_TRUSTED_PROXY_CIDRS` 同一网段）。
 
 Nginx 是 Test 环境唯一映射到宿主机的 HTTP 入口，默认地址为 `http://127.0.0.1:18080`。按 Host 分流：
 `test-api.unioapi.com` 除 `/metrics` 和 `/internal/*` 外统一转发到 Gateway，由 Gateway Router 负责业务路径和

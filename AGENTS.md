@@ -54,6 +54,8 @@
 
 - 遵循现有包结构、命名、错误处理和测试 helper。
 - HTTP 层处理协议、认证、DTO 和错误渲染；service 层负责编排；core 层表达领域能力；platform 层提供基础设施。
+  `internal/app/workers` 是调度壳而非业务层：允许直接依赖 `internal/platform/store/sqlc` 做 claim / 扫描类查询，
+  但账务、结算与外呼判定仍必须经 service / core；其余 `internal/app` 包不得绕过 service 直连 sqlc。
 - 跨模块错误使用 `internal/platform/failure`，公开响应不得透传上游原始错误正文。
 - 修改 `migrations/` 或 `sql/queries/` 后运行 `sqlc generate`，不手改 sqlc 生成文件。
 - Go 代码运行 `gofmt`，验证范围与变更风险相符。

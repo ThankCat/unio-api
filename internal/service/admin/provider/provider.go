@@ -363,6 +363,11 @@ func (s *Service) Delete(ctx context.Context, id int64) error {
 	return nil
 }
 
+// NormalizeOrigin 把上游 origin 规范化为 scheme://host[:port][/path]，拒绝 userinfo/query/fragment。
+//
+// 已知边界（有意不拦）：允许 loopback、RFC1918、link-local 等内网地址。本产品的职责就是连接管理员配置的
+// 任意上游（含自建内网推理服务），且当前是单管理员全信任模型；渠道测试/模型发现会由服务端主动外连这里的
+// 地址，构成 Admin 权限下的 SSRF 面。若未来出现低权限运营角色，再在此处增加私网段拦截或显式白名单开关。
 func NormalizeOrigin(raw string) (string, error) {
 	trimmed := strings.TrimSpace(raw)
 	parsed, err := url.Parse(trimmed)
