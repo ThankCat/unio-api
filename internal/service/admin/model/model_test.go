@@ -24,6 +24,7 @@ type fakeModelStore struct {
 	createCalls int
 	updateRow   sqlc.Model
 	updateErr   error
+	updateParam sqlc.UpdateModelParams
 	deleteAff   int64
 	deleteErr   error
 	deleteID    int64
@@ -52,7 +53,8 @@ func (s *fakeModelStore) CreateModel(_ context.Context, arg sqlc.CreateModelPara
 	return s.createRow, s.createErr
 }
 
-func (s *fakeModelStore) UpdateModel(context.Context, sqlc.UpdateModelParams) (sqlc.Model, error) {
+func (s *fakeModelStore) UpdateModel(_ context.Context, arg sqlc.UpdateModelParams) (sqlc.Model, error) {
+	s.updateParam = arg
 	return s.updateRow, s.updateErr
 }
 
@@ -140,6 +142,52 @@ func TestUpdateNotFound(t *testing.T) {
 	})
 	if got := failure.CodeOf(err); got != failure.CodeAdminNotFound {
 		t.Fatalf("expected %q, got %q", failure.CodeAdminNotFound, got)
+	}
+}
+
+// 只改状态/名称的更新不得清掉采纳来的简介与知识截止：未提及沿用现值，显式空串才清空。
+func TestUpdateKeepsOmittedTextMetadataAndClearsExplicitEmpty(t *testing.T) {
+	current := sqlc.Model{
+		ID: 5, ModelID: "gpt-5.6-luna", DisplayName: "GPT-5.6 Luna", OwnedBy: "openai", Status: model.StatusEnabled,
+		Description: "Cost-efficient GPT-5.6 model", KnowledgeCutoff: "2026-02-16",
+	}
+	store := &fakeModelStore{lookupRow: current, updateRow: current}
+	svc := model.NewService(store, nil, nil)
+
+	if _, err := svc.Update(context.Background(), model.UpdateInput{
+		ID: 5, DisplayName: "GPT-5.6 Luna (renamed)", OwnedBy: "openai", Status: model.StatusEnabled,
+	}); err != nil {
+		t.Fatalf("update without metadata: %v", err)
+	}
+	if store.updateParam.Description != current.Description || store.updateParam.KnowledgeCutoff != current.KnowledgeCutoff {
+		t.Fatalf("omitted text metadata must be preserved, got description=%q knowledge_cutoff=%q",
+			store.updateParam.Description, store.updateParam.KnowledgeCutoff)
+	}
+
+	empty := ""
+	newCutoff := " 2026-03-01 "
+	if _, err := svc.Update(context.Background(), model.UpdateInput{
+		ID: 5, DisplayName: "GPT-5.6 Luna", OwnedBy: "openai", Status: model.StatusEnabled,
+		Metadata: model.Metadata{Description: &empty, KnowledgeCutoff: &newCutoff},
+	}); err != nil {
+		t.Fatalf("update with explicit metadata: %v", err)
+	}
+	if store.updateParam.Description != "" || store.updateParam.KnowledgeCutoff != "2026-03-01" {
+		t.Fatalf("explicit values must apply (empty clears, others trimmed), got description=%q knowledge_cutoff=%q",
+			store.updateParam.Description, store.updateParam.KnowledgeCutoff)
+	}
+}
+
+// 创建时未提及的文本元数据按空串写入（列 NOT NULL DEFAULT ”）。
+func TestCreateWritesEmptyTextMetadataWhenOmitted(t *testing.T) {
+	store := &fakeModelStore{createRow: sqlc.Model{ID: 1, ModelID: "deepseek-chat", Status: model.StatusEnabled}}
+	if _, err := model.NewService(store, nil, nil).Create(context.Background(), model.CreateInput{
+		ModelID: "deepseek-chat", DisplayName: "DeepSeek Chat", OwnedBy: "deepseek", Status: model.StatusEnabled,
+	}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if store.createParam.Description != "" || store.createParam.KnowledgeCutoff != "" {
+		t.Fatalf("omitted text metadata on create must be empty, got %+v", store.createParam)
 	}
 }
 

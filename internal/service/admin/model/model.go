@@ -105,9 +105,11 @@ type CatalogState struct {
 
 // Metadata 是模型可选展示元数据（手建可填、采纳带入、刷新覆盖）。
 type Metadata struct {
-	// Description / KnowledgeCutoff 空串即「未填/清空」（列 NOT NULL DEFAULT ''）。
-	Description              string
-	KnowledgeCutoff          string
+	// Description / KnowledgeCutoff：nil 表示「本次请求未提及」——创建时按空串写入，更新时保留现值；
+	// 非 nil 空串才是「清空」。列本身 NOT NULL DEFAULT ''。此前是普通 string，只改状态的调用方
+	// 漏带字段就会把采纳来的简介与知识截止整字段清空。
+	Description              *string
+	KnowledgeCutoff          *string
 	ContextWindowTokens      *int64
 	MaxOutputTokens          *int64
 	InputPriceUSDPerMTokens  *string
@@ -237,7 +239,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Model, error) {
 	if err := validateStatus(status); err != nil {
 		return Model{}, err
 	}
-	meta, err := buildMetadataParams(in.Metadata)
+	meta, err := buildMetadataParams(in.Metadata, nil)
 	if err != nil {
 		return Model{}, err
 	}
@@ -286,10 +288,6 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Model, error) {
 	if err := validateStatus(status); err != nil {
 		return Model{}, err
 	}
-	meta, err := buildMetadataParams(in.Metadata)
-	if err != nil {
-		return Model{}, err
-	}
 
 	current, err := s.store.LookupModelByID(ctx, in.ID)
 	if err != nil {
@@ -297,6 +295,11 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Model, error) {
 			return Model{}, notFound("model not found")
 		}
 		return Model{}, storeFailed(err, "load model for update")
+	}
+	// 未提及的展示元数据沿用现值：状态开关、批量操作等只想改一两个字段的调用方不再误伤简介/知识截止。
+	meta, err := buildMetadataParams(in.Metadata, &current)
+	if err != nil {
+		return Model{}, err
 	}
 
 	params := sqlc.UpdateModelParams{
@@ -549,12 +552,18 @@ const (
 )
 
 // buildMetadataParams 校验并转换可选元数据为 sqlc 入参。
-func buildMetadataParams(in Metadata) (metadataParams, error) {
-	description := strings.TrimSpace(in.Description)
+// current 非 nil 时（更新路径），Description / KnowledgeCutoff 为 nil 表示沿用现行值；
+// 创建路径传 nil current，未提及即空串。
+func buildMetadataParams(in Metadata, current *sqlc.Model) (metadataParams, error) {
+	currentDescription, currentKnowledgeCutoff := "", ""
+	if current != nil {
+		currentDescription, currentKnowledgeCutoff = current.Description, current.KnowledgeCutoff
+	}
+	description := resolveText(in.Description, currentDescription)
 	if len(description) > maxDescriptionLen {
 		return metadataParams{}, invalidArgument("description", "description must be at most 2000 characters")
 	}
-	knowledgeCutoff := strings.TrimSpace(in.KnowledgeCutoff)
+	knowledgeCutoff := resolveText(in.KnowledgeCutoff, currentKnowledgeCutoff)
 	if len(knowledgeCutoff) > maxKnowledgeCutoffLen {
 		return metadataParams{}, invalidArgument("knowledge_cutoff", "knowledge_cutoff must be at most 64 characters")
 	}
@@ -581,6 +590,14 @@ func buildMetadataParams(in Metadata) (metadataParams, error) {
 		OutputPrice:         outputPrice,
 		ReleaseDate:         dateParam(in.ReleaseDate),
 	}, nil
+}
+
+// resolveText 把「可选文本」落成列值：nil 沿用 fallback（现值或空串），非 nil 取 trim 后的值。
+func resolveText(value *string, fallback string) string {
+	if value == nil {
+		return fallback
+	}
+	return strings.TrimSpace(*value)
 }
 
 func validateStatus(status string) error {

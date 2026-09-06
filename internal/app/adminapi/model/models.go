@@ -63,9 +63,11 @@ type modelReminderDTO struct {
 	Dismissed   bool    `json:"dismissed"`
 }
 
+// modelMetadataRequest 是可选展示元数据。description / knowledge_cutoff 缺省（或 null）表示
+// 「不改」，显式空串表示「清空」——只改状态的请求不会再把采纳来的简介与知识截止整字段清掉。
 type modelMetadataRequest struct {
-	Description              string  `json:"description"`
-	KnowledgeCutoff          string  `json:"knowledge_cutoff"`
+	Description              *string `json:"description"`
+	KnowledgeCutoff          *string `json:"knowledge_cutoff"`
 	MaxOutputTokens          *int64  `json:"max_output_tokens"`
 	ContextWindowTokens      *int64  `json:"context_window_tokens"`
 	InputPriceUSDPerMTokens  *string `json:"input_price_usd_per_million_tokens"`
@@ -219,8 +221,8 @@ func (h *modelsHandler) delete(w http.ResponseWriter, r *http.Request) {
 // toMetadata 把请求里的可选元数据转成 service 入参；release_date 解析为日期，非法返回 400。
 func (m modelMetadataRequest) toMetadata() (model.Metadata, error) {
 	meta := model.Metadata{
-		Description:              strings.TrimSpace(m.Description),
-		KnowledgeCutoff:          strings.TrimSpace(m.KnowledgeCutoff),
+		Description:              optionalText(m.Description),
+		KnowledgeCutoff:          optionalText(m.KnowledgeCutoff),
 		MaxOutputTokens:          m.MaxOutputTokens,
 		ContextWindowTokens:      m.ContextWindowTokens,
 		InputPriceUSDPerMTokens:  trimOptional(m.InputPriceUSDPerMTokens),
@@ -284,6 +286,16 @@ func toModelDTO(m model.Model) modelDTO {
 }
 
 // trimOptional 去空白；空串视为未设置（nil）。
+// optionalText 只做 trim，保留「显式空串 = 清空」与「缺省 = 不改」的区别（与 trimOptional 不同，
+// 后者把空串折叠成 nil，只适合价格这类「空即未设」的字段）。
+func optionalText(s *string) *string {
+	if s == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*s)
+	return &trimmed
+}
+
 func trimOptional(s *string) *string {
 	if s == nil {
 		return nil

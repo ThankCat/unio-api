@@ -113,6 +113,7 @@ type fakeModelService struct {
 	createErr error
 	updateOut model.Model
 	updateErr error
+	updateIn  model.UpdateInput
 	deleteErr error
 }
 
@@ -125,7 +126,8 @@ func (s *fakeModelService) Get(context.Context, int64) (model.Model, error) {
 func (s *fakeModelService) Create(context.Context, model.CreateInput) (model.Model, error) {
 	return s.createOut, s.createErr
 }
-func (s *fakeModelService) Update(context.Context, model.UpdateInput) (model.Model, error) {
+func (s *fakeModelService) Update(_ context.Context, in model.UpdateInput) (model.Model, error) {
+	s.updateIn = in
 	return s.updateOut, s.updateErr
 }
 func (s *fakeModelService) Delete(context.Context, int64) error {
@@ -434,6 +436,33 @@ func TestCreateModelReturns201(t *testing.T) {
 	rec := doAdmin(t, handler, http.MethodPost, "/v1/models", `{"model_id":"deepseek-chat","display_name":"DeepSeek Chat","owned_by":"deepseek","status":"enabled"}`, true)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected %d, got %d (%s)", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+}
+
+// 请求体缺省 description / knowledge_cutoff 必须映射为「不改」（nil），显式空串映射为「清空」。
+func TestUpdateModelDistinguishesOmittedFromEmptyTextMetadata(t *testing.T) {
+	service := &fakeModelService{updateOut: model.Model{ID: 9, ModelID: "gpt-5.6-luna", DisplayName: "GPT-5.6 Luna", OwnedBy: "openai", Status: "enabled", Source: "catalog"}}
+	handler := newModelRouter(t, service)
+
+	rec := doAdmin(t, handler, http.MethodPatch, "/v1/models/9",
+		`{"display_name":"GPT-5.6 Luna","owned_by":"openai","status":"disabled","release_date":null}`, true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if service.updateIn.Description != nil || service.updateIn.KnowledgeCutoff != nil {
+		t.Fatalf("omitted fields must stay nil, got description=%v knowledge_cutoff=%v", service.updateIn.Description, service.updateIn.KnowledgeCutoff)
+	}
+
+	rec = doAdmin(t, handler, http.MethodPatch, "/v1/models/9",
+		`{"display_name":"GPT-5.6 Luna","owned_by":"openai","status":"enabled","description":"","knowledge_cutoff":" 2026-02-16 "}`, true)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if service.updateIn.Description == nil || *service.updateIn.Description != "" {
+		t.Fatalf("explicit empty description must be a clear request, got %v", service.updateIn.Description)
+	}
+	if service.updateIn.KnowledgeCutoff == nil || *service.updateIn.KnowledgeCutoff != "2026-02-16" {
+		t.Fatalf("knowledge_cutoff must be trimmed and kept, got %v", service.updateIn.KnowledgeCutoff)
 	}
 }
 
