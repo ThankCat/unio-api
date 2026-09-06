@@ -20,6 +20,9 @@ import (
 	"github.com/ThankCat/unio-gateway/internal/platform/store"
 )
 
+// appShutdownGraceAfterTimeout 是 HTTP Shutdown 已超时后仍留给 app.Shutdown 的短预算。
+const appShutdownGraceAfterTimeout = 5 * time.Second
+
 func main() {
 	startupStartedAt := time.Now()
 	preLogger := logging.MustNewEmergency()
@@ -147,18 +150,29 @@ func main() {
 	defer cancel()
 
 	// Shutdown 会停止接收新请求，并等待已有请求在 ctx 超时前完成。
-	if err := server.Shutdown(ctx); err != nil {
+	httpShutdownErr := server.Shutdown(ctx)
+	if httpShutdownErr != nil {
 		logging.Error(logger, "system", "service", "service shutdown failed", append(
-			[]zap.Field{zap.String("phase", "http_server")}, failure.LogFields(err)...,
+			[]zap.Field{zap.String("phase", "http_server")}, failure.LogFields(httpShutdownErr)...,
 		)...)
-		os.Exit(1)
 	}
 
-	// 关闭可观测性资源（flush 未导出的 trace span）。
-	if err := app.Shutdown(ctx); err != nil {
+	// 关闭后台任务与可观测性资源（TPM 观测器最后一个周期、未导出的 trace span、applier/reconciler）。
+	// HTTP 侧超时（长 SSE 流最常见）不能跳过这一步：否则内存里的观测数据与 span 随进程一起丢掉。
+	// 超时后另给一段短预算，避免在已经超时的 ctx 上做无意义的等待。
+	appCtx := ctx
+	if ctx.Err() != nil {
+		var appCancel context.CancelFunc
+		appCtx, appCancel = context.WithTimeout(context.Background(), appShutdownGraceAfterTimeout)
+		defer appCancel()
+	}
+	if err := app.Shutdown(appCtx); err != nil {
 		logging.Error(logger, "system", "service", "service shutdown failed", append(
 			[]zap.Field{zap.String("phase", "app")}, failure.LogFields(err)...,
 		)...)
+	}
+	if httpShutdownErr != nil {
+		os.Exit(1)
 	}
 
 	logging.Info(logger, "system", "service", "service stopped",

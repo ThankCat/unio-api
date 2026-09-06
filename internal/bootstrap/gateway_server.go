@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
@@ -57,6 +58,9 @@ type GatewayServerApp struct {
 	tracer      *tracing.Provider
 	stopApplier context.CancelFunc
 	tpmObserver *tpmobserver.Observer
+	// background 跟踪 settings applier 与 runtime-control reconciler 两个常驻 goroutine，
+	// Shutdown 在 cancel 后限时等它们退出，避免关停期间还有半截 reconcile 在写 Redis。
+	background *sync.WaitGroup
 }
 
 // Shutdown 停止后台配置 applier/runtime-control reconciler，并释放可观测性资源。
@@ -72,6 +76,17 @@ func (a *GatewayServerApp) Shutdown(ctx context.Context) error {
 		a.stopApplier()
 	}
 	a.tpmObserver.Wait(ctx)
+	if a.background != nil {
+		done := make(chan struct{})
+		go func() {
+			a.background.Wait()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-ctx.Done():
+		}
+	}
 
 	return a.tracer.Shutdown(ctx)
 }
@@ -380,15 +395,24 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 	}
 	applierCtx, stopApplier := context.WithCancel(context.Background())
 	applier.safeApply(applierCtx)
-	go applier.run(applierCtx, settingsApplyInterval)
+	background := &sync.WaitGroup{}
+	background.Add(1)
+	go func() {
+		defer background.Done()
+		applier.run(applierCtx, settingsApplyInterval)
+	}()
 	go tpmObserver.Run(applierCtx)
 	if runtimeControlPool != nil {
-		go runRuntimeControlReconciler(
-			applierCtx, runtimeControlPool, settingsStore, sharedBreakerStore, runtimeTelemetry,
-			func(reconcileCtx context.Context, proof breakerstore.RuntimeReconciliationProof) {
-				runtimeReadinessChecker.ClearStoreFaultAfterReconciliation(reconcileCtx, proof)
-			},
-		)
+		background.Add(1)
+		go func() {
+			defer background.Done()
+			runRuntimeControlReconciler(
+				applierCtx, runtimeControlPool, settingsStore, sharedBreakerStore, runtimeTelemetry,
+				func(reconcileCtx context.Context, proof breakerstore.RuntimeReconciliationProof) {
+					runtimeReadinessChecker.ClearStoreFaultAfterReconciliation(reconcileCtx, proof)
+				},
+			)
+		}()
 	}
 
 	var readinessProbe gatewayapi.ReadinessProbe
@@ -413,5 +437,6 @@ func NewGatewayServerApp(ctx context.Context, deps GatewayServerAppDeps) (*Gatew
 		tracer:      tracerProvider,
 		stopApplier: stopApplier,
 		tpmObserver: tpmObserver,
+		background:  background,
 	}, nil
 }
